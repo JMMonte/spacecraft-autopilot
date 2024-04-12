@@ -4,10 +4,10 @@ module.exports = {
     entry: './src/js/main.js',
     output: {
         filename: 'bundle.js',
-        path: path.resolve(__dirname, 'dist'),
+        path: path.resolve(__dirname, 'public'), // change this line
     },
     devServer: {
-        static: ['./dist', './src'],
+        static: ['./public', './src'], // change this line
     },
     module: {
         rules: [
