@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon';
-import { CannonDebugRenderer } from './cannonDebugRenderer';
 
 export class SceneObjects {
     constructor(scene, world, width = 1, height = 1, depth = 2) {
@@ -25,7 +24,6 @@ export class SceneObjects {
         this.initMaterials();
         // Create objects
         this.createBox();
-
         this.addTrussToBox();
         this.updateDockingPorts();
         this.manageFuelTank();
@@ -67,7 +65,9 @@ export class SceneObjects {
         boxBody.material = new CANNON.Material();
         boxBody.material.friction = 1.5;
         this.world.addBody(boxBody);
-    
+
+        // Add debugger
+        
         // Link the Three.js mesh with its Cannon.js physics body
         box.userData.physicsBody = boxBody;
     
@@ -110,7 +110,6 @@ export class SceneObjects {
         this.removeTrussFromBox();
         this.addTrussToBox();
         this.updateDockingPorts();
-        
         this.manageFuelTank(Math.max(Math.min(width, height) / 2 - this.trussRadius - 0.01, 0.1), Math.max(depth - 0.2, 0.1));
         this.updateEndStructure(this.materials.silver, { margin: 0.1, structureDepth: this.dockingPortDepth, endWidth: this.dockingPortRadius, endHeight: this.dockingPortRadius }, 'both');
         
@@ -142,7 +141,8 @@ export class SceneObjects {
         return this.aluminumDensity * totalVolume;
     }
 
-    // Consolidated method to add or update a fuel tank
+    // FUEL TANK
+
     manageFuelTank(radius = null, depth = null) {
         // Initialize radius and depth if not provided
         const marginRadius = 1.6;
@@ -208,14 +208,10 @@ export class SceneObjects {
             mesh.receiveShadow = true;
         });
 
-        // Adjust physical properties if necessary
-        if (isUpdate) {
+        // Only calculate and add mass if it's a new addition
+        if (!this.fuelTankVisual) {
             const totalMass = this.calculateFuelTankMass(radius, depth);
             this.boxBody.mass += totalMass;
-        } else {
-            // Only calculate and add mass if it's a new addition
-            const totalMass = this.calculateFuelTankMass(radius, depth);
-            this.boxBody.mass = totalMass; // Assuming you want to reset or initialize the mass
         }
     }
 
@@ -329,6 +325,8 @@ export class SceneObjects {
         beam.receiveShadow = true;
     }
 
+    // DOCKING PORTS
+
     addDockingPorts() {
         const material = this.materials.dockingPort;
     
@@ -381,6 +379,8 @@ export class SceneObjects {
         this.removeDockingPorts();
         this.addDockingPorts();
     }
+
+    // GENERAL UPDATE
 
     update() {
         this.box.position.copy(this.boxBody.position);

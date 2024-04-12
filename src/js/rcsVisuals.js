@@ -35,11 +35,41 @@ class ThrusterGeometry {
 
 // Class to define the materials of the thruster
 class ThrusterMaterials {
-    constructor() {
-        this.nozzleConeMaterial = new THREE.MeshPhysicalMaterial({ color: 'grey', metalness: 1.0, roughness: 0.5, side: THREE.DoubleSide });
-        this.exhaustConeMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, opacity: 0.9, transparent: true });
+    constructor(gradientLines = 12, targetColor = { r: 255, g: 255, b: 0 }) {
+        this.nozzleConeMaterial = new THREE.MeshPhysicalMaterial({
+            color: 'grey',
+            metalness: 1.0,
+            roughness: 0.5,
+            side: THREE.DoubleSide
+        });
+
+        const colorsArray = new Uint8Array(gradientLines * 4); // 4 values per color (RGBA)
+
+        for (let i = 0; i < gradientLines; i++) {
+            const scale = Math.log(i + 1) / Math.log(gradientLines); // Logarithmic scale
+            // Interpolate color based on the logarithmic scale
+            const r = Math.round(255 + (targetColor.r - 255) * scale);
+            const g = Math.round(255 + (targetColor.g - 255) * scale);
+            const b = Math.round(255 + (targetColor.b - 255) * scale);
+            const alpha = Math.round(255 * (1 - i / (gradientLines - 1))); // Gradually decrease alpha
+            colorsArray.set([r, g, b, alpha], i * 4);
+        }
+
+        const gradientTexture = new THREE.DataTexture(
+            colorsArray,
+            1, // Width of the texture (1 pixel wide)
+            gradientLines, // Height of the texture (number of gradient lines)
+            THREE.RGBAFormat
+        );
+        gradientTexture.needsUpdate = true;
+
+        this.exhaustConeMaterial = new THREE.MeshBasicMaterial({
+            map: gradientTexture,
+            transparent: true
+        });
     }
 }
+
 
 // Main class responsible for rendering and managing the thrusters
 class RCSVisuals {

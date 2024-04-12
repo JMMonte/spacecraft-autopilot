@@ -1,5 +1,6 @@
 node_modules/
 .DS_Store
 dist/images/
-src/images/spacePanorama-caspianSea.exr
-dist/images/spacePanorama-caspianSea.exr
+venv/
+compress_system.py
+compress.py

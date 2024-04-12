@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon';
 import { PIDController } from './pidController';
 import { applyQuaternionToVector } from './utils';
+import { Autopilot } from './autopilotSystem';
 
 export class SpacecraftController {
     constructor(spacecraft, currentTarget) {
@@ -10,6 +11,7 @@ export class SpacecraftController {
         this.keysPressed = {};
         this.targetOrientation = new THREE.Quaternion(0, 0, 0, 1);
         this.pidController = new PIDController(5, 0.05, 2);
+        this.orientationPidController = new PIDController(0.1, 0.01, 0.05); // Tuned for orientation correction
         this.thrust = 1200;
         this.thrusterGroups = this.defineThrusterGroups();
         this.maxAngularMomentum = 100; // Define based on your requirements
@@ -23,6 +25,7 @@ export class SpacecraftController {
         document.addEventListener('keyup', this.handleKeyUp.bind(this), false);
         this.currentTarget = currentTarget.uuid;
         this.orientationCorrectionInProgress = false; // Reset the flag after alignment is achieved
+        // this.autopilot = new Autopilot(spacecraft);
     }
 
     transformLocalToGlobal(localVector, currentQuaternion) {
@@ -66,127 +69,147 @@ export class SpacecraftController {
         const currentQuaternion = new THREE.Quaternion().copy(this.spacecraft.objects.boxBody.quaternion).normalize();
         const targetQuaternion = this.targetOrientation.normalize();
         const errorQuaternion = targetQuaternion.clone().multiply(currentQuaternion.invert()).normalize();
+        const orientationError = 2 * Math.acos(Math.min(1, Math.abs(errorQuaternion.w)));
         const currentAngularVelocity = new THREE.Vector3().copy(this.spacecraft.objects.boxBody.angularVelocity);
-        const momentOfInertia = this.calculateMomentOfInertia(); // Assume this method is defined elsewhere
+        const momentOfInertia = this.calculateMomentOfInertia();
         const currentAngularMomentum = currentAngularVelocity.clone().multiplyScalar(momentOfInertia);
         const currentAngularMomentumMagnitude = currentAngularMomentum.length();
-        const orientationError = 2 * Math.acos(Math.min(1, Math.abs(errorQuaternion.w))); // Clamp to avoid NaN due to floating point errors
-
-        // Check and possibly reset phase
-        if (this.phase === 5 && currentAngularMomentumMagnitude < this.minAngularMomentumMagnitude + this.angularMomentumHysteresis && orientationError < this.autopilotThreshold) {
-            console.log("Spacecraft is aligned.");
-            this.phase = 0; // Reset to Initialization phase
+    
+        // Check if angular momentum is below a threshold and if orientation error is significant
+        const angularMomentumIsLow = currentAngularMomentumMagnitude <= this.minAngularMomentumMagnitude;
+        const orientationNeedsCorrection = orientationError > this.autopilotThreshold;
+    
+        // Phase control logic adjustments
+        if (!angularMomentumIsLow && this.phase !== 3) {
+            this.phase = 1; // Angular Momentum Cancellation phase
+        } else if (angularMomentumIsLow && orientationNeedsCorrection) {
+            this.phase = 3; // Orientation Correction phase
+        } else if (angularMomentumIsLow && !orientationNeedsCorrection) {
+            this.phase = 5; // Fine Alignment phase
         }
-
-        // Handle phases
-        if (this.phase === 0) {
-            // Initialization phase
-            if (currentAngularMomentumMagnitude > this.minAngularMomentumMagnitude + this.angularMomentumHysteresis) {
-                this.phase = 1; // Proceed to Angular Momentum Cancellation phase
-            } else if (orientationError > this.autopilotThreshold) {
-                this.phase = 3; // Proceed to Orientation Correction phase
-            } else {
-                this.phase = 5; // Proceed to Fine Alignment phase
-            }
-        } else if (this.phase === 1 && currentAngularMomentumMagnitude > this.minAngularMomentumMagnitude && this.orientationCorrectionInProgress === false) {
-            // Angular Momentum Cancellation phase
-            const angularMomentumError = currentAngularMomentum.clone().negate();
-            let pidOutput = this.pidController.update(new CANNON.Vec3(angularMomentumError.x, angularMomentumError.y, angularMomentumError.z), 1 / 60);
-            let pidOutputVector = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z);
-
-            // Transform PID output from local to global frame before applying to thrusters
-            pidOutputVector = this.transformLocalToGlobal(pidOutputVector, currentQuaternion);
-            // Transition to the next phase if the angular momentum is below the threshold
-            if (currentAngularMomentumMagnitude < this.minAngularMomentumMagnitude + this.angularMomentumHysteresis) {
-                this.orientationCorrectionInProgress = true; // Set the flag to indicate that orientation correction is in progress
-                this.phase = 2; // Proceed to Angular Momentum Damping phase
-            }
     
-            return this.applyPIDOutputToThrusters(pidOutputVector);
-        } else if (this.phase === 2) {
-            // Angular Momentum Damping phase
-            const angularMomentumError = currentAngularMomentum.clone().negate().multiplyScalar(0.1); // Apply damping factor
-            let pidOutput = this.pidController.update(new CANNON.Vec3(angularMomentumError.x, angularMomentumError.y, angularMomentumError.z), 1 / 60);
-            let pidOutputVector = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z);
-
-            // Transform PID output from local to global frame before applying to thrusters
-            pidOutputVector = this.transformLocalToGlobal(pidOutputVector, currentQuaternion);
-    
-            // Transition to the next phase if the orientation error is above the threshold
-            if (orientationError > this.autopilotThreshold && this.orientationCorrectionInProgress === true) {
-                this.phase = 3; // Proceed to Orientation Correction phase
-                this.orientationCorrectionInProgress = false; // Reset the flag
-            } else {
-                this.phase = 5; // Proceed to Fine Alignment phase
-            }
-    
-            return this.applyPIDOutputToThrusters(pidOutputVector);
-            
-        } else if (this.phase === 3) {
-            // Orientation Correction phase
-            let desiredAngularVelocity = this.quaternionToAngularVelocity(errorQuaternion, momentOfInertia);
-            const reductionFactor = Math.max(1, desiredAngularVelocity.length() / this.maxAngularVelocity);
-            desiredAngularVelocity.divideScalar(reductionFactor);
-            
-            const desiredAngularMomentum = desiredAngularVelocity.multiplyScalar(momentOfInertia);
-            const angularMomentumError = desiredAngularMomentum.sub(currentAngularMomentum);
-            let pidOutput = this.pidController.update(new CANNON.Vec3(angularMomentumError.x, angularMomentumError.y, angularMomentumError.z), 1 / 60);
-            let pidOutputVector = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z);
-            
-            // Dynamic braking factor based on orientation error
-            const brakingFactor = Math.exp(-orientationError); // Exponential decay based on orientation error
-            pidOutputVector.multiplyScalar(brakingFactor);
-            
-            // Transform PID output from local to global frame before applying to thrusters
-            pidOutputVector = this.transformLocalToGlobal(pidOutputVector, currentQuaternion);
-            
-    
-            // Transition to the next phase if the orientation error is below the threshold
-            if (orientationError < this.autopilotThreshold) {
-                this.phase = 4; // Proceed to Orientation Fine-Tuning phase
-            }
-    
-            return this.applyPIDOutputToThrusters(pidOutputVector);
-        } else if (this.phase === 4) {
-            // Orientation Fine-Tuning phase
-            let desiredAngularVelocity = this.quaternionToAngularVelocity(errorQuaternion, momentOfInertia);
-            const reductionFactor = Math.max(1, desiredAngularVelocity.length() / (this.maxAngularVelocity / 2)); // Use a lower maximum angular velocity for fine-tuning
-            desiredAngularVelocity.divideScalar(reductionFactor);
-    
-            const desiredAngularMomentum = desiredAngularVelocity.multiplyScalar(momentOfInertia);
-            const angularMomentumError = desiredAngularMomentum.sub(currentAngularMomentum);
-            let pidOutput = this.pidController.update(new CANNON.Vec3(angularMomentumError.x, angularMomentumError.y, angularMomentumError.z), 1 / 60);
-            let pidOutputVector = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z);
-
-            // Transform PID output from local to global frame before applying to thrusters
-            pidOutputVector = this.transformLocalToGlobal(pidOutputVector, currentQuaternion);
-    
-            // Transition to the next phase if the orientation error is below the threshold and angular velocity is low
-            if (orientationError < this.autopilotThreshold && currentAngularVelocity.length() < this.minAngularMomentumMagnitude) {
-                this.phase = 5; // Proceed to Fine Alignment phase
-            }
-    
-            return this.applyPIDOutputToThrusters(pidOutputVector);
-        } else if (this.phase === 5) {
-            // Fine Alignment phase
-            let desiredAngularVelocity = this.quaternionToAngularVelocity(errorQuaternion, momentOfInertia);
-            const reductionFactor = Math.max(1, desiredAngularVelocity.length() / (this.maxAngularVelocity / 4)); // Use an even lower maximum angular velocity for fine alignment
-            desiredAngularVelocity.divideScalar(reductionFactor);
-    
-            const desiredAngularMomentum = desiredAngularVelocity.multiplyScalar(momentOfInertia);
-            const angularMomentumError = desiredAngularMomentum.sub(currentAngularMomentum);
-            let pidOutput = this.pidController.update(new CANNON.Vec3(angularMomentumError.x, angularMomentumError.y, angularMomentumError.z), 1 / 60);
-            let pidOutputVector = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z);
-
-            // Transform PID output from local to global frame before applying to thrusters
-            pidOutputVector = this.transformLocalToGlobal(pidOutputVector, currentQuaternion);
-    
-            return this.applyPIDOutputToThrusters(pidOutputVector);
+        // Handle phases explicitly
+        if (this.phase === 1) {
+            return this.applyDamping(currentAngularMomentum, currentQuaternion, momentOfInertia, true);
+        } else if (this.phase === 3 || this.phase === 5) {
+            return this.adjustAngularVelocityForOrientation(errorQuaternion, currentAngularMomentum, currentQuaternion, momentOfInertia, orientationError);
         }
     
         // Default return if none of the conditions are met
         return Array(24).fill(0);
     }
+    
+    
+    applyDamping(currentAngularMomentum, currentQuaternion, momentOfInertia, fullDamp = false) {
+        const dampingFactor = fullDamp ? 1.0 : 0.1; // Use stronger damping if fullDamp is true
+        const angularMomentumError = currentAngularMomentum.clone().negate().multiplyScalar(dampingFactor);
+        let pidOutput = this.pidController.update(new CANNON.Vec3(angularMomentumError.x, angularMomentumError.y, angularMomentumError.z), 1 / 60);
+        let pidOutputVector = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z);
+        pidOutputVector = this.transformLocalToGlobal(pidOutputVector, currentQuaternion);
+        return this.applyPIDOutputToThrusters(pidOutputVector);
+    }
+    
+    adjustAngularVelocityForOrientation(errorQuaternion, currentAngularMomentum, currentQuaternion) {
+        // Extract the current angular velocity from the spacecraft's state
+        const currentAngularVelocity = new THREE.Vector3().copy(this.spacecraft.objects.boxBody.angularVelocity);
+    
+        // Calculate the control signal using the error quaternion and current angular velocity
+        const controlSignal = this.calculateControlSignal(errorQuaternion, currentAngularVelocity);
+    
+        // Convert the error quaternion to angular velocity, assuming ensureShortestPath = true
+        let desiredAngularVelocity = this.quaternionToAngularVelocity(errorQuaternion, true);
+    
+        // Apply the control signal to modulate the desired angular velocity
+        desiredAngularVelocity.multiplyScalar(controlSignal);
+    
+        // Calculate the moment of inertia; assume this is a method you have defined
+        const momentOfInertia = this.calculateMomentOfInertia();
+    
+        // Use the desired angular velocity and moment of inertia to calculate desired angular momentum
+        const desiredAngularMomentum = desiredAngularVelocity.multiplyScalar(momentOfInertia);
+    
+        // Determine the angular momentum error
+        const angularMomentumError = desiredAngularMomentum.sub(currentAngularMomentum);
+    
+        // Update the PID controller with the angular momentum error
+        let pidOutput = this.pidController.update(new CANNON.Vec3(angularMomentumError.x, angularMomentumError.y, angularMomentumError.z), 1 / 60);
+        let pidOutputVector = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z);
+    
+        // Convert the PID output from local to global coordinates if necessary and apply to thrusters
+        pidOutputVector = this.transformLocalToGlobal(pidOutputVector, currentQuaternion);
+    
+        // Return the thruster settings based on the PID output vector
+        return this.applyPIDOutputToThrusters(pidOutputVector);
+    }
+
+    calculateControlSignal(errorQuaternion, currentAngularVelocity) {
+        // Convert errorQuaternion to an angle to quantify the orientation error
+        let orientationError = 2 * Math.acos(Math.abs(errorQuaternion.w));
+        
+        // Normalize orientation error to [0, 1]
+        orientationError = orientationError / Math.PI; // Assuming orientationError is in radians
+    
+        // Calculate angular velocity magnitude as a proxy for the rate of change of orientation error
+        const angularVelocityMagnitude = currentAngularVelocity.length();
+    
+        // Combine orientation error and angular velocity into a predictive error metric
+        // This combination can be adjusted based on your system's dynamics and desired responsiveness
+        // A simple additive combination is used here for demonstration purposes
+        const predictiveError = orientationError + angularVelocityMagnitude; // Adjust this formula as needed
+    
+        // Use a sigmoid function to calculate the control signal from the predictive error
+        // The sigmoid function ensures a smooth transition of the control signal
+        // Adjust 'k' to control the steepness of the sigmoid transition
+        const k = 10; // Control sensitivity factor
+        const controlSignal = 2 / (1 + Math.exp(-k * (predictiveError - 0.5))) - 1;
+    
+        return controlSignal;
+    }
+
+    calculateDampingFactor(orientationError, currentAngularMomentum) {
+        // Define a damping factor that increases as the spacecraft approaches the target orientation
+        const momentumMagnitude = currentAngularMomentum.length();
+        const dampingBase = 0.2; // Base damping factor, adjust as needed
+        const errorInfluence = Math.max(0, 1 - orientationError / Math.PI); // Scales with inverse of orientation error
+        const momentumInfluence = Math.min(1, momentumMagnitude / this.maxAngularVelocity); // Scales with angular momentum
+        return dampingBase * errorInfluence * momentumInfluence;
+    }
+    
+
+    calculateReductionFactor(desiredAngularVelocity, orientationError) {
+        let reductionFactor = 1; // Default reduction factor
+        let someThresholdValue = 0.1; // Define based on your requirements
+        let someAdjustmentFactor = 0.5; // Define based on your requirements
+        
+        // Adjust reduction based on orientation error and phase
+        if (this.phase === 3) { // Orientation correction phase
+            reductionFactor = Math.max(1, desiredAngularVelocity.length() / this.maxAngularVelocity);
+        } else if (this.phase === 5) { // Fine alignment phase
+            reductionFactor = Math.max(1, desiredAngularVelocity.length() / (this.maxAngularVelocity / 4));
+        }
+    
+        // Optionally, further refine reduction factor based on orientation error
+        // This can make the control action more conservative as the error decreases
+        if (orientationError < someThresholdValue) {
+            reductionFactor *= someAdjustmentFactor;
+        }
+    
+        return reductionFactor;
+    }
+    
+    calculateBrakingFactor(orientationError, currentAngularVelocity) {
+        // Simplify to a linear relationship with the orientation error
+        const errorFactor = 1 - orientationError / Math.PI; // Scales linearly with the error
+    
+        // Simplify velocity factor to scale inversely with the magnitude of the angular velocity
+        const velocityFactor = 1 - currentAngularVelocity.length() / this.maxAngularVelocity; // Ensures smoother deceleration
+    
+        // Combine factors to moderate braking intensity
+        const brakingFactor = Math.max(0.1, Math.min(1, errorFactor * velocityFactor)); // Ensures always some level of control
+    
+        return brakingFactor;
+    }
+    
 
     applyPIDOutputToThrusters(pidOutput) {
         const thrusterForces = Array(24).fill(0);
@@ -207,29 +230,6 @@ export class SpacecraftController {
         return Math.abs(torqueComponent) * this.thrust / numThrusters;
     }
 
-    calculateTotalForceForGroup(thrusterGroup, torqueComponent) {
-        const armLengths = thrusterGroup.map(index => this.getThrusterArmLength(index));
-        const totalArmLength = armLengths.reduce((sum, armLength) => sum + armLength, 0);
-    
-        const totalForce = Math.abs(torqueComponent) / totalArmLength;
-        return Math.min(totalForce, this.thrust);
-    }
-
-    getThrusterArmLength(thrusterIndex) {
-        const halfExtents = this.spacecraft.objects.boxBody.shapes[0].halfExtents;
-        const x = halfExtents.x;
-        const y = halfExtents.y;
-        const z = halfExtents.z;
-    
-        const thrusterPositions = [
-            new THREE.Vector3(-x, -y, -z), new THREE.Vector3(-x, -y, z), new THREE.Vector3(-x, y, -z), new THREE.Vector3(-x, y, z),
-            new THREE.Vector3(x, -y, -z), new THREE.Vector3(x, -y, z), new THREE.Vector3(x, y, -z), new THREE.Vector3(x, y, z)
-        ];
-    
-        const thrusterPosition = thrusterPositions[Math.floor(thrusterIndex / 3)];
-        return thrusterPosition.length();
-    }
-
     calculateForcePerThruster(torqueComponent, controlAxis) {
         // Assuming equal distribution among thrusters in each group and using this.thrust as max thrust per thruster
         const numThrusters = this.thrusterGroups[controlAxis][0].length + this.thrusterGroups[controlAxis][1].length;
@@ -242,22 +242,7 @@ export class SpacecraftController {
         });
     }
 
-    applyForcesToThrusters(forces) {
-        const coneVisibility = forces.map(force => force > 0);
-
-        forces.forEach((force, index) => {
-            const clampedForce = Math.min(Math.max(force, 0), this.thrust);
-            if (clampedForce > 0) {
-                this.spacecraft.rcsVisuals.applyForce(index, clampedForce);
-            }
-        });
-
-        this.spacecraft.rcsVisuals.coneMeshes.forEach((coneMesh, index) => {
-            coneMesh.visible = coneVisibility[index];
-        });
-
-        return coneVisibility;
-    }
+    // GENERAL
 
     applyForces() {
         const isCurrentTarget = this.currentTarget === this.spacecraft.objects.box.uuid;
@@ -277,6 +262,23 @@ export class SpacecraftController {
             this.updateHelpers(combinedForces);
             return coneVisibility;
         }
+    }
+
+    applyForcesToThrusters(forces) {
+        const coneVisibility = forces.map(force => force > 0);
+
+        forces.forEach((force, index) => {
+            const clampedForce = Math.min(Math.max(force, 0), this.thrust);
+            if (clampedForce > 0) {
+                this.spacecraft.rcsVisuals.applyForce(index, clampedForce);
+            }
+        });
+
+        this.spacecraft.rcsVisuals.coneMeshes.forEach((coneMesh, index) => {
+            coneMesh.visible = coneVisibility[index];
+        });
+
+        return coneVisibility;
     }
 
     calculateManualForces() {

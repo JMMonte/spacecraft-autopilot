@@ -4,24 +4,29 @@
   "description": "A simple Three.js application with Webpack",
   "main": "src/js/main.js",
   "scripts": {
+    "unzip": "node unzip.js",
     "start": "webpack serve --mode development --open",
     "build": "webpack --mode production"
   },
   "author": "Joao Montenegro",
   "license": "ISC",
   "dependencies": {
+    "@andersonmancini/lens-flare": "^1.0.1",
     "cannon": "^0.6.2",
     "cannon-es-debugger": "^1.0.0",
     "dat.gui": "^0.7.9",
     "mathjs": "^12.4.1",
+    "path": "^0.12.7",
+    "process": "^0.11.10",
     "tapable": "^2.2.1",
-    "three": "^0.162.0",
-    "webpack": "^5.91.0"
+    "three": "^0.152.2",
+    "unzipper": "^0.10.14"
   },
   "devDependencies": {
     "copy-webpack-plugin": "^12.0.2",
     "file-loader": "^6.2.0",
     "url-loader": "^4.1.1",
+    "webpack": "^5.91.0",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^5.0.4"
   }

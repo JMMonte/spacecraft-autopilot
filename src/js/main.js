@@ -9,6 +9,7 @@ import { SceneCamera } from './sceneCamera';
 import { WorldRenderer } from './worldRenderer';
 import { SceneObjects } from './sceneObjects';
 import { SpacecraftController } from './spacecraftController';
+import { CannonDebugRenderer } from './cannonDebugRenderer';
 
 class Spacecraft {
     constructor(world, initialPosition = new CANNON.Vec3(0, 0, 2), width = 1, height = 1, depth = 2, initialConeVisibility = false) {
@@ -68,6 +69,9 @@ class BasicWorld {
             this.startRenderLoop();
         });
         this.background = new BackgroundLoader(this.camera.scene, this.renderer.renderer);
+
+        // Debugger
+        this.cannonDebugRenderer = new CannonDebugRenderer(this.camera.scene, this.world)
         this.handleWindowResize();
     }
 
@@ -107,6 +111,9 @@ class BasicWorld {
 
         this.updateCameraTarget();
         this.camera.update();
+
+        // Debugger
+        // this.cannonDebugRenderer.update()
 
         this.renderer.render(this.camera.scene, this.camera.camera);
         requestAnimationFrame(this.startRenderLoop.bind(this));

@@ -4,10 +4,10 @@ module.exports = {
     entry: './src/js/main.js',
     output: {
         filename: 'bundle.js',
-        path: path.resolve(__dirname, 'dist')
+        path: path.resolve(__dirname, 'dist'),
     },
     devServer: {
-        static: './dist'
+        static: ['./dist', './src'],
     },
     module: {
         rules: [
@@ -18,7 +18,6 @@ module.exports = {
                         loader: 'file-loader',
                         options: {
                             name: '[name].[ext]',
-                            outputPath: 'images',
                         },
                     },
                 ],
@@ -30,7 +29,6 @@ module.exports = {
                         loader: 'file-loader',
                         options: {
                             name: '[name].[ext]',
-                            outputPath: 'images',
                         },
                     },
                 ],

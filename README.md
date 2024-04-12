@@ -2,7 +2,8 @@
 
 A simple Three.js application that simulates spacecraft physics in 3d in 0g, with autopilot, using Webpack for asset bundling and development server capabilities.
 
-![Screenshot](src/images/Screenshot%202024-04-01%20at%2010.43.22.png)
+![Screenshot](src/images/Screenshot%202024-04-12%20at%2012.19.09.png)
+![Screenshot](src/images/Screenshot%202024-04-12%20at%2012.19.15.png)
 
 ## Version
 
