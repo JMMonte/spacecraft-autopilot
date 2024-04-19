@@ -6,7 +6,7 @@
   "scripts": {
     "unzip": "node unzip.js",
     "start": "webpack serve --mode development --open",
-    "build": "webpack --mode production"
+    "build": "webpack --mode production && ls -al public"
   },
   "author": "Joao Montenegro",
   "license": "ISC",
