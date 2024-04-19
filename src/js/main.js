@@ -68,12 +68,47 @@ class BasicWorld {
             this.controls = new GUIControls(this.spacecraft[0].objects, this.spacecraft[0].rcsVisuals, this.spacecraft[0], this.spacecraftControllers[0]);
             this.startRenderLoop();
         });
-        this.background = new BackgroundLoader(this.camera.scene, this.renderer.renderer);
+        this.background = new BackgroundLoader(
+            this.camera.scene,
+            this.renderer.renderer,
+            this.onBackgroundLoadComplete.bind(this),
+            this.onBackgroundLoadProgress.bind(this)
+        );
+        this.simulateProgress();
 
         // Debugger
         this.cannonDebugRenderer = new CannonDebugRenderer(this.camera.scene, this.world)
         this.handleWindowResize();
     }
+
+    simulateProgress() {
+        let progress = 0;
+        const interval = setInterval(() => {
+            progress += 5; // Increment by 5%
+            if (progress > 95) progress = 95; // Cap progress at 95% to avoid reaching 100% prematurely
+            this.onBackgroundLoadProgress(progress / 100);
+        }, 1000); // Update every second
+    
+        this.onBackgroundLoadComplete = () => {
+            clearInterval(interval); // Stop simulation
+            this.onBackgroundLoadProgress(1); // Jump to 100%
+            setTimeout(this.onBackgroundLoadComplete, 500); // Ensure final update visibility
+        };
+    }
+    
+    onBackgroundLoadProgress(progress) {
+        document.getElementById('loading-progress').style.width = `${progress * 100}%`;
+    }
+    
+    onBackgroundLoadComplete() {
+        const progressBar = document.getElementById('loading-progress');
+        progressBar.style.animation = 'none'; // Stop the animation
+        progressBar.style.width = '100%'; // Instantly set to 100%
+        setTimeout(() => {
+            document.getElementById('loading-bar').style.display = 'none'; // Hide after a delay to show completion
+        }, 500);
+    }
+    
 
     addSpacecraft(initialPosition, width = 1, height = 1, depth = 2) {
         const spacecraft = new Spacecraft(this, initialPosition, width, height, depth);
