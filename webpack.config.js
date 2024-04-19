@@ -1,14 +1,35 @@
 const path = require('path');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
     entry: './src/js/main.js',
+    resolve: {
+        alias: {
+            'three': path.resolve(__dirname, 'node_modules/three'),
+            'three-latest': path.resolve(__dirname, 'node_modules/three-latest')
+        }
+    },
     output: {
         filename: 'bundle.js',
-        path: path.resolve(__dirname, 'public'), // change this line
+        path: path.resolve(__dirname, 'public'),
     },
     devServer: {
-        static: ['./public', './src'], // change this line
+        static: ['./public', './src'],
     },
+    plugins: [
+        new CopyWebpackPlugin({
+            patterns: [
+                {
+                    from: 'src/images/**/*', // Copies all files in 'images' directory
+                    to: 'images/[name][ext]', // Output in public/images keeping the original names
+                    filter: (resourcePath) => {
+                        // Exclude files with 'Screenshot' in the name
+                        return !resourcePath.includes('Screenshot');
+                    }
+                }
+            ]
+        })
+    ],
     module: {
         rules: [
             {
@@ -18,6 +39,7 @@ module.exports = {
                         loader: 'file-loader',
                         options: {
                             name: '[name].[ext]',
+                            outputPath: 'images/', // Put these files under public/images
                         },
                     },
                 ],
@@ -29,6 +51,7 @@ module.exports = {
                         loader: 'file-loader',
                         options: {
                             name: '[name].[ext]',
+                            outputPath: 'images/', // Also put these files under public/images
                         },
                     },
                 ],
