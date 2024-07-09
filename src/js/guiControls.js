@@ -23,14 +23,22 @@ export class GUIControls {
             absoluteAngularVelocity: "0.000",
             cancelAndAlign: false, // Add autopilot status
             cancelRotation: false, // Add cancel rotation status
+            pointToPosition: false, // Add point to position status
+            cancelLinearMotion: false, // Add cancel linear motion status
             kp: this.autopilot.pidController.kp, // Access through autopilot instance
             ki: this.autopilot.pidController.ki, // Access through autopilot instance
             kd: this.autopilot.pidController.kd, // Access through autopilot instance
             showAutopilotArrow: true,
+            showVelocityArrow: true,
             showAutopilotTorqueArrow: true,
             showRotationAxisArrow: true,
             showOrientationArrow: true,
             thrust: spacecraftController.thrust, // Newtons
+            cancelAndAlign: false,
+            cancelRotation: false,
+            pointToPosition: false,
+            cancelLinearMotion: false,
+            goToPosition: false, // Add new option for Go to Position
         };
         this.createGUIControls();
         this.velocityFolder = this.gui.addFolder("Velocity");
@@ -46,6 +54,7 @@ export class GUIControls {
         this.options.targetZ = 0; // Initialize target position Z
         this.addTargetPositionControls(); // Add target position controls to GUI
     }
+
     createGUIControls() {
         const boxFolder = this.gui.addFolder("Spacecraft");
         boxFolder.add(this.options, "boxWidth", 0.1, 20.0).onChange((e) => {
@@ -108,22 +117,26 @@ export class GUIControls {
 
     addAutopilotControls() {
         this.autopilotFolder.add(this.options, "cancelAndAlign").name("Cancel and Align").onChange((value) => {
-            if (value) {
-                this.options.cancelRotation = false; // Ensure cancelRotation is turned off
-                this.spacecraftController.autopilot.cancelAndAlign();
-            } else {
-                this.spacecraftController.autopilot.isAutopilotEnabled = false;
-            }
+            this.spacecraftController.autopilot.cancelAndAlign();
             this.updateVectorVisibility();
         }).listen();
 
         this.autopilotFolder.add(this.options, "cancelRotation").name("Cancel Rotation").onChange((value) => {
-            if (value) {
-                this.options.cancelAndAlign = false; // Ensure cancelAndAlign is turned off
-                this.spacecraftController.autopilot.cancelRotation();
-            } else {
-                this.spacecraftController.autopilot.isAutopilotEnabled = false;
-            }
+            this.spacecraftController.autopilot.cancelRotation();
+            this.updateVectorVisibility();
+        }).listen();
+
+        this.autopilotFolder.add(this.options, "pointToPosition").name("Point to Position").onChange((value) => {
+            this.spacecraftController.autopilot.pointToPosition();
+            this.updateVectorVisibility();
+        }).listen();
+
+        this.autopilotFolder.add(this.options, "cancelLinearMotion").name("Cancel Linear Motion").onChange((value) => {
+            this.spacecraftController.autopilot.cancelLinearMotion();
+        }).listen();
+
+        this.autopilotFolder.add(this.options, "goToPosition").name("Go to Position").onChange((value) => {
+            this.spacecraftController.autopilot.goToPosition();
             this.updateVectorVisibility();
         }).listen();
 
@@ -143,11 +156,15 @@ export class GUIControls {
             this.updateArrowVisibility("orientationArrow", value);
         });
 
+        this.autopilotFolder.add(this.options, "showVelocityArrow").name("Velocity Arrow").onChange((value) => {
+            this.updateArrowVisibility("velocityArrow", value);
+        });
+
         this.autopilotFolder.open();
     }
 
     updateVectorVisibility() {
-        const showArrows = this.options.cancelAndAlign || this.options.cancelRotation;
+        const showArrows = this.spacecraftController.autopilot.isAutopilotEnabled;
         this.updateArrowVisibility("autopilotArrow", showArrows && this.options.showAutopilotArrow);
         this.updateArrowVisibility("autopilotTorqueArrow", showArrows && this.options.showAutopilotTorqueArrow);
         this.updateArrowVisibility("rotationAxisArrow", showArrows && this.options.showRotationAxisArrow);
@@ -162,16 +179,16 @@ export class GUIControls {
     }
 
     onAutopilotStateChanged(event) {
-        const { enabled, type } = event.detail;
-        if (type === 'align') {
-            this.options.cancelAndAlign = enabled;
-            if (!enabled) this.options.cancelRotation = false;
-        } else if (type === 'rotation') {
-            this.options.cancelRotation = enabled;
-            if (!enabled) this.options.cancelAndAlign = false;
-        }
+        const { enabled, activeAutopilots } = event.detail;
+        
+        this.options.cancelAndAlign = activeAutopilots.align;
+        this.options.cancelRotation = activeAutopilots.rotation;
+        this.options.pointToPosition = activeAutopilots.pointToPosition;
+        this.options.cancelLinearMotion = activeAutopilots.linearMotion;
+        this.options.goToPosition = activeAutopilots.goToPosition; // Add new autopilot function
+
         this.gui.updateDisplay();
-        this.updateVectorVisibility(); // Call method to update visibility based on autopilot state
+        this.updateVectorVisibility();
     }
 
     addPIDControls() {

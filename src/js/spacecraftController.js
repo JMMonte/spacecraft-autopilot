@@ -22,6 +22,7 @@ export class SpacecraftController {
         document.addEventListener('keyup', this.handleKeyUp.bind(this), false);
     }
 
+
     handleKeyDown(event) {
         this.keysPressed[event.code] = true;
         if (event.code === 'KeyT') {
@@ -30,18 +31,24 @@ export class SpacecraftController {
             this.autopilot.cancelAndAlign();
         }
         if (event.code === 'KeyY') {
-            this.autopilot.isTrackingTarget = true;
-            this.autopilot.cancelAndAlign();
+            this.autopilot.pointToPosition();
         }
         if (event.code === 'KeyR') {
-            this.autopilot.isTrackingTarget = false;
             this.autopilot.cancelRotation();
+        }
+        if (event.code === 'KeyG') {
+            this.autopilot.cancelLinearMotion();
+        }
+        if (event.code === 'KeyB') {  // Add new key for Go to Position
+            this.autopilot.isTrackingTarget = false;
+            this.autopilot.goToPosition();
         }
     }
 
     handleKeyUp(event) {
         this.keysPressed[event.code] = false;
     }
+    
 
     // General methods
     applyForces() {
@@ -99,6 +106,7 @@ export class SpacecraftController {
         }
 
         const currentAngularVelocity = this.spacecraft.objects.boxBody.angularVelocity;
+        const currentVelocity = this.spacecraft.objects.boxBody.velocity;
 
         const pitchTorque = thrustForces[0] + thrustForces[3] + thrustForces[4] + thrustForces[7];
         const yawTorque = thrustForces[8] + thrustForces[11] + thrustForces[12] + thrustForces[15];
@@ -122,6 +130,7 @@ export class SpacecraftController {
         this.spacecraft.world.helpers.updateAutopilotTorqueArrow(this.spacecraft.objects.boxBody.position, autopilotTorque);
         this.spacecraft.world.helpers.updateRotationAxisArrow(this.spacecraft.objects.boxBody.position, rotationAxis);
         this.spacecraft.world.helpers.updateOrientationArrow(this.spacecraft.objects.boxBody.position, normalizedOrientationVector);
+        this.spacecraft.world.helpers.updateVelocityArrow(this.spacecraft.objects.boxBody.position, currentVelocity);
     }
 
     // Helper methods

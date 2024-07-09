@@ -7,18 +7,30 @@ export class Autopilot {
         this.spacecraft = spacecraft;
         this.thrusterGroups = thrusterGroups;
         this.targetOrientation = new THREE.Quaternion(0, 0, 0, 1);
+        this.targetPosition = new THREE.Vector3(0, 0, 0);
         this.pidController = new PIDController(5, 0.05, 2);
         this.orientationPidController = new PIDController(0.1, 0.01, 0.05);
+        this.linearPidController = new PIDController(10, 0.1, 5);
         this.thrust = 1200;
         this.maxAngularMomentum = 100;
         this.maxAngularVelocity = 10;
-        this.autopilotThreshold = 0.2;
+        this.autopilotThreshold = 0.01;
         this.phase = 0;
-        this.minAngularMomentumMagnitude = 0.2;
+        this.minAngularMomentumMagnitude = 0.1;
         this.isAutopilotEnabled = false;
         this.isRotationCancelOnly = false;
-        this.isTrackingTarget = false; // New flag to indicate continuous target tracking
-        this.targetPosition = new THREE.Vector3(0, 0, 0); // New property to store target position
+        this.isTrackingTarget = false;
+        this.isLinearMotionCancelationEnabled = false; // New flag for linear motion cancellation
+        this.activeAutopilots = {
+            align: false,
+            rotation: false,
+            linearMotion: false,
+            pointToPosition: false,
+            goToPosition: false // Add new autopilot function
+        };
+        this.maxForce = 1200 * 4; // Maximum combined force from 4 thrusters
+        this.dampingFactor = 3.0; // Adjust this value to change damping strength
+        this.spacecraftMass = spacecraft.objects.boxBody.mass; // Assuming this is in kg
     }
 
     setTargetOrientation() {
@@ -42,47 +54,150 @@ export class Autopilot {
     }
 
     cancelAndAlign() {
-        this.isAutopilotEnabled = !this.isAutopilotEnabled;
-        this.phase = 0;
-        this.isRotationCancelOnly = false;
-
-        document.dispatchEvent(new CustomEvent('autopilotStateChanged', { detail: { enabled: this.isAutopilotEnabled, type: 'align' } }));
+        this.activeAutopilots.align = !this.activeAutopilots.align;
+        this.updateAutopilotState();
     }
 
     cancelRotation() {
-        this.isAutopilotEnabled = !this.isAutopilotEnabled;
-        this.phase = 1;
-        this.isRotationCancelOnly = true;
+        this.activeAutopilots.rotation = !this.activeAutopilots.rotation;
+        this.updateAutopilotState();
+    }
 
-        document.dispatchEvent(new CustomEvent('autopilotStateChanged', { detail: { enabled: this.isAutopilotEnabled, type: 'rotation' } }));
+    cancelLinearMotion() {
+        this.activeAutopilots.linearMotion = !this.activeAutopilots.linearMotion;
+        this.updateAutopilotState();
+    }
+
+    pointToPosition() {
+        this.activeAutopilots.pointToPosition = !this.activeAutopilots.pointToPosition;
+        this.isTrackingTarget = this.activeAutopilots.pointToPosition;
+        this.updateAutopilotState();
+    }
+
+    goToPosition() {
+        this.activeAutopilots.goToPosition = !this.activeAutopilots.goToPosition;
+        this.isTrackingTarget = this.activeAutopilots.goToPosition;
+        this.updateAutopilotState();
+    }
+
+
+    updateAutopilotState() {
+        this.isAutopilotEnabled = Object.values(this.activeAutopilots).some(value => value);
+        document.dispatchEvent(new CustomEvent('autopilotStateChanged', { detail: { enabled: this.isAutopilotEnabled, activeAutopilots: this.activeAutopilots } }));
     }
 
     calculateAutopilotForces() {
-        const {
-            currentQuaternion,
-            errorQuaternion,
-            orientationError,
-            momentOfInertia,
-            currentAngularMomentum,
-            currentAngularMomentumMagnitude
-        } = this.calculateAutopilotParameters();
+        const params = this.calculateAutopilotParameters();
 
-        const { angularMomentumIsLow, orientationNeedsCorrection } = this.determineAutopilotConditions(currentAngularMomentumMagnitude, orientationError);
+        let forces = Array(24).fill(0);
 
-        if (this.isTrackingTarget) {
-            this.calculateOrientationToTargetPosition();
+        if (this.activeAutopilots.linearMotion) {
+            forces = this.mergeForces(forces, this.calculateLinearMotionCancelationForces());
         }
 
-        if (this.isRotationCancelOnly) {
-            if (angularMomentumIsLow) {
-                return Array(24).fill(0); // Stop firing thrusters
+        if (this.activeAutopilots.rotation) {
+            forces = this.mergeForces(forces, this.applyDamping(params.currentAngularMomentum, params.currentQuaternion, true));
+        }
+
+        if (this.activeAutopilots.align || this.activeAutopilots.pointToPosition) {
+            if (this.activeAutopilots.pointToPosition) {
+                this.calculateOrientationToTargetPosition();
             }
-            this.phase = 1; // Only apply damping to cancel rotation
-        } else {
-            this.updateAutopilotPhase(angularMomentumIsLow, orientationNeedsCorrection);
+            forces = this.mergeForces(forces, this.adjustAngularVelocityForOrientation(params.errorQuaternion, params.currentAngularMomentum, params.currentQuaternion, params.momentOfInertia));
         }
 
-        return this.executeAutopilotPhase(currentAngularMomentum, currentQuaternion, errorQuaternion, momentOfInertia);
+        if (this.activeAutopilots.goToPosition) {
+            forces = this.mergeForces(forces, this.calculateGoToPositionForces(params));
+        }
+
+        return forces;
+    }
+
+    calculateGoToPositionForces(params) {
+        const currentPosition = new THREE.Vector3().copy(this.spacecraft.objects.boxBody.position);
+        const targetPosition = new THREE.Vector3().copy(this.targetPosition);
+        const currentVelocity = new THREE.Vector3().copy(this.spacecraft.objects.boxBody.velocity);
+        
+        // Calculate position error
+        const positionError = new THREE.Vector3().subVectors(targetPosition, currentPosition);
+
+        // Use PID controller to calculate the force needed
+        const pidOutput = this.linearPidController.update(new CANNON.Vec3(positionError.x, positionError.y, positionError.z), 1 / 60);
+
+        // Multiply the pidOutput by the spacecraft's mass
+        let force = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z).multiplyScalar(this.spacecraftMass);
+
+        // Apply velocity damping
+        const dampingForce = currentVelocity.clone().multiplyScalar(-this.dampingFactor * this.spacecraftMass);
+        force.add(dampingForce);
+
+        // Limit the force to the maximum allowed force
+        if (force.length() > this.maxForce) {
+            force.normalize().multiplyScalar(this.maxForce);
+        }
+        
+        // Convert force to spacecraft's local coordinate system
+        const localForce = this.spacecraft.objects.boxBody.quaternion.inverse().vmult(new CANNON.Vec3(force.x, force.y, force.z));
+        
+        // Apply the force using thruster groups
+        return this.applyTranslationalForcesToThrusterGroups(localForce);
+    }
+
+
+    applyTranslationalForcesToThrusterGroups(localForce) {
+        const forces = Array(24).fill(0);
+        const epsilon = 0.01; // Small threshold to avoid activating thrusters unnecessarily
+
+        // Forward/Backward
+        if (Math.abs(localForce.z) > epsilon) {
+            const thrusterGroup = localForce.z > 0 ? this.thrusterGroups.forward[0] : this.thrusterGroups.forward[1];
+            const thrusterForce = Math.min(Math.abs(localForce.z) / 4, this.thrust);
+            thrusterGroup.forEach(index => forces[index] = thrusterForce);
+        }
+
+        // Up/Down
+        if (Math.abs(localForce.y) > epsilon) {
+            const thrusterGroup = localForce.y > 0 ? this.thrusterGroups.up[0] : this.thrusterGroups.up[1];
+            const thrusterForce = Math.min(Math.abs(localForce.y) / 4, this.thrust);
+            thrusterGroup.forEach(index => forces[index] = thrusterForce);
+        }
+
+        // Left/Right
+        if (Math.abs(localForce.x) > epsilon) {
+            const thrusterGroup = localForce.x > 0 ? this.thrusterGroups.left[1] : this.thrusterGroups.left[0];
+            const thrusterForce = Math.min(Math.abs(localForce.x) / 4, this.thrust);
+            thrusterGroup.forEach(index => forces[index] = thrusterForce);
+        }
+
+        return forces;
+    }
+
+    mergeForces(forces1, forces2) {
+        return forces1.map((force, index) => force + forces2[index]);
+    }
+
+    calculateLinearMotionCancelationForces() {
+        const forces = Array(24).fill(0);
+
+        // Get the velocity in the local reference frame
+        const worldVelocity = this.spacecraft.objects.boxBody.velocity.clone();
+        const localVelocity = this.spacecraft.objects.boxBody.quaternion.inverse().vmult(worldVelocity);
+
+        // Calculate PID output for each axis
+        const velocityError = localVelocity.negate();
+        const pidOutput = this.linearPidController.update(new CANNON.Vec3(velocityError.x, velocityError.y, velocityError.z), 1 / 60);
+
+        // Calculate forces per thruster group
+        const forwardForce = Math.abs(pidOutput.z) * this.thrust / 4;
+        const upForce = Math.abs(pidOutput.y) * this.thrust / 4;
+        const leftForce = Math.abs(pidOutput.x) * this.thrust / 4;
+
+        // Apply forces to the appropriate thruster groups
+        this.applyForceToGroup(this.thrusterGroups.forward[pidOutput.z > 0 ? 0 : 1], forwardForce, forces);
+        this.applyForceToGroup(this.thrusterGroups.up[pidOutput.y > 0 ? 0 : 1], upForce, forces);
+        this.applyForceToGroup(this.thrusterGroups.left[pidOutput.x < 0 ? 0 : 1], leftForce, forces);
+
+        return forces;
     }
 
     calculateAutopilotParameters() {
@@ -142,6 +257,9 @@ export class Autopilot {
         } else if (this.phase === 3) {
             console.log("Adjusting angular velocity for orientation");
             return this.adjustAngularVelocityForOrientation(errorQuaternion, currentAngularMomentum, currentQuaternion, momentOfInertia);
+        } else if (this.phase === 2) {
+            console.log("Pointing to target position");
+            return this.adjustAngularVelocityForOrientation(errorQuaternion, currentAngularMomentum, currentQuaternion, momentOfInertia);
         }
 
         return Array(24).fill(0); // No action if no conditions are met
@@ -190,9 +308,9 @@ export class Autopilot {
         const h = size.y;
         const d = size.z;
 
-        const Ix = (1/12) * mass * (h*h + d*d);
-        const Iy = (1/12) * mass * (w*w + d*d);
-        const Iz = (1/12) * mass * (w*w + h*h);
+        const Ix = (1 / 12) * mass * (h * h + d * d);
+        const Iy = (1 / 12) * mass * (w * w + d * d);
+        const Iz = (1 / 12) * mass * (w * w + h * h);
 
         return Math.max(Ix, Iy, Iz);
     }

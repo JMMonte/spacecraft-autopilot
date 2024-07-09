@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon';
 
 export class SceneHelpers {
     constructor(scene, light, camera) {
@@ -23,9 +24,9 @@ export class SceneHelpers {
         this.scene.add(axesHelper);
 
         // debug forces
-        this.translationArrow = new THREE.ArrowHelper(new THREE.Vector3(), new THREE.Vector3(), 1, 0x00ff00);
-        this.rotationArrow = new THREE.ArrowHelper(new THREE.Vector3(), new THREE.Vector3(), 1, 0xff0000);
-        this.scene.add(this.translationArrow);
+        this.velocityArrow = new THREE.ArrowHelper(new THREE.Vector3(), new THREE.Vector3(), 3, 0x00ff00);
+        this.scene.add(this.velocityArrow);
+        this.rotationArrow = new THREE.ArrowHelper(new THREE.Vector3(), new THREE.Vector3(), 3, 0xff0000);
         this.scene.add(this.rotationArrow);
 
         // Autopilot arrow
@@ -69,5 +70,12 @@ export class SceneHelpers {
         this.torqueArrow.setDirection(threeTorque.normalize());
         this.torqueArrow.setLength(threeTorque.length());
         this.torqueArrow.position.copy(position);
+    }
+
+    updateVelocityArrow(position, velocity) {
+        const threeVelocity = new THREE.Vector3(velocity.x, velocity.y, velocity.z);
+        this.velocityArrow.setLength(threeVelocity.length());
+        this.velocityArrow.setDirection(threeVelocity.normalize());
+        this.velocityArrow.position.copy(position);
     }
 }
