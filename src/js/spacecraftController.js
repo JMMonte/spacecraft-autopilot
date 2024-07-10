@@ -3,71 +3,80 @@ import { applyQuaternionToVector } from './utils';
 import { Autopilot } from './autopilot';
 
 export class SpacecraftController {
-    constructor(spacecraft, currentTarget) {
-        this.initializeProperties(spacecraft, currentTarget);
-        this.setupEventListeners();
+    constructor(spacecraft, currentTarget, helpers) {
+        this.isActive = false; // Initialize isActive property
+        this.initializeProperties(spacecraft, currentTarget, helpers);
     }
 
-    initializeProperties(spacecraft, currentTarget) {
+    initializeProperties(spacecraft, currentTarget, helpers) {
         this.spacecraft = spacecraft;
         this.currentTarget = currentTarget.uuid;
         this.keysPressed = {};
         this.thrusterGroups = this.defineThrusterGroups(); // Define thruster groups
-        this.autopilot = new Autopilot(spacecraft, this.thrusterGroups); // Pass thruster groups to Autopilot
-        this.thrust = 1200; // Ensure thrust is defined
+        this.mass = spacecraft.objects.boxBody.mass; // Use spacecraft's mass
+        const thrustFactor = 5; // Adjust this value to control the spacecraft's thrust
+        this.thrust = this.mass / 24 * thrustFactor; // Calculate thrust per thruster
+        this.autopilot = new Autopilot(spacecraft, this.thrusterGroups, this.thrust); // Pass thruster groups to Autopilot
+        this.helpers = helpers; // Add helpers
     }
-
-    setupEventListeners() {
-        document.addEventListener('keydown', this.handleKeyDown.bind(this), false);
-        document.addEventListener('keyup', this.handleKeyUp.bind(this), false);
-    }
-
 
     handleKeyDown(event) {
-        this.keysPressed[event.code] = true;
-        if (event.code === 'KeyT') {
-            this.autopilot.isTrackingTarget = false;
-            this.autopilot.setTargetOrientation();
-            this.autopilot.cancelAndAlign();
-        }
-        if (event.code === 'KeyY') {
-            this.autopilot.pointToPosition();
-        }
-        if (event.code === 'KeyR') {
-            this.autopilot.cancelRotation();
-        }
-        if (event.code === 'KeyG') {
-            this.autopilot.cancelLinearMotion();
-        }
-        if (event.code === 'KeyB') {  // Add new key for Go to Position
-            this.autopilot.isTrackingTarget = false;
-            this.autopilot.goToPosition();
+        if (this.isActive) {
+            this.keysPressed[event.code] = true;
+            this.handleManualControl(event.code);
+            this.handleAutopilotControl(event.code);
         }
     }
 
     handleKeyUp(event) {
-        this.keysPressed[event.code] = false;
-    }
-    
-
-    // General methods
-    applyForces() {
-        const isCurrentTarget = this.currentTarget === this.spacecraft.objects.box.uuid;
-        if (!isCurrentTarget) {
-            return Array(24).fill(false);
-        } else {
-            const manualForces = this.calculateManualForces();
-            const autopilotForces = this.autopilot.isAutopilotEnabled ? this.autopilot.calculateAutopilotForces() : Array(24).fill(0);
-            const combinedForces = manualForces.map((force, index) => force + autopilotForces[index]);
-            const coneVisibility = this.applyForcesToThrusters(combinedForces);
-
-            this.spacecraft.rcsVisuals.coneMeshes.forEach((coneMesh, index) => {
-                coneMesh.visible = coneVisibility[index];
-            });
-
-            this.updateHelpers(combinedForces);
-            return coneVisibility;
+        if (this.isActive) {
+            this.keysPressed[event.code] = false;
         }
+    }
+
+    handleManualControl(code) {
+        if (this.rotationKeys().includes(code) || this.translationKeys().includes(code)) {
+            this.keysPressed[code] = true;
+        }
+    }
+
+    handleAutopilotControl(code) {
+        switch (code) {
+            case 'KeyT':
+                this.autopilot.isTrackingTarget = false;
+                this.autopilot.setTargetOrientation();
+                this.autopilot.cancelAndAlign();
+                break;
+            case 'KeyY':
+                this.autopilot.pointToPosition();
+                break;
+            case 'KeyR':
+                this.autopilot.cancelRotation();
+                break;
+            case 'KeyG':
+                this.autopilot.cancelLinearMotion();
+                break;
+            case 'KeyB':
+                this.autopilot.isTrackingTarget = false;
+                this.autopilot.goToPosition();
+                break;
+            default:
+                break;
+        }
+    }
+
+    applyForces() {
+        const manualForces = this.calculateManualForces();
+        const autopilotForces = this.autopilot.isAutopilotEnabled ? this.autopilot.calculateAutopilotForces() : Array(24).fill(0);
+        const combinedForces = manualForces.map((force, index) => force + autopilotForces[index]);
+        const coneVisibility = this.applyForcesToThrusters(combinedForces);
+
+        this.spacecraft.rcsVisuals.coneMeshes.forEach((coneMesh, index) => {
+            coneMesh.visible = coneVisibility[index];
+        });
+
+        this.updateHelpers(combinedForces);
+        return coneVisibility;
     }
 
     applyForcesToThrusters(forces) {
@@ -126,11 +135,11 @@ export class SpacecraftController {
         const normalizedOrientationVector = new CANNON.Vec3(orientationVector.x, orientationVector.y, orientationVector.z);
         normalizedOrientationVector.normalize();
 
-        this.spacecraft.world.helpers.updateAutopilotArrow(this.spacecraft.objects.boxBody.position, directionVector);
-        this.spacecraft.world.helpers.updateAutopilotTorqueArrow(this.spacecraft.objects.boxBody.position, autopilotTorque);
-        this.spacecraft.world.helpers.updateRotationAxisArrow(this.spacecraft.objects.boxBody.position, rotationAxis);
-        this.spacecraft.world.helpers.updateOrientationArrow(this.spacecraft.objects.boxBody.position, normalizedOrientationVector);
-        this.spacecraft.world.helpers.updateVelocityArrow(this.spacecraft.objects.boxBody.position, currentVelocity);
+        this.helpers.updateAutopilotArrow(this.spacecraft.objects.boxBody.position, directionVector);
+        this.helpers.updateAutopilotTorqueArrow(this.spacecraft.objects.boxBody.position, autopilotTorque);
+        this.helpers.updateRotationAxisArrow(this.spacecraft.objects.boxBody.position, rotationAxis);
+        this.helpers.updateOrientationArrow(this.spacecraft.objects.boxBody.position, normalizedOrientationVector);
+        this.helpers.updateVelocityArrow(this.spacecraft.objects.boxBody.position, currentVelocity);
     }
 
     // Helper methods
@@ -164,5 +173,9 @@ export class SpacecraftController {
 
     rotationKeys() {
         return ['KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyQ', 'KeyE'];
+    }
+
+    translationKeys() {
+        return ['KeyU', 'KeyO', 'KeyK', 'KeyI', 'KeyJ', 'KeyL'];
     }
 }

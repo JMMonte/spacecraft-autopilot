@@ -3,7 +3,7 @@ import * as CANNON from 'cannon';
 import { PIDController } from './pidController';
 
 export class Autopilot {
-    constructor(spacecraft, thrusterGroups) {
+    constructor(spacecraft, thrusterGroups, thrust) {
         this.spacecraft = spacecraft;
         this.thrusterGroups = thrusterGroups;
         this.targetOrientation = new THREE.Quaternion(0, 0, 0, 1);
@@ -11,7 +11,7 @@ export class Autopilot {
         this.pidController = new PIDController(5, 0.05, 2);
         this.orientationPidController = new PIDController(0.1, 0.01, 0.05);
         this.linearPidController = new PIDController(10, 0.1, 5);
-        this.thrust = 1200;
+        this.thrust = thrust;
         this.maxAngularMomentum = 100;
         this.maxAngularVelocity = 10;
         this.autopilotThreshold = 0.01;
@@ -28,9 +28,10 @@ export class Autopilot {
             pointToPosition: false,
             goToPosition: false // Add new autopilot function
         };
-        this.maxForce = 1200 * 4; // Maximum combined force from 4 thrusters
+        this.maxForce = 400; // Maximum combined force from 4 thrusters
         this.dampingFactor = 3.0; // Adjust this value to change damping strength
         this.spacecraftMass = spacecraft.objects.boxBody.mass; // Assuming this is in kg
+        this.positionReference = this.spacecraft.objects.boxBody.position;
     }
 
     setTargetOrientation() {
@@ -39,9 +40,9 @@ export class Autopilot {
         }
     }
 
-    calculateOrientationToTargetPosition() {
+    calculateOrientationToTargetPosition(position) {
         const currentPosition = new THREE.Vector3();
-        currentPosition.copy(this.spacecraft.objects.boxBody.position);
+        currentPosition.copy(position);
         const direction = new THREE.Vector3().subVectors(this.targetPosition, currentPosition).normalize();
 
         const up = new THREE.Vector3(0, 1, 0);
@@ -101,12 +102,13 @@ export class Autopilot {
 
         if (this.activeAutopilots.align || this.activeAutopilots.pointToPosition) {
             if (this.activeAutopilots.pointToPosition) {
-                this.calculateOrientationToTargetPosition();
+                this.calculateOrientationToTargetPosition(this.positionReference);
             }
             forces = this.mergeForces(forces, this.adjustAngularVelocityForOrientation(params.errorQuaternion, params.currentAngularMomentum, params.currentQuaternion, params.momentOfInertia));
         }
 
         if (this.activeAutopilots.goToPosition) {
+            this.calculateOrientationToTargetPosition(this.positionReference);
             forces = this.mergeForces(forces, this.calculateGoToPositionForces(params));
         }
 
@@ -114,7 +116,7 @@ export class Autopilot {
     }
 
     calculateGoToPositionForces(params) {
-        const currentPosition = new THREE.Vector3().copy(this.spacecraft.objects.boxBody.position);
+        const currentPosition = new THREE.Vector3().copy(this.positionReference);
         const targetPosition = new THREE.Vector3().copy(this.targetPosition);
         const currentVelocity = new THREE.Vector3().copy(this.spacecraft.objects.boxBody.velocity);
         

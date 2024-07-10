@@ -26,6 +26,10 @@ module.exports = {
                         // Exclude files with 'Screenshot' in the name
                         return !resourcePath.includes('Screenshot');
                     }
+                },
+                {
+                    from: 'src/config.json', // Copy config.json
+                    to: 'config.json' // Output in public directory
                 }
             ]
         })

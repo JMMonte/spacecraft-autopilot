@@ -78,4 +78,12 @@ export class SceneHelpers {
         this.velocityArrow.setDirection(threeVelocity.normalize());
         this.velocityArrow.position.copy(position);
     }
+
+    disableHelpers() {
+        this.autopilotArrow.visible = false;
+        this.autopilotTorqueArrow.visible = false;
+        this.rotationAxisArrow.visible = false;
+        this.orientationArrow.visible = false;
+        this.velocityArrow.visible = false;
+    }
 }

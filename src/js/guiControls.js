@@ -1,12 +1,13 @@
 import * as dat from 'dat.gui';
 
 export class GUIControls {
-    constructor(objects, rcsVisuals, spacecraft, spacecraftController) {
+    constructor(objects, rcsVisuals, spacecraft, spacecraftController, helpers) {
         this.gui = new dat.GUI();
         this.objects = objects;
         this.rcsVisuals = rcsVisuals;
         this.spacecraft = spacecraft;
         this.spacecraftController = spacecraftController;
+        this.helpers = helpers; // Add helpers
         this.autopilot = spacecraftController.autopilot; // Access autopilot instance
         document.addEventListener('autopilotStateChanged', this.onAutopilotStateChanged.bind(this));
         this.options = {
@@ -172,7 +173,7 @@ export class GUIControls {
     }
 
     updateArrowVisibility(arrowName, visible) {
-        const arrow = this.spacecraft.world.helpers[arrowName];
+        const arrow = this.helpers[arrowName]; // Use helpers from the controller
         if (arrow) {
             arrow.visible = visible;
         }

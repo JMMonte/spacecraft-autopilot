@@ -332,15 +332,15 @@ export class SceneObjects {
     
         // Define positions for the front and back docking ports relative to the spacecraft's center
         const portPositions = [
-            { z: this.boxDepth / 2 + this.dockingPortDepth, angle: 0 }, // Front
-            { z: -this.boxDepth / 2 - this.dockingPortDepth, angle: Math.PI } // Back
+            { name: "dockingPortFront", z: this.boxDepth / 2 + this.dockingPortDepth, angle: 0 }, // Front
+            { name: "dockingPortBack", z: -this.boxDepth / 2 - this.dockingPortDepth, angle: Math.PI } // Back
         ];
     
-        portPositions.forEach(({ z, angle }) => {
+        portPositions.forEach(({ name, z, angle }) => {
             // Three.js Cylinder for the docking port
             const cylinderGeometry = new THREE.CylinderGeometry(this.dockingPortRadius, this.dockingPortRadius, this.dockingPortLength, 32);
             const cylinder = new THREE.Mesh(cylinderGeometry, material);
-            cylinder.name = "dockingPort";
+            cylinder.name = name;
             cylinder.rotation.x = Math.PI / 2; // Rotate to align with the Z-axis
             cylinder.position.z = z;
             this.box.add(cylinder);
@@ -349,7 +349,7 @@ export class SceneObjects {
             // Correcting rotation to align with the cylinder; assuming we want the hole facing outward along the Y-axis
             const torusGeometry = new THREE.TorusGeometry(this.dockingPortRadius, 0.05, 16, 100);
             const torus = new THREE.Mesh(torusGeometry, material);
-            torus.name = "dockingPortRing";
+            torus.name = `${name}Ring`;
             torus.rotation.y = angle; // Correct orientation based on the port's position (front or back)
             torus.position.z = z; // Position adjusted to match the cylinder
             this.box.add(torus);
@@ -378,6 +378,7 @@ export class SceneObjects {
     updateDockingPorts() {
         this.removeDockingPorts();
         this.addDockingPorts();
+        console.log(this.box);
     }
 
     // GENERAL UPDATE
