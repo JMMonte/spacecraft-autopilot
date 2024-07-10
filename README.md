@@ -1,13 +1,27 @@
-# Realistic 3d Spacecraft simulator in THREEJS+CANNON
+# Open autopilot framework for spacecraft
 
-A simple Three.js application that simulates spacecraft physics in 3d in 0g, with autopilot, using Webpack for asset bundling and development server capabilities.
+Threejs + Cannonjs simulation that builds procedural spacecraft each with it's own autopilot thread.
+
+## To-do
+- [x] Fast and realtime procedural phsyics simulation
+- [x] Basic graphics for eye candy
+- [ ] Basic autopilot commands for blueprint
+  - [x] Cancel rotation
+  - [x] Cancel rotation and maintain orientation
+  - [x] Cancel rotation and point to position
+  - [x] Cancel relative linear motion
+  - [x] Go to relative 3d coordinate
+  - [ ] Control from docking port reference frame
+  - [ ] Procedural linear motion damping
+  - [ ] Manual Multipoint trajectory maneuver (follow path)
+  - [ ] Automated Multipoint trajectory maneuver (procedural follow path to reach target around obstacle)
 
 ![Screenshot](src/images/Screenshot%202024-04-12%20at%2012.19.09.png)
 ![Screenshot](src/images/Screenshot%202024-04-12%20at%2012.19.15.png)
 
 ## Version
 
-1.0.0
+0.0.1
 
 ## Description
 
