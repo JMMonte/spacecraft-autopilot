@@ -1,5 +1,5 @@
 import * as CANNON from 'cannon';
-import { applyQuaternionToVector } from './utils';
+import { applyQuaternionToVector } from '../utils/utils';
 import { Autopilot } from './autopilot';
 
 export class SpacecraftController {

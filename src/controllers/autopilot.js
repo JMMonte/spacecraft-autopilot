@@ -123,28 +123,39 @@ export class Autopilot {
         // Calculate position error
         const positionError = new THREE.Vector3().subVectors(targetPosition, currentPosition);
 
+        // Calculate distance to target
+        const distanceToTarget = positionError.length();
+
         // Use PID controller to calculate the force needed
         const pidOutput = this.linearPidController.update(new CANNON.Vec3(positionError.x, positionError.y, positionError.z), 1 / 60);
 
-        // Multiply the pidOutput by the spacecraft's mass
+        // Calculate the desired force based on PID output
         let force = new THREE.Vector3(pidOutput.x, pidOutput.y, pidOutput.z).multiplyScalar(this.spacecraftMass);
 
         // Apply velocity damping
         const dampingForce = currentVelocity.clone().multiplyScalar(-this.dampingFactor * this.spacecraftMass);
         force.add(dampingForce);
 
+        // Calculate the maximum allowable velocity based on distance, mass, and thrust capability
+        const maxVelocity = Math.sqrt(2 * this.thrust * distanceToTarget / this.spacecraftMass);
+
+        // Adjust the force to ensure it respects the max velocity
+        const maxForce = maxVelocity * this.spacecraftMass / (1 / 60); // Force needed to achieve max velocity in one timestep
+        if (force.length() > maxForce) {
+            force.normalize().multiplyScalar(maxForce);
+        }
+
         // Limit the force to the maximum allowed force
         if (force.length() > this.maxForce) {
             force.normalize().multiplyScalar(this.maxForce);
         }
-        
+
         // Convert force to spacecraft's local coordinate system
         const localForce = this.spacecraft.objects.boxBody.quaternion.inverse().vmult(new CANNON.Vec3(force.x, force.y, force.z));
         
         // Apply the force using thruster groups
         return this.applyTranslationalForcesToThrusterGroups(localForce);
     }
-
 
     applyTranslationalForcesToThrusterGroups(localForce) {
         const forces = Array(24).fill(0);

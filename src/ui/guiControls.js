@@ -29,6 +29,9 @@ export class GUIControls {
             kp: this.autopilot.pidController.kp, // Access through autopilot instance
             ki: this.autopilot.pidController.ki, // Access through autopilot instance
             kd: this.autopilot.pidController.kd, // Access through autopilot instance
+            lkp: this.autopilot.linearPidController.kp,
+            lki: this.autopilot.linearPidController.ki,
+            lkd: this.autopilot.linearPidController.kd,
             showAutopilotArrow: true,
             showVelocityArrow: true,
             showAutopilotTorqueArrow: true,
@@ -193,20 +196,36 @@ export class GUIControls {
     }
 
     addPIDControls() {
-        const pidFolder = this.autopilotFolder.addFolder("PID");
-        pidFolder.add(this.options, "kp", 0, 50).onChange((value) => {
+        const pidFolderRot = this.autopilotFolder.addFolder("PID Rotational");
+        pidFolderRot.add(this.options, "kp", 0, 50).onChange((value) => {
             this.autopilot.pidController.kp = value; // Update the autopilot's PID controller directly
             this.options.kp = value; // Update the options.kp value
         });
-        pidFolder.add(this.options, "ki", 0, 50).onChange((value) => {
+        pidFolderRot.add(this.options, "ki", 0, 50).onChange((value) => {
             this.autopilot.pidController.ki = value; // Update the autopilot's PID controller directly
             this.options.ki = value; // Update the options.ki value
         });
-        pidFolder.add(this.options, "kd", 0, 50).onChange((value) => {
+        pidFolderRot.add(this.options, "kd", 0, 50).onChange((value) => {
             this.autopilot.pidController.kd = value; // Update the autopilot's PID controller directly
             this.options.kd = value; // Update the options.kd value
         });
-        pidFolder.open();
+        pidFolderRot.open();
+
+        const pidFolderLin = this.autopilotFolder.addFolder("PID Linear");
+        pidFolderLin.add(this.options, "lkp", 0, 50).onChange((value) => {
+            this.autopilot.linearPidController.kp = value;
+            this.options.lkp = value;
+        });
+        pidFolderLin.add(this.options, "lki", 0, 50).onChange((value) => {
+            this.autopilot.linearPidController.ki = value;
+            this.options.lki = value;
+        });
+        pidFolderLin.add(this.options, "lkd", 0, 50).onChange((value) => {
+            this.autopilot.linearPidController.kd = value;
+            this.options.lkd = value;
+        });
+        pidFolderLin.open();
+
     }
 
     addTargetPositionControls() {

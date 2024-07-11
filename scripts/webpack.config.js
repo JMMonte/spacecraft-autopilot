@@ -7,29 +7,29 @@ module.exports = {
         alias: {
             'three': path.resolve(__dirname, 'node_modules/three'),
             'three-latest': path.resolve(__dirname, 'node_modules/three-latest')
-        }
+        },
+        extensions: ['.js', '.json']
     },
     output: {
         filename: 'bundle.js',
         path: path.resolve(__dirname, 'public'),
     },
     devServer: {
-        static: ['./public', './src'],
+        static: path.resolve(__dirname, 'public'),
     },
     plugins: [
         new CopyWebpackPlugin({
             patterns: [
                 {
-                    from: 'src/images/**/*', // Copies all files in 'images' directory
-                    to: 'images/[name][ext]', // Output in public/images keeping the original names
-                    filter: (resourcePath) => {
-                        // Exclude files with 'Screenshot' in the name
-                        return !resourcePath.includes('Screenshot');
+                    from: 'src/images',
+                    to: 'images',
+                    globOptions: {
+                        ignore: ['**/Screenshot*']
                     }
                 },
                 {
-                    from: 'src/config/config.json', // Copy config.json
-                    to: 'config.json' // Output in public directory
+                    from: 'src/config/config.json',
+                    to: 'config.json'
                 }
             ]
         })
@@ -43,7 +43,7 @@ module.exports = {
                         loader: 'file-loader',
                         options: {
                             name: '[name].[ext]',
-                            outputPath: 'images/', // Put these files under public/images
+                            outputPath: 'images/',
                         },
                     },
                 ],
@@ -55,7 +55,7 @@ module.exports = {
                         loader: 'file-loader',
                         options: {
                             name: '[name].[ext]',
-                            outputPath: 'images/', // Also put these files under public/images
+                            outputPath: 'images/',
                         },
                     },
                 ],

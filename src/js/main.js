@@ -1,36 +1,62 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon';
-import { RCSVisuals } from './rcsVisuals';
-import { BackgroundLoader } from './backgroundLoader';
-import { SceneLights } from './sceneLights';
-import { SceneHelpers } from './sceneHelpers';
-import { GUIControls } from './guiControls';
-import { SceneCamera } from './sceneCamera';
+import { RCSVisuals } from '../ui/rcsVisuals';
+import { BackgroundLoader } from '../helpers/backgroundLoader';
+import { SceneLights } from '../scenes/sceneLights';
+import { SceneHelpers } from '../scenes/sceneHelpers';
+import { GUIControls } from '../ui/guiControls';
+import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
-import { SceneObjects } from './sceneObjects';
-import { SpacecraftController } from './spacecraftController';
-import { CannonDebugRenderer } from './cannonDebugRenderer';
+import { SceneObjects } from '../scenes/sceneObjects';
+import { SpacecraftController } from '../controllers/spacecraftController';
+import { CannonDebugRenderer } from '../helpers/cannonDebugRenderer';
 
-// Configuration JSON object
-const config = {
-    initialSpacecraft: [
-        {
-            position: { x: 0, y: 0, z: 2 },
-            width: 1,
-            height: 1,
-            depth: 2,
-            initialConeVisibility: false,
-        },
-        {
-            position: { x: 2, y: 2, z: 2 },
-            width: 1,
-            height: 1,
-            depth: 1,
-            initialConeVisibility: false,
-        },
-    ],
-    initialFocus: 0,
+// Configuration JSON object (example structure)
+let config = {
+    // initialSpacecraft: [
+    //     {
+    //         position: { x: 0, y: 0, z: 2 },
+    //         width: 1,
+    //         height: 1,
+    //         depth: 2,
+    //         initialConeVisibility: false,
+    //     },
+    //     {
+    //         position: { x: 2, y: 2, z: 2 },
+    //         width: 1,
+    //         height: 1,
+    //         depth: 1,
+    //         initialConeVisibility: false,
+    //     },
+    // ],
+    // initialFocus: 0,
 };
+
+// Function to load config.json synchronously
+function loadConfig() {
+    const request = new XMLHttpRequest();
+    request.open('GET', 'config.json', false);  // 'false' makes the request synchronous
+    request.send(null);
+
+    if (request.status === 200) {
+        return JSON.parse(request.responseText);
+    } else {
+        throw new Error('Could not load config.json');
+    }
+}
+
+try {
+    config = loadConfig();  // Load the config and update the variable
+    console.log('Config loaded:', config);  // Log the loaded configuration
+} catch (error) {
+    console.error('Error loading config:', error);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const world = new BasicWorld(config);  // Initialize world with the config
+    console.log('World initialized');  // Confirm the world has been initialized
+    world.startRenderLoop();  // Start rendering loop
+});
 
 class Spacecraft {
     constructor(world, initialPosition = new CANNON.Vec3(0, 0, 2), width = 1, height = 1, depth = 2, initialConeVisibility = false) {
@@ -62,11 +88,38 @@ class Spacecraft {
 class BasicWorld {
     constructor(config) {
         this.dt = 1.0 / 60.0;
-        this.renderer = new WorldRenderer();
+
+        // Create and append canvas
+        const canvas = document.createElement('canvas');
+        canvas.id = 'mainCanvas';
+        document.body.appendChild(canvas);
+
+        // Initialize the renderer with the canvas
+        this.renderer = new WorldRenderer(canvas);
+
         this.camera = new SceneCamera(this.renderer.renderer, this);
+
+        // Position the camera to ensure it can see the objects
+        this.camera.camera.position.set(0, 5, 10);
+        this.camera.camera.lookAt(0, 0, 0);
+
         this.lights = new SceneLights(this.camera.scene, this.camera.camera);
+
+        // Add a basic directional light to the scene
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(5, 10, 7.5);
+        this.camera.scene.add(light);
+
+        // Add ambient light to the scene
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        this.camera.scene.add(ambientLight);
+
         this.world = new CANNON.World();
         this.world.gravity.set(0, 0, 0);
+
+        // add grid helper
+        const gridHelper = new THREE.GridHelper(100, 100);
+        this.camera.scene.add(gridHelper);
 
         this.spacecraft = [];
         this.spacecraftControllers = [];
@@ -85,17 +138,15 @@ class BasicWorld {
         document.addEventListener("keyup", this.handleKeyUp.bind(this), false);
         document.addEventListener('dblclick', this.onDoubleClick.bind(this), false);
 
-        document.addEventListener('DOMContentLoaded', () => {
-            this.controls = new GUIControls(
-                this.spacecraft[config.initialFocus].objects,
-                this.spacecraft[config.initialFocus].rcsVisuals,
-                this.spacecraft[config.initialFocus],
-                this.spacecraft[config.initialFocus].spacecraftController,
-                this.spacecraft[config.initialFocus].helpers
-            );
-            this.setActiveSpacecraft(this.spacecraft[config.initialFocus]); // Set the initial focus as active spacecraft
-            this.startRenderLoop();
-        });
+        this.controls = new GUIControls(
+            this.spacecraft[config.initialFocus].objects,
+            this.spacecraft[config.initialFocus].rcsVisuals,
+            this.spacecraft[config.initialFocus],
+            this.spacecraft[config.initialFocus].spacecraftController,
+            this.spacecraft[config.initialFocus].helpers
+        );
+        this.setActiveSpacecraft(this.spacecraft[config.initialFocus]); // Set the initial focus as active spacecraft
+
         this.background = new BackgroundLoader(
             this.camera.scene,
             this.renderer.renderer,
@@ -186,9 +237,7 @@ class BasicWorld {
         this.updateCameraTarget();
         this.camera.update();
 
-        // Debugger
-        // this.cannonDebugRenderer.update();
-
+        // Debugging Render Loop
         this.renderer.render(this.camera.scene, this.camera.camera);
         requestAnimationFrame(this.startRenderLoop.bind(this));
     }
@@ -237,7 +286,6 @@ class BasicWorld {
             this.camera.focusOnObject(newTarget);
             this.currentTarget = newTarget;
             const spacecraft = this.spacecraft.find(spacecraft => spacecraft.objects.box === newTarget);
-            console.log("Spacecraft of current target: ", spacecraft);
             if (spacecraft) {
                 this.setActiveSpacecraft(spacecraft);
             }
@@ -259,5 +307,3 @@ class BasicWorld {
         }
     }
 }
-
-const world = new BasicWorld(config);
