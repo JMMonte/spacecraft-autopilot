@@ -22,11 +22,11 @@ export class Autopilot {
         this.isTrackingTarget = false;
         this.isLinearMotionCancelationEnabled = false; // New flag for linear motion cancellation
         this.activeAutopilots = {
-            align: false,
-            rotation: false,
-            linearMotion: false,
+            cancelAndAlign: false,
+            cancelRotation: false,
+            cancelLinearMotion: false,
             pointToPosition: false,
-            goToPosition: false // Add new autopilot function
+            goToPosition: false
         };
         this.maxForce = 400; // Maximum combined force from 4 thrusters
         this.dampingFactor = 3.0; // Adjust this value to change damping strength
@@ -55,29 +55,46 @@ export class Autopilot {
     }
 
     cancelAndAlign() {
-        this.activeAutopilots.align = !this.activeAutopilots.align;
+        this.activeAutopilots.cancelAndAlign = !this.activeAutopilots.cancelAndAlign;
+        if (this.activeAutopilots.cancelAndAlign) {
+            this.activeAutopilots.cancelRotation = false;
+            this.activeAutopilots.pointToPosition = false;
+        }
         this.updateAutopilotState();
     }
 
     cancelRotation() {
-        this.activeAutopilots.rotation = !this.activeAutopilots.rotation;
-        this.updateAutopilotState();
-    }
-
-    cancelLinearMotion() {
-        this.activeAutopilots.linearMotion = !this.activeAutopilots.linearMotion;
+        this.activeAutopilots.cancelRotation = !this.activeAutopilots.cancelRotation;
+        if (this.activeAutopilots.cancelRotation) {
+            this.activeAutopilots.cancelAndAlign = false;
+            this.activeAutopilots.pointToPosition = false;
+        }
         this.updateAutopilotState();
     }
 
     pointToPosition() {
         this.activeAutopilots.pointToPosition = !this.activeAutopilots.pointToPosition;
         this.isTrackingTarget = this.activeAutopilots.pointToPosition;
+        if (this.activeAutopilots.pointToPosition) {
+            this.activeAutopilots.cancelAndAlign = false;
+            this.activeAutopilots.cancelRotation = false;
+        }
+        this.updateAutopilotState();
+    }
+
+    cancelLinearMotion() {
+        this.activeAutopilots.cancelLinearMotion = !this.activeAutopilots.cancelLinearMotion;
+        if (this.activeAutopilots.cancelLinearMotion) {
+            this.activeAutopilots.goToPosition = false; // Disable goToPosition if cancelLinearMotion is enabled
+        }
         this.updateAutopilotState();
     }
 
     goToPosition() {
         this.activeAutopilots.goToPosition = !this.activeAutopilots.goToPosition;
-        this.isTrackingTarget = this.activeAutopilots.goToPosition;
+        if (this.activeAutopilots.goToPosition) {
+            this.activeAutopilots.cancelLinearMotion = false; // Disable cancelLinearMotion if goToPosition is enabled
+        }
         this.updateAutopilotState();
     }
 
@@ -92,15 +109,15 @@ export class Autopilot {
 
         let forces = Array(24).fill(0);
 
-        if (this.activeAutopilots.linearMotion) {
+        if (this.activeAutopilots.cancelLinearMotion) {
             forces = this.mergeForces(forces, this.calculateLinearMotionCancelationForces());
         }
 
-        if (this.activeAutopilots.rotation) {
+        if (this.activeAutopilots.cancelRotation) {
             forces = this.mergeForces(forces, this.applyDamping(params.currentAngularMomentum, params.currentQuaternion, true));
         }
 
-        if (this.activeAutopilots.align || this.activeAutopilots.pointToPosition) {
+        if (this.activeAutopilots.cancelAndAlign || this.activeAutopilots.pointToPosition) {
             if (this.activeAutopilots.pointToPosition) {
                 this.calculateOrientationToTargetPosition(this.positionReference);
             }

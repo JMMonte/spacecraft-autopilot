@@ -10,27 +10,10 @@ import { WorldRenderer } from './worldRenderer';
 import { SceneObjects } from '../scenes/sceneObjects';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { CannonDebugRenderer } from '../helpers/cannonDebugRenderer';
+import { Cockpit } from './cockpit'; // Import the new Cockpit class
 
 // Configuration JSON object (example structure)
-let config = {
-    // initialSpacecraft: [
-    //     {
-    //         position: { x: 0, y: 0, z: 2 },
-    //         width: 1,
-    //         height: 1,
-    //         depth: 2,
-    //         initialConeVisibility: false,
-    //     },
-    //     {
-    //         position: { x: 2, y: 2, z: 2 },
-    //         width: 1,
-    //         height: 1,
-    //         depth: 1,
-    //         initialConeVisibility: false,
-    //     },
-    // ],
-    // initialFocus: 0,
-};
+let config = {};
 
 // Function to load config.json synchronously
 function loadConfig() {
@@ -59,9 +42,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 class Spacecraft {
-    constructor(world, initialPosition = new CANNON.Vec3(0, 0, 2), width = 1, height = 1, depth = 2, initialConeVisibility = false) {
+    constructor(world, initialPosition = new CANNON.Vec3(0, 0, 2), width = 1, height = 1, depth = 2, initialConeVisibility = false, name = 'Spacecraft') {
         this.world = world;
         this.initialPosition = initialPosition;
+        this.name = name;
 
         this.objects = new SceneObjects(world.camera.scene, world.world, width, height, depth);
         this.rcsVisuals = new RCSVisuals(this.objects, this.objects.boxBody, world.world, world.camera.scene, initialConeVisibility);
@@ -130,13 +114,15 @@ class BasicWorld {
                 spacecraftConfig.position.y,
                 spacecraftConfig.position.z
             );
-            this.addSpacecraft(initialPosition, spacecraftConfig.width, spacecraftConfig.height, spacecraftConfig.depth, spacecraftConfig.initialConeVisibility);
+            this.addSpacecraft(initialPosition, spacecraftConfig.width, spacecraftConfig.height, spacecraftConfig.depth, spacecraftConfig.initialConeVisibility, spacecraftConfig.name);
         });
 
         this.keysPressed = {};
         document.addEventListener("keydown", this.handleKeyDown.bind(this), false);
         document.addEventListener("keyup", this.handleKeyUp.bind(this), false);
         document.addEventListener('dblclick', this.onDoubleClick.bind(this), false);
+
+        this.cockpit = new Cockpit(this.spacecraft[config.initialFocus].spacecraftController); // Create the cockpit UI
 
         this.controls = new GUIControls(
             this.spacecraft[config.initialFocus].objects,
@@ -191,8 +177,8 @@ class BasicWorld {
         }, 500);
     }
 
-    addSpacecraft(initialPosition, width = 1, height = 1, depth = 2, initialConeVisibility = false) {
-        const spacecraft = new Spacecraft(this, initialPosition, width, height, depth, initialConeVisibility);
+    addSpacecraft(initialPosition, width = 1, height = 1, depth = 2, initialConeVisibility = false, name = 'Spacecraft') {
+        const spacecraft = new Spacecraft(this, initialPosition, width, height, depth, initialConeVisibility, name);
         this.spacecraft.push(spacecraft);
         this.spacecraftControllers.push(spacecraft.spacecraftController);
     }
@@ -232,6 +218,12 @@ class BasicWorld {
         if (this.controls) {
             this.controls.updateVelocityDisplays();
             this.controls.updateAngularVelocityDisplays();
+        }
+
+        // Update the cockpit UI with the active spacecraft
+        const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.isActive);
+        if (activeSpacecraft) {
+            this.cockpit.update(activeSpacecraft);
         }
 
         this.updateCameraTarget();
@@ -298,12 +290,15 @@ class BasicWorld {
         });
 
         if (this.controls) {
-            this.controls.gui.destroy(); // Destroy the existing GUI before creating a new one
+            this.controls.gui.destroy();
         }
 
         const activeController = this.spacecraftControllers.find(controller => controller.isActive);
         if (activeController) {
             this.controls = new GUIControls(spacecraft.objects, spacecraft.rcsVisuals, spacecraft, activeController, spacecraft.helpers);
         }
+
+        // Update the cockpit with the new active spacecraft
+        this.cockpit.update(spacecraft);
     }
 }

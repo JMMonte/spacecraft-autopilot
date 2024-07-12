@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compact Cockpit UI</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        .cockpit-ui {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            display: flex;
+            font-family: 'Arial', sans-serif;
+            color: #00ff00;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #00ff00;
+            padding: 10px;
+            font-size: 12px;
+        }
+        .instrument-panel {
+            display: flex;
+            flex-direction: column;
+            margin-right: 15px;
+        }
+        .instrument-group {
+            margin-bottom: 5px;
+        }
+        .instrument-title {
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+        .instrument-value {
+            display: flex;
+            justify-content: space-between;
+        }
+        .value-label {
+            margin-right: 5px;
+        }
+        #horizon-container {
+            width: 150px;
+            height: 150px;
+            border: 1px solid #00ff00;
+            border-radius: 50%;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        #spacecraft-name {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .autopilot-controls {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .autopilot-button {
+            background-color: #001100;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 11px;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .autopilot-button.active {
+            background-color: #005500;
+        }
+        .autopilot-button i {
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="cockpit-ui">
+        <div class="instrument-panel">
+            <div id="spacecraft-name">Spacecraft Name</div>
+            <div class="instrument-group">
+                <div class="instrument-title">VELOCITY (m/s)</div>
+                <div class="instrument-value"><span class="value-label">Abs:</span><span id="abs-velocity">0.000</span></div>
+                <div class="instrument-value"><span class="value-label">X:</span><span id="velocity-x">0.000</span></div>
+                <div class="instrument-value"><span class="value-label">Y:</span><span id="velocity-y">0.000</span></div>
+                <div class="instrument-value"><span class="value-label">Z:</span><span id="velocity-z">0.000</span></div>
+            </div>
+            <div class="instrument-group">
+                <div class="instrument-title">ANGULAR VEL (rad/s)</div>
+                <div class="instrument-value"><span class="value-label">Abs:</span><span id="abs-angular-velocity">0.000</span></div>
+                <div class="instrument-value"><span class="value-label">X:</span><span id="angular-velocity-x">0.000</span></div>
+                <div class="instrument-value"><span class="value-label">Y:</span><span id="angular-velocity-y">0.000</span></div>
+                <div class="instrument-value"><span class="value-label">Z:</span><span id="angular-velocity-z">0.000</span></div>
+            </div>
+        </div>
+        <div class="instrument-panel">
+            <div id="horizon-container"></div>
+            <div class="instrument-group">
+                <div class="instrument-title">ORIENTATION (deg)</div>
+                <div class="instrument-value"><span class="value-label">Yaw:</span><span id="yaw">0.0</span></div>
+                <div class="instrument-value"><span class="value-label">Pitch:</span><span id="pitch">0.0</span></div>
+                <div class="instrument-value"><span class="value-label">Roll:</span><span id="roll">0.0</span></div>
+            </div>
+        </div>
+        <div class="autopilot-controls">
+            <button id="cancelAndAlign" class="autopilot-button">
+                <i class="fas fa-ban"></i>Cancel and Align
+            </button>
+            <button id="cancelRotation" class="autopilot-button">
+                <i class="fas fa-undo-alt"></i>Cancel Rotation
+            </button>
+            <button id="pointToPosition" class="autopilot-button">
+                <i class="fas fa-location-arrow"></i>Point to Position
+            </button>
+            <button id="cancelLinearMotion" class="autopilot-button">
+                <i class="fas fa-stop"></i>Cancel Linear Motion
+            </button>
+            <button id="goToPosition" class="autopilot-button">
+                <i class="fas fa-play"></i>Go to Position
+            </button>
+        </div>
+    </div>
+</body>
+</html>
