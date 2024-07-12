@@ -10,6 +10,7 @@ export class Cockpit {
         await this.loadCockpitUI();
         this.artificalHorizon = new ArtificialHorizon3D();
         this.setupAutopilotControls();
+        this.setupTargetPositionInputs();
     }
 
     async loadCockpitUI() {
@@ -37,6 +38,16 @@ export class Cockpit {
         });
     }
 
+    setupTargetPositionInputs() {
+        const targetPositionInputs = ['target-position-x', 'target-position-y', 'target-position-z'];
+        targetPositionInputs.forEach(inputId => {
+            const input = document.getElementById(inputId);
+            if (input) {
+                input.addEventListener('input', () => this.updateTargetPosition());
+            }
+        });
+    }
+
     toggleAutopilot(action) {
         const autopilot = this.spacecraftController.autopilot;
         switch (action) {
@@ -57,6 +68,16 @@ export class Cockpit {
                 break;
         }
         this.updateAutopilotButtons();
+    }
+
+    updateTargetPosition() {
+        const x = parseFloat(document.getElementById('target-position-x').value);
+        const y = parseFloat(document.getElementById('target-position-y').value);
+        const z = parseFloat(document.getElementById('target-position-z').value);
+
+        if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+            this.spacecraftController.autopilot.targetPosition.set(x, y, z);
+        }
     }
 
     updateAutopilotButtons() {
@@ -138,7 +159,6 @@ class ArtificialHorizon3D {
         this.createHorizon();
         this.createReticle();
     }
-
 
     createHorizon() {
         // Load the texture

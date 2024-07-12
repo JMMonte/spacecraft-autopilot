@@ -82,10 +82,10 @@ export class SceneObjects {
     calculateMass() {
         // Simplified mass calculation, consider panel, truss, and docking port mass
         // Implement based on the original complex logic
-        console.log("Total mass: ", this.calculatePanelMass() + this.calculateTrussMass() + this.calculateDockingPortMass() + this.calculateFuelTankMass(
-            Math.max(Math.min(this.boxWidth, this.boxHeight) / 2 - this.trussRadius - 0.01, 0.1),
-            Math.max(this.boxDepth - 0.2, 0.1)
-        ));
+        // console.log("Total mass: ", this.calculatePanelMass() + this.calculateTrussMass() + this.calculateDockingPortMass() + this.calculateFuelTankMass(
+        //     Math.max(Math.min(this.boxWidth, this.boxHeight) / 2 - this.trussRadius - 0.01, 0.1),
+        //     Math.max(this.boxDepth - 0.2, 0.1)
+        // ));
         return this.calculatePanelMass() + this.calculateTrussMass() + this.calculateDockingPortMass() + this.calculateFuelTankMass(
             Math.max(Math.min(this.boxWidth, this.boxHeight) / 2 - this.trussRadius - 0.01, 0.1),
             Math.max(this.boxDepth - 0.2, 0.1)

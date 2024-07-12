@@ -45,22 +45,23 @@ export class GUIControls {
             goToPosition: false, // Add new option for Go to Position
         };
         this.createGUIControls();
-        this.velocityFolder = this.gui.addFolder("Velocity");
-        this.addVelocityControls();
-        this.angularVelocityFolder = this.gui.addFolder("Angular Velocity");
-        this.addAngularVelocityControls();
+        // this.velocityFolder = this.gui.addFolder("Velocity");
+        // this.addVelocityControls();
+        // this.angularVelocityFolder = this.gui.addFolder("Angular Velocity");
+        // this.addAngularVelocityControls();
         this.autopilotFolder = this.gui.addFolder("Autopilot"); // Add autopilot folder
         this.addAutopilotControls(); // Add autopilot controls
+        this.pidFolder = this.gui.addFolder("PID Controls");
         this.addPIDControls(); // Add PID controls
         this.initializeArrowVisibility();
         this.options.targetX = 0; // Initialize target position X
         this.options.targetY = 0; // Initialize target position Y
         this.options.targetZ = 0; // Initialize target position Z
-        this.addTargetPositionControls(); // Add target position controls to GUI
+        // this.addTargetPositionControls(); // Add target position controls to GUI
     }
 
     createGUIControls() {
-        const boxFolder = this.gui.addFolder("Spacecraft");
+        const boxFolder = this.gui.addFolder("Spacecraft dimensions");
         boxFolder.add(this.options, "boxWidth", 0.1, 20.0).onChange((e) => {
             this.objects.updateBox(e, this.objects.boxHeight, this.objects.boxDepth);
         });
@@ -72,7 +73,7 @@ export class GUIControls {
         });
         boxFolder.open();
 
-        const rcsFolder = this.gui.addFolder("RCS");
+        const rcsFolder = this.gui.addFolder("RCS Details");
         rcsFolder.add(this.options, "thrust", 0, 20000).onChange((value) => {
             this.spacecraftController.thrust = value; // Ensure the thrust is updated correctly
         });
@@ -120,29 +121,29 @@ export class GUIControls {
     }
 
     addAutopilotControls() {
-        this.autopilotFolder.add(this.options, "cancelAndAlign").name("Cancel and Align").onChange((value) => {
-            this.spacecraftController.autopilot.cancelAndAlign();
-            this.updateVectorVisibility();
-        }).listen();
+        // this.autopilotFolder.add(this.options, "cancelAndAlign").name("Cancel and Align").onChange((value) => {
+        //     this.spacecraftController.autopilot.cancelAndAlign();
+        //     this.updateVectorVisibility();
+        // }).listen();
 
-        this.autopilotFolder.add(this.options, "cancelRotation").name("Cancel Rotation").onChange((value) => {
-            this.spacecraftController.autopilot.cancelRotation();
-            this.updateVectorVisibility();
-        }).listen();
+        // this.autopilotFolder.add(this.options, "cancelRotation").name("Cancel Rotation").onChange((value) => {
+        //     this.spacecraftController.autopilot.cancelRotation();
+        //     this.updateVectorVisibility();
+        // }).listen();
 
-        this.autopilotFolder.add(this.options, "pointToPosition").name("Point to Position").onChange((value) => {
-            this.spacecraftController.autopilot.pointToPosition();
-            this.updateVectorVisibility();
-        }).listen();
+        // this.autopilotFolder.add(this.options, "pointToPosition").name("Point to Position").onChange((value) => {
+        //     this.spacecraftController.autopilot.pointToPosition();
+        //     this.updateVectorVisibility();
+        // }).listen();
 
-        this.autopilotFolder.add(this.options, "cancelLinearMotion").name("Cancel Linear Motion").onChange((value) => {
-            this.spacecraftController.autopilot.cancelLinearMotion();
-        }).listen();
+        // this.autopilotFolder.add(this.options, "cancelLinearMotion").name("Cancel Linear Motion").onChange((value) => {
+        //     this.spacecraftController.autopilot.cancelLinearMotion();
+        // }).listen();
 
-        this.autopilotFolder.add(this.options, "goToPosition").name("Go to Position").onChange((value) => {
-            this.spacecraftController.autopilot.goToPosition();
-            this.updateVectorVisibility();
-        }).listen();
+        // this.autopilotFolder.add(this.options, "goToPosition").name("Go to Position").onChange((value) => {
+        //     this.spacecraftController.autopilot.goToPosition();
+        //     this.updateVectorVisibility();
+        // }).listen();
 
         this.autopilotFolder.add(this.options, "showAutopilotArrow").name("Target Orientation").onChange((value) => {
             this.updateArrowVisibility("autopilotArrow", value);
@@ -163,8 +164,6 @@ export class GUIControls {
         this.autopilotFolder.add(this.options, "showVelocityArrow").name("Velocity Arrow").onChange((value) => {
             this.updateArrowVisibility("velocityArrow", value);
         });
-
-        this.autopilotFolder.open();
     }
 
     updateVectorVisibility() {
@@ -196,7 +195,7 @@ export class GUIControls {
     }
 
     addPIDControls() {
-        const pidFolderRot = this.autopilotFolder.addFolder("PID Rotational");
+        const pidFolderRot = this.pidFolder.addFolder("PID Rotational");
         pidFolderRot.add(this.options, "kp", 0, 50).onChange((value) => {
             this.autopilot.pidController.kp = value; // Update the autopilot's PID controller directly
             this.options.kp = value; // Update the options.kp value
@@ -211,7 +210,7 @@ export class GUIControls {
         });
         pidFolderRot.open();
 
-        const pidFolderLin = this.autopilotFolder.addFolder("PID Linear");
+        const pidFolderLin = this.pidFolder.addFolder("PID Linear");
         pidFolderLin.add(this.options, "lkp", 0, 50).onChange((value) => {
             this.autopilot.linearPidController.kp = value;
             this.options.lkp = value;

@@ -11,6 +11,7 @@
             bottom: 10px;
             left: 10px;
             display: flex;
+            flex-wrap: wrap;
             font-family: 'Arial', sans-serif;
             color: #00ff00;
             background: rgba(0, 0, 0, 0.7);
@@ -52,15 +53,15 @@
         }
         .autopilot-controls {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-            margin-top: 10px;
+            grid-template-columns: repeat(1, 1fr);
+            gap: 5px;
+            margin-top: 5px;
         }
         .autopilot-button {
             background-color: #001100;
             color: #00ff00;
             border: 1px solid #00ff00;
-            padding: 5px 10px;
+            padding: 5px;
             cursor: pointer;
             font-size: 11px;
             border-radius: 3px;
@@ -73,6 +74,28 @@
         }
         .autopilot-button i {
             margin-right: 5px;
+        }
+        .target-position-container {
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+            width: 100%;
+        }
+        .target-position-container label {
+            margin-right: 5px;
+            font-size: 10px;
+        }
+        .target-position-input {
+            width: 60px;
+            background: #001100;
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            padding: 3px;
+            border-radius: 3px;
+            font-size: 10px;
+            margin-right: 5px;
+            display: flex;
+            justify-content: space-between;
         }
     </style>
 </head>
@@ -104,22 +127,30 @@
                 <div class="instrument-value"><span class="value-label">Roll:</span><span id="roll">0.0</span></div>
             </div>
         </div>
-        <div class="autopilot-controls">
-            <button id="cancelAndAlign" class="autopilot-button">
-                <i class="fas fa-ban"></i>Cancel and Align
-            </button>
-            <button id="cancelRotation" class="autopilot-button">
-                <i class="fas fa-undo-alt"></i>Cancel Rotation
-            </button>
-            <button id="pointToPosition" class="autopilot-button">
-                <i class="fas fa-location-arrow"></i>Point to Position
-            </button>
-            <button id="cancelLinearMotion" class="autopilot-button">
-                <i class="fas fa-stop"></i>Cancel Linear Motion
-            </button>
-            <button id="goToPosition" class="autopilot-button">
-                <i class="fas fa-play"></i>Go to Position
-            </button>
+        <div class="instrument-panel">
+            <div class="autopilot-controls">
+                <button id="cancelAndAlign" class="autopilot-button">
+                    <i class="fas fa-ban"></i>Cancel & Align
+                </button>
+                <button id="cancelRotation" class="autopilot-button">
+                    <i class="fas fa-undo-alt"></i>Cancel Rotation
+                </button>
+                <button id="pointToPosition" class="autopilot-button">
+                    <i class="fas fa-location-arrow"></i>Point to Position
+                </button>
+                <button id="cancelLinearMotion" class="autopilot-button">
+                    <i class="fas fa-stop"></i>Cancel Motion
+                </button>
+                <button id="goToPosition" class="autopilot-button">
+                    <i class="fas fa-play"></i>Go to Position
+                </button>
+            </div>
+            <div class="target-position-container">
+                <label for="target-position-x" class="instrument-title">Target Position:</label>
+                <input type="number" id="target-position-x" class="target-position-input" placeholder="X" step="0.1">
+                <input type="number" id="target-position-y" class="target-position-input" placeholder="Y" step="0.1">
+                <input type="number" id="target-position-z" class="target-position-input" placeholder="Z" step="0.1">
+            </div>
         </div>
     </div>
 </body>
