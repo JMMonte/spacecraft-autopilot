@@ -11,6 +11,7 @@ export class Cockpit {
         this.artificalHorizon = new ArtificialHorizon3D();
         this.setupAutopilotControls();
         this.setupTargetPositionInputs();
+        this.setupPopupControls();
     }
 
     async loadCockpitUI() {
@@ -46,6 +47,24 @@ export class Cockpit {
                 input.addEventListener('input', () => this.updateTargetPosition());
             }
         });
+    }
+
+    setupPopupControls() {
+        const cmdIcon = document.querySelector('.cmd-icon');
+        const closeButton = document.querySelector('.close-btn');
+
+        if (cmdIcon) {
+            cmdIcon.addEventListener('click', this.togglePopup.bind(this));
+        }
+
+        if (closeButton) {
+            closeButton.addEventListener('click', this.togglePopup.bind(this));
+        }
+    }
+
+    togglePopup() {
+        const popup = document.getElementById('keyboard-shortcuts-popup');
+        popup.style.display = popup.style.display === 'none' || popup.style.display === '' ? 'block' : 'none';
     }
 
     toggleAutopilot(action) {
@@ -93,6 +112,8 @@ export class Cockpit {
     update(spacecraft) {
         if (!this.artificalHorizon) return;
 
+        this.spacecraftController = spacecraft.spacecraftController;
+
         // Update spacecraft name
         document.getElementById('spacecraft-name').textContent = spacecraft.name || 'Unknown Spacecraft';
 
@@ -133,6 +154,8 @@ export class Cockpit {
         };
     }
 }
+
+
 
 class ArtificialHorizon3D {
     constructor() {

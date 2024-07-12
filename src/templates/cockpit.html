@@ -8,8 +8,21 @@
     <style>
         .cockpit-ui {
             position: fixed;
-            bottom: 10px;
-            left: 10px;
+            bottom: 0px;
+            left: 0px;
+            display: flex;
+            flex-wrap: wrap;
+            font-family: 'Arial', sans-serif;
+            color: #00ff00;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #00ff00;
+            padding: 10px;
+            font-size: 12px;
+        }
+        .cockpit-second-ui {
+            position: fixed;
+            top: 0px;
+            left: 0px;
             display: flex;
             flex-wrap: wrap;
             font-family: 'Arial', sans-serif;
@@ -23,6 +36,9 @@
             display: flex;
             flex-direction: column;
             margin-right: 15px;
+        }
+        .no-margin {
+            margin-right: 0px;
         }
         .instrument-group {
             margin-bottom: 5px;
@@ -53,7 +69,7 @@
         }
         .autopilot-controls {
             display: grid;
-            grid-template-columns: repeat(1, 1fr);
+            grid-template-columns: repeat(2, 1fr);
             gap: 5px;
             margin-top: 5px;
         }
@@ -77,25 +93,50 @@
         }
         .target-position-container {
             display: flex;
-            align-items: center;
             margin-top: 5px;
             width: 100%;
-        }
-        .target-position-container label {
-            margin-right: 5px;
-            font-size: 10px;
+            flex-direction: column;
         }
         .target-position-input {
-            width: 60px;
             background: #001100;
             border: 1px solid #00ff00;
             color: #00ff00;
             padding: 3px;
             border-radius: 3px;
             font-size: 10px;
-            margin-right: 5px;
             display: flex;
             justify-content: space-between;
+        }
+        .cmd-icon {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            cursor: pointer;
+            color: #00ff00;
+            font-size: 20px;
+        }
+        #keyboard-shortcuts-popup {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 1000;
+        }
+        #keyboard-shortcuts-popup .close-btn {
+            background: #001100;
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            padding: 5px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 10px;
         }
     </style>
 </head>
@@ -118,7 +159,7 @@
                 <div class="instrument-value"><span class="value-label">Z:</span><span id="angular-velocity-z">0.000</span></div>
             </div>
         </div>
-        <div class="instrument-panel">
+        <div class="instrument-panel no-margin">
             <div id="horizon-container"></div>
             <div class="instrument-group">
                 <div class="instrument-title">ORIENTATION (deg)</div>
@@ -127,8 +168,11 @@
                 <div class="instrument-value"><span class="value-label">Roll:</span><span id="roll">0.0</span></div>
             </div>
         </div>
-        <div class="instrument-panel">
+    </div>
+    <div class="cockpit-second-ui">
+        <div class="instrument-panel no-margin">
             <div class="autopilot-controls">
+                <div class="instrument-title">AUTOPILOTS:</div>
                 <button id="cancelAndAlign" class="autopilot-button">
                     <i class="fas fa-ban"></i>Cancel & Align
                 </button>
@@ -146,12 +190,47 @@
                 </button>
             </div>
             <div class="target-position-container">
-                <label for="target-position-x" class="instrument-title">Target Position:</label>
-                <input type="number" id="target-position-x" class="target-position-input" placeholder="X" step="0.1">
-                <input type="number" id="target-position-y" class="target-position-input" placeholder="Y" step="0.1">
-                <input type="number" id="target-position-z" class="target-position-input" placeholder="Z" step="0.1">
+                <div class="instrument-title">TGT. POS:</div>
+                <div class="instrument-value">
+                    <span class="value-label">X:</span>
+                    <input type="number" id="target-position-x" class="target-position-input" placeholder="0.0" step="0.1">
+                </div>
+                <div class="instrument-value">
+                    <span class="value-label">Y:</span>
+                    <input type="number" id="target-position-y" class="target-position-input" placeholder="0.0" step="0.1">
+                </div>
+                <div class="instrument-value">
+                    <span class="value-label">Z:</span>
+                    <input type="number" id="target-position-z" class="target-position-input" placeholder="0.0" step="0.1">
+                </div>
             </div>
         </div>
+    </div>
+    <div class="cmd-icon">
+        <i class="fas fa-keyboard"></i>
+    </div>
+    <div id="keyboard-shortcuts-popup">
+        <h3>Keyboard Shortcuts</h3>
+        <div>
+            <h4>Rotation</h4>
+            <p>A, D: Yaw</p>
+            <p>W, S: Pitch</p>
+            <p>Q, E: Roll</p>
+        </div>
+        <div>
+            <h4>Translation</h4>
+            <p>I, K: Up/Down</p>
+            <p>J, L: Left/Right</p>
+            <p>U, O: Forward/Backward</p>
+        </div>
+        <div>
+            <h4>Autopilots</h4>
+            <p>R: Stop Rotation</p>
+            <p>T: Stop Rotation and Point to Last Orientation</p>
+            <p>G: Stop Linear Motion</p>
+            <p>B: Go to Position</p>
+        </div>
+        <button class="close-btn">Close</button>
     </div>
 </body>
 </html>
