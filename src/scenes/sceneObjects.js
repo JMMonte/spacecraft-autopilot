@@ -1,25 +1,37 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon';
+import { CONFIG } from './sceneObjConfig';
 
 export class SceneObjects {
-    constructor(scene, world, width = 1, height = 1, depth = 2) {
+    constructor(scene, world) {
         this.scene = scene;
         this.world = world;
-        this.boxWidth = width;
-        this.boxHeight = height;
-        this.boxDepth = depth;
-        this.aluminumDensity = 2700; // kg/m^3
-        this.panelThickness = 0.004;
-        this.trussRadius = 0.025;
-        this.trussLength = 1;
-        this.dockingPortRadius = 0.2;
-        this.dockingPortLength = 0.1;
-        this.dockingPortDepth = 0.3;
-        this.numberOfTrusses = 12; // 4 on each side
-        this.numberOfDockingPorts = 2; // One on each side
-        this.carbonFiberDensity = 1600; // kg/m^3
-        this.fuelDensity = 1021; // kg/m^3
-        this.tankThickness = 0.001; // m
+        this.boxWidth = CONFIG.boxDimensions.width;
+        this.boxHeight = CONFIG.boxDimensions.height;
+        this.boxDepth = CONFIG.boxDimensions.depth;
+        this.aluminumDensity = CONFIG.materials.aluminumDensity; // kg/m^3
+        this.panelThickness = CONFIG.panelThickness;
+        this.trussRadius = CONFIG.truss.radius;
+        this.trussLength = CONFIG.truss.length;
+        this.dockingPortRadius = CONFIG.dockingPort.radius;
+        this.dockingPortLength = CONFIG.dockingPort.length;
+        this.dockingPortDepth = CONFIG.dockingPort.depth;
+        this.numberOfTrusses = CONFIG.truss.numberOfTrusses;
+        this.numberOfDockingPorts = CONFIG.dockingPort.numberOfDockingPorts;
+        this.carbonFiberDensity = CONFIG.materials.carbonFiberDensity; // kg/m^3
+        this.fuelDensity = CONFIG.materials.fuelDensity; // kg/m^3
+        this.tankThickness = CONFIG.tank.thickness; // m
+
+        this.rcsVisuals = {
+            boxWidth: this.boxWidth,
+            boxHeight: this.boxHeight,
+            boxDepth: this.boxDepth,
+            setThrusterPositions: function () {
+                // Example logic for repositioning thrusters
+                console.log(`RCS Thrusters repositioned to width: ${this.boxWidth}, height: ${this.boxHeight}, depth: ${this.boxDepth}`);
+            }
+        };
+
 
         this.initMaterials();
         // Create objects
@@ -31,18 +43,10 @@ export class SceneObjects {
     }
 
     initMaterials() {
-        this.materials = {
-            aluminum: new THREE.MeshPhysicalMaterial({ color: 'silver', metalness: 1.0, roughness: 0.5, clearcoat: 1.0, side: THREE.DoubleSide }),
-            carbonFiber: new THREE.MeshPhysicalMaterial({ color: 'black', metalness: 0.5, roughness: 0.5, clearcoat: 1.0, side: THREE.DoubleSide }),
-            fuelTank: new THREE.MeshPhysicalMaterial({ color: 'silver', metalness: 1.0, roughness: 0.5 }),
-            dockingPort: new THREE.MeshPhysicalMaterial({ color: 'silver', metalness: 1.0, roughness: 0.5 }),
-            truss: new THREE.MeshPhysicalMaterial({ color: 'silver', metalness: 1.0, roughness: 0.5, clearcoat: 1.0, side: THREE.DoubleSide }),
-            endStructure: new THREE.MeshPhysicalMaterial({ color: 'silver', metalness: 1.0, roughness: 0.5 }),
-            blue: new THREE.MeshPhysicalMaterial({ color: 'blue', metalness: 0.5, roughness: 0.5, clearcoat: 1.0, side: THREE.DoubleSide }),
-            gold: new THREE.MeshPhysicalMaterial({ color: 'gold', metalness: 0.5, roughness: 0.5, clearcoat: 1.0, side: THREE.DoubleSide }),
-            transparent: new THREE.MeshPhysicalMaterial({color: 'white', opacity: 0, transparent: true}),
-            silver: new THREE.MeshPhysicalMaterial({ color: 'silver', metalness: 0.5, roughness: 0.5, clearcoat: 1.0, side: THREE.DoubleSide })
-        };
+        this.materials = {};
+        for (const [key, properties] of Object.entries(CONFIG.materialProperties)) {
+            this.materials[key] = new THREE.MeshPhysicalMaterial(properties);
+        }
     }
 
     createBox() {
@@ -66,8 +70,6 @@ export class SceneObjects {
         boxBody.material.friction = 1.5;
         this.world.addBody(boxBody);
 
-        // Add debugger
-        
         // Link the Three.js mesh with its Cannon.js physics body
         box.userData.physicsBody = boxBody;
     
@@ -80,12 +82,6 @@ export class SceneObjects {
     }
 
     calculateMass() {
-        // Simplified mass calculation, consider panel, truss, and docking port mass
-        // Implement based on the original complex logic
-        // console.log("Total mass: ", this.calculatePanelMass() + this.calculateTrussMass() + this.calculateDockingPortMass() + this.calculateFuelTankMass(
-        //     Math.max(Math.min(this.boxWidth, this.boxHeight) / 2 - this.trussRadius - 0.01, 0.1),
-        //     Math.max(this.boxDepth - 0.2, 0.1)
-        // ));
         return this.calculatePanelMass() + this.calculateTrussMass() + this.calculateDockingPortMass() + this.calculateFuelTankMass(
             Math.max(Math.min(this.boxWidth, this.boxHeight) / 2 - this.trussRadius - 0.01, 0.1),
             Math.max(this.boxDepth - 0.2, 0.1)
@@ -102,11 +98,12 @@ export class SceneObjects {
         this.boxHeight = height;
         this.boxDepth = depth;
 
+        // Update rcsVisuals dimensions and reposition thrusters
         this.rcsVisuals.boxWidth = width;
         this.rcsVisuals.boxHeight = height;
         this.rcsVisuals.boxDepth = depth;
         this.rcsVisuals.setThrusterPositions();
-        
+
         this.removeTrussFromBox();
         this.addTrussToBox();
         this.updateDockingPorts();
@@ -144,13 +141,11 @@ export class SceneObjects {
     // FUEL TANK
 
     manageFuelTank(radius = null, depth = null) {
-        // Initialize radius and depth if not provided
         const marginRadius = 1.6;
         if (!radius || !depth) {
             radius = Math.max(Math.min(this.boxWidth, this.boxHeight) / 2 - this.trussRadius - 0.01, 0.1);
             depth = Math.max(this.boxDepth - 0.2, 0.1);
         } else {
-            // Update scenario, adjust radius and depth based on constraints
             depth = Math.max(depth, 0.9);
             depth = Math.min(depth, this.boxDepth - this.dockingPortDepth);
             const maxRadius = (depth - this.dockingPortDepth) / 2;
@@ -158,22 +153,17 @@ export class SceneObjects {
         }
 
         const effectiveCylinderDepth = depth - radius * marginRadius;
-
-        // Check if fuelTankVisual already exists to determine if we are adding or updating
         const isUpdate = !!this.fuelTankVisual;
 
         if (isUpdate) {
-            // Dispose of previous geometries to prevent memory leaks
             this.fuelTankVisual.children.forEach(child => {
                 child.geometry.dispose();
             });
         } else {
-            // Initial setup if not updating
             this.fuelTankVisual = new THREE.Group();
             this.box.add(this.fuelTankVisual);
         }
 
-        // Create or update cylinder and caps
         const cylinderGeometry = new THREE.CylinderGeometry(radius, radius, effectiveCylinderDepth, 32);
         const sphereGeometry = new THREE.SphereGeometry(radius, 32, 32);
 
@@ -182,33 +172,26 @@ export class SceneObjects {
         const bottomCap = isUpdate ? this.fuelTankVisual.children[2] : new THREE.Mesh(sphereGeometry, this.materials.fuelTank);
 
         if (!isUpdate) {
-            // Add meshes to the group if creating for the first time
             this.fuelTankVisual.add(cylinder, topCap, bottomCap);
         } else {
-            // Update geometries for an existing tank
             cylinder.geometry = cylinderGeometry;
             topCap.geometry = sphereGeometry;
             bottomCap.geometry = sphereGeometry;
         }
 
-        // Set positions
         const sphereOffset = effectiveCylinderDepth / 2;
         topCap.position.y = sphereOffset;
         bottomCap.position.y = -sphereOffset;
 
-        // Adjust the group's position and rotation
         this.fuelTankVisual.position.copy(this.boxBody.position);
         this.fuelTankVisual.position.set(0, 0, 0);
         this.fuelTankVisual.rotation.x = Math.PI / 2;
 
-
-        // Shadow properties
         [cylinder, topCap, bottomCap].forEach(mesh => {
             mesh.castShadow = true;
             mesh.receiveShadow = true;
         });
 
-        // Only calculate and add mass if it's a new addition
         if (!this.fuelTankVisual) {
             const totalMass = this.calculateFuelTankMass(radius, depth);
             this.boxBody.mass += totalMass;
@@ -330,55 +313,60 @@ export class SceneObjects {
     addDockingPorts() {
         const material = this.materials.dockingPort;
     
-        // Define positions for the front and back docking ports relative to the spacecraft's center
         const portPositions = [
             { name: "dockingPortFront", z: this.boxDepth / 2 + this.dockingPortDepth, angle: 0 }, // Front
             { name: "dockingPortBack", z: -this.boxDepth / 2 - this.dockingPortDepth, angle: Math.PI } // Back
         ];
     
         portPositions.forEach(({ name, z, angle }) => {
-            // Three.js Cylinder for the docking port
             const cylinderGeometry = new THREE.CylinderGeometry(this.dockingPortRadius, this.dockingPortRadius, this.dockingPortLength, 32);
             const cylinder = new THREE.Mesh(cylinderGeometry, material);
             cylinder.name = name;
-            cylinder.rotation.x = Math.PI / 2; // Rotate to align with the Z-axis
+            cylinder.rotation.x = Math.PI / 2;
             cylinder.position.z = z;
             this.box.add(cylinder);
     
-            // Three.js Torus for the docking ring
-            // Correcting rotation to align with the cylinder; assuming we want the hole facing outward along the Y-axis
             const torusGeometry = new THREE.TorusGeometry(this.dockingPortRadius, 0.05, 16, 100);
             const torus = new THREE.Mesh(torusGeometry, material);
             torus.name = `${name}Ring`;
-            torus.rotation.y = angle; // Correct orientation based on the port's position (front or back)
-            torus.position.z = z; // Position adjusted to match the cylinder
+            torus.rotation.y = angle;
+            torus.position.z = z;
             this.box.add(torus);
     
-            // Cannon.js physics representation for the cylinder
             const shape = new CANNON.Cylinder(this.dockingPortRadius, this.dockingPortRadius, this.dockingPortLength, 32);
-            // Set the mass of the shape to 0
             shape.mass = 0;
             const quaternion = new CANNON.Quaternion();
-            quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), Math.PI / 2); // Correctly orient the cylinder to match Three.js
-            // Attach the shape to the main body, positioning it correctly
+            quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), Math.PI / 2);
             this.boxBody.addShape(shape, new CANNON.Vec3(0, 0, z), quaternion);
         });
     }
 
     removeDockingPorts() {
-        // Remove Three.js objects
-        const visualToRemove = this.box.children.filter(child => child.name === 'dockingPort' || child.name === 'dockingPortRing');
+        const visualToRemove = this.box.children.filter(child => 
+            child.name === 'dockingPortFront' || 
+            child.name === 'dockingPortBack' || 
+            child.name === 'dockingPortFrontRing' || 
+            child.name === 'dockingPortBackRing'
+        );
         visualToRemove.forEach(obj => {
             this.box.remove(obj);
             if (obj.geometry) obj.geometry.dispose();
             if (obj.material) obj.material.dispose();
         });
+    
+        this.boxBody.shapes = this.boxBody.shapes.filter((shape, index) => {
+            const shapePosition = this.boxBody.shapeOffsets[index];
+            const isDockingPort = 
+                (shapePosition.z === this.boxDepth / 2 + this.dockingPortDepth) || 
+                (shapePosition.z === -this.boxDepth / 2 - this.dockingPortDepth);
+            return !isDockingPort;
+        });
     }
+    
 
     updateDockingPorts() {
         this.removeDockingPorts();
         this.addDockingPorts();
-        console.log(this.box);
     }
 
     // GENERAL UPDATE
@@ -386,6 +374,5 @@ export class SceneObjects {
     update() {
         this.box.position.copy(this.boxBody.position);
         this.box.quaternion.copy(this.boxBody.quaternion);
-        // this.debugRenderer.update();
     }
 }
