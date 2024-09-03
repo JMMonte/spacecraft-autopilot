@@ -1,8 +1,7 @@
 # Open Autopilot Framework for Spacecraft
 
 ![Mission Patch](https://github.com/JMMonte/spacecraft-autopilot/blob/main/public/images/OSSA_MIssion_patch_256h.png)
-
-[![Project Banner](https://github.com/JMMonte/spacecraft-autopilot/raw/main/src/images/Screenshot%202024-04-12%20at%2012.19.09.png)](https://github.com/JMMonte/spacecraft-autopilot/blob/main/src/images/Screenshot%202024-04-12%20at%2012.19.09.png) [![Project Banner](https://github.com/JMMonte/spacecraft-autopilot/raw/main/src/images/Screenshot%202024-04-12%20at%2012.19.15.png)](https://github.com/JMMonte/spacecraft-autopilot/blob/main/src/images/Screenshot%202024-04-12%20at%2012.19.15.png)
+[![Project Banner](https://github.com/JMMonte/spacecraft-autopilot/blob/main/src/images/Screenshot%202024-09-02%20at%2021.21.35.png)](https://github.com/JMMonte/spacecraft-autopilot/blob/main/src/images/Screenshot%202024-09-02%20at%2021.21.35.png) [![Project Banner](https://github.com/JMMonte/spacecraft-autopilot/blob/main/src/images/Screenshot%202024-09-02%20at%2021.22.02.png?raw=true)](https://github.com/JMMonte/spacecraft-autopilot/blob/main/src/images/Screenshot%202024-09-02%20at%2021.22.02.png?raw=true)
 
 ## Project Goals
 
