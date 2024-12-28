@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NumberInput } from '../ui/NumberInput';
 
-export function AutopilotWindow({ controller, world }) {
+export function AutopilotWindow({ controller, world, version }) {
   // Store target settings per spacecraft using their names as keys
   const [targetSettings, setTargetSettings] = useState({});
   
@@ -34,7 +34,7 @@ export function AutopilotWindow({ controller, world }) {
         controller?.autopilot?.targetPosition?.copy(savedSettings.customPosition);
       }
     }
-  }, [controller?.spacecraft?.name]);
+  }, [controller?.spacecraft?.name, version]);
 
   // Save settings whenever they change
   const saveSettings = (updates = {}) => {
@@ -140,28 +140,38 @@ export function AutopilotWindow({ controller, world }) {
 
         {targetType === 'spacecraft' ? (
           <div className="flex flex-col gap-2">
-            <select
-              className="w-full px-2 py-1 bg-black/60 text-white/90 rounded border border-white/20 text-xs font-mono"
-              value={selectedSpacecraft?.name || ''}
-              onChange={handleSpacecraftSelect}
-            >
-              <option value="">Select Spacecraft</option>
-              {world.spacecraft
-                .filter(s => s !== controller.spacecraft)
-                .map(s => (
-                  <option key={s.name} value={s.name}>{s.name}</option>
-                ))
-              }
-            </select>
+            {world?.spacecraft?.length > 1 ? (
+              <>
+                <select
+                  className="w-full px-2 py-1 bg-black/60 text-white/90 rounded border border-white/20 text-xs font-mono"
+                  value={selectedSpacecraft?.name || ''}
+                  onChange={handleSpacecraftSelect}
+                >
+                  <option value="">Select Spacecraft</option>
+                  {(world?.spacecraft || [])
+                    .filter(s => s !== controller?.spacecraft)
+                    .map(s => (
+                      <option key={s.name} value={s.name}>{s.name}</option>
+                    ))
+                  }
+                </select>
 
-            <select
-              className="w-full px-2 py-1 bg-black/60 text-white/90 rounded border border-white/20 text-xs font-mono"
-              value={targetPoint}
-              onChange={handleTargetPointChange}
-            >
-              <option value="center">Center of Mass</option>
-              <option value="dockingPort">Docking Port</option>
-            </select>
+                <select
+                  className="w-full px-2 py-1 bg-black/60 text-white/90 rounded border border-white/20 text-xs font-mono"
+                  value={targetPoint}
+                  onChange={handleTargetPointChange}
+                  disabled={!selectedSpacecraft}
+                >
+                  <option value="center">Center of Mass</option>
+                  <option value="front">Front Docking Port</option>
+                  <option value="back">Back Docking Port</option>
+                </select>
+              </>
+            ) : (
+              <div className="text-white/50 italic text-center bg-black/40 p-2 rounded border border-white/10">
+                No other spacecraft available
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-3 gap-1">

@@ -7,11 +7,13 @@ export function App() {
   const [activeSpacecraft, setActiveSpacecraft] = useState(null);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadingStatus, setLoadingStatus] = useState('Initializing...');
+  const [spacecraftListVersion, setSpacecraftListVersion] = useState(0);
   const canvasRef = useRef(null);
 
   const createNewSpacecraft = useCallback(() => {
     if (!world) return;
-    const newSpacecraft = world.createNewSpacecraft();
+    console.log('App: Creating new spacecraft, current count:', world.spacecraft.length);
+    world.createNewSpacecraft();
   }, [world]);
 
   useEffect(() => {
@@ -30,19 +32,20 @@ export function App() {
         await worldInstance.initializeWorld();
         
         setWorld(worldInstance);
+        setSpacecraftListVersion(worldInstance.spacecraftListVersion);
+        setActiveSpacecraft(worldInstance.getActiveSpacecraft());
+        console.log('App: World initialized with', worldInstance.spacecraft.length, 'spacecraft');
         
-        // Get active spacecraft
-        const active = worldInstance.spacecraft.find(s => s.spacecraftController.isActive);
-        setActiveSpacecraft(active);
-
-        // Add an event listener for spacecraft changes
-        const handleSpacecraftChange = () => {
-          const active = worldInstance.spacecraft.find(s => s.spacecraftController.isActive);
-          setActiveSpacecraft(active);
+        // Add event listeners for spacecraft changes
+        worldInstance.onActiveSpacecraftChange = (spacecraft) => {
+          console.log('App: Active spacecraft changed to:', spacecraft.name);
+          setActiveSpacecraft(spacecraft);
         };
 
-        // Add event listener for double click
-        worldInstance.onSpacecraftChange = handleSpacecraftChange;
+        worldInstance.onSpacecraftListChange = (version) => {
+          console.log('App: Spacecraft list changed, new version:', version, 'count:', worldInstance.spacecraft.length);
+          setSpacecraftListVersion(version);
+        };
         
         // Start render loop
         worldInstance.startRenderLoop();
@@ -102,6 +105,7 @@ export function App() {
           loadingProgress={loadingProgress}
           loadingStatus={loadingStatus}
           onCreateNewSpacecraft={createNewSpacecraft}
+          spacecraftListVersion={spacecraftListVersion}
         />
       )}
     </>

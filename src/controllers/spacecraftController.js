@@ -64,8 +64,7 @@ export class SpacecraftController {
     handleAutopilotControl(code) {
         switch (code) {
             case 'KeyT':
-                // Cancel & align => set autopilot target orientation
-                this.autopilot.setTargetOrientation();  // <--- now valid
+                // Cancel & align
                 this.autopilot.cancelAndAlign();
                 break;
             case 'KeyY':

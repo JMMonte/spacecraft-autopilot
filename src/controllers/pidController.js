@@ -13,6 +13,8 @@ export class PIDController {
         this.errorHistory = [];
         this.maxHistoryLength = 1000;
         this.adaptiveTuningEnabled = true;
+        this.maxIntegral = 1.0;  // Default value
+        this.derivativeAlpha = 0.9;  // Default value
     }
 
     update(currentError, deltaTime) {

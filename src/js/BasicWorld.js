@@ -10,41 +10,7 @@ import { SceneObjects } from '../scenes/sceneObjects';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { CannonDebugRenderer } from '../helpers/cannonDebugRenderer';
 import { initializeCockpit } from '../components/CockpitRoot';
-
-export class Spacecraft {
-    constructor(world, initialPosition = new CANNON.Vec3(0, 0, 2), width = 1, height = 1, depth = 2, initialConeVisibility = false, name = 'Spacecraft') {
-        this.world = world;
-        this.initialPosition = initialPosition;
-        this.name = name;
-
-        this.objects = new SceneObjects(world.camera.scene, world.world, width, height, depth);
-        this.rcsVisuals = new RCSVisuals(this.objects, this.objects.boxBody, world.world, world.camera.scene, initialConeVisibility);
-        this.objects.rcsVisuals = this.rcsVisuals;
-
-        this.objects.boxBody.position.copy(initialPosition);
-
-        this.helpers = new SceneHelpers(world.camera.scene, world.lights.getLight(), world.camera.camera);
-        this.helpers.disableHelpers();
-
-        this.spacecraftController = new SpacecraftController(this, this.objects.box, this.helpers);
-    }
-
-    update() {
-        this.objects.update();
-        this.spacecraftController.applyForces();
-    }
-
-    getThreeObjects() {
-        return [this.objects.box];
-    }
-
-    cleanup() {
-        this.objects.cleanup?.();
-        this.rcsVisuals.cleanup?.();
-        this.helpers.cleanup?.();
-        this.spacecraftController.cleanup?.();
-    }
-}
+import { Spacecraft } from './spacecraft';
 
 export class BasicWorld {
     constructor(config = {}, canvas) {
@@ -52,15 +18,24 @@ export class BasicWorld {
         this.canvas = canvas;
         this.spacecraft = [];
         this.spacecraftControllers = [];
+        this.activeSpacecraft = null;
         this.keysPressed = {};
         this.dt = 1.0 / 60.0;
         this.onLoadProgress = () => {};
         this.onLoadStatus = () => {};
+        this.spacecraftListVersion = 0;
+        this.onSpacecraftListChange = null;
+        this.onActiveSpacecraftChange = null;
 
         // Track loading state
-        this.loadingQueue = new Map(); // url -> {loaded, total}
+        this.loadingQueue = new Map();
         this.currentFile = '';
+        
+        // Configure Three.js loading manager
+        this.configureLoadingManager();
+    }
 
+    configureLoadingManager() {
         // Configure the default Three.js loading manager to track ALL assets
         THREE.DefaultLoadingManager.onStart = (url) => {
             console.log('Started loading:', url);
@@ -102,7 +77,7 @@ export class BasicWorld {
             this.onLoadStatus('Ready');
             return;
         }
-
+        
         // Get current file info
         const current = this.loadingQueue.get(this.currentFile);
         if (!current) return;
@@ -118,7 +93,7 @@ export class BasicWorld {
         // Update progress
         const progress = Math.round((totalLoaded / totalSize) * 100);
         this.onLoadProgress(progress);
-
+        
         // Show detailed status for current file
         const filename = this.currentFile.split('/').pop();
         if (this.currentFile.includes('.exr')) {
@@ -129,31 +104,6 @@ export class BasicWorld {
             const fileProgress = Math.round((current.loaded / current.total) * 100);
             this.onLoadStatus(`Loading ${filename} (${fileProgress}%)`);
         }
-    }
-
-    addSpacecraft(initialPosition, width = 1, height = 1, depth = 2, initialConeVisibility = false, name = 'Spacecraft') {
-        const spacecraft = new Spacecraft(this, initialPosition, width, height, depth, initialConeVisibility, name);
-        this.spacecraft.push(spacecraft);
-        this.spacecraftControllers.push(spacecraft.spacecraftController);
-        return spacecraft;
-    }
-
-    createNewSpacecraft() {
-        // Create a random position near the origin
-        const randomPosition = new CANNON.Vec3(
-            (Math.random() - 0.5) * 10,  // x between -5 and 5
-            (Math.random() - 0.5) * 10,  // y between -5 and 5
-            Math.abs(Math.random() * 5) + 2  // z between 2 and 7 (always positive)
-        );
-
-        const newSpacecraft = this.addSpacecraft(
-            randomPosition,
-            1, 1, 2,
-            false,
-            `Spacecraft ${this.spacecraft.length + 1}`
-        );
-
-        return newSpacecraft;
     }
 
     async loadAssets() {
@@ -200,6 +150,10 @@ export class BasicWorld {
         const ambientLight = new THREE.AmbientLight(0x404040);
         this.camera.scene.add(ambientLight);
 
+        // Store camera and light in scene's userData for access by other components
+        this.camera.scene.userData.camera = this.camera.camera;
+        this.camera.scene.userData.light = light;
+
         // Initialize physics
         this.world = new CANNON.World();
         this.world.gravity.set(0, 0, 0);
@@ -213,7 +167,7 @@ export class BasicWorld {
         // Load all assets and wait for everything to complete
         await this.loadAssets();
 
-        // Initialize spacecraft
+        // Initialize spacecraft after scene and physics are ready
         if (this.config.initialSpacecraft?.length > 0) {
             await Promise.all(this.config.initialSpacecraft.map(async spacecraftConfig => {
                 const initialPosition = new CANNON.Vec3(
@@ -254,25 +208,105 @@ export class BasicWorld {
         this.onLoadStatus('Ready');
     }
 
+    createNewSpacecraft() {
+        // Create a random position near the origin
+        const randomPosition = new CANNON.Vec3(
+            (Math.random() - 0.5) * 10,  // x between -5 and 5
+            (Math.random() - 0.5) * 10,  // y between -5 and 5
+            Math.abs(Math.random() * 5) + 2  // z between 2 and 7 (always positive)
+        );
+
+        console.log('Creating new spacecraft at position:', randomPosition);
+        const newSpacecraft = this.addSpacecraft(
+            randomPosition,
+            1, 1, 2,
+            false,
+            `Spacecraft ${this.spacecraft.length + 1}`
+        );
+        
+        return newSpacecraft;
+    }
+
     setActiveSpacecraft(spacecraft) {
-        // Deactivate all spacecraft controllers
-        this.spacecraftControllers.forEach(controller => {
-            controller.isActive = false;
-        });
-
-        // Activate the selected spacecraft
+        if (!spacecraft || !this.spacecraft.includes(spacecraft)) return;
+        
+        // Deactivate current active spacecraft
+        if (this.activeSpacecraft) {
+            this.activeSpacecraft.spacecraftController.isActive = false;
+        }
+        
+        // Activate new spacecraft
+        this.activeSpacecraft = spacecraft;
         spacecraft.spacecraftController.isActive = true;
-        this.currentTarget = spacecraft.objects.box;
-
-        // Update camera target
-        if (this.camera) {
-            this.camera.updateOrbitTarget(spacecraft.objects.box.position);
+        
+        // Notify listeners
+        if (this.onActiveSpacecraftChange) {
+            this.onActiveSpacecraftChange(spacecraft);
         }
+    }
 
-        // Notify listeners of the change
-        if (this.onSpacecraftChange) {
-            this.onSpacecraftChange();
+    addSpacecraft(initialPosition, width = 1, height = 1, depth = 2, initialConeVisibility = false, name = 'Spacecraft') {
+        console.log('Adding spacecraft:', name);
+        const spacecraft = new Spacecraft(
+            this.world,
+            this.camera.scene,
+            initialPosition,
+            width,
+            height,
+            depth,
+            this
+        );
+        spacecraft.name = name;
+        spacecraft.world = this;
+        
+        if (initialConeVisibility) {
+            spacecraft.rcsVisuals.showCones();
         }
+        this.spacecraft.push(spacecraft);
+        this.spacecraftControllers.push(spacecraft.spacecraftController);
+        
+        // Set as active if it's the first spacecraft
+        if (!this.activeSpacecraft) {
+            this.setActiveSpacecraft(spacecraft);
+        }
+        
+        // Increment version and notify listeners
+        this.spacecraftListVersion++;
+        console.log('Spacecraft list updated:', this.spacecraft.length, 'spacecraft, version:', this.spacecraftListVersion);
+        if (this.onSpacecraftListChange) {
+            this.onSpacecraftListChange(this.spacecraftListVersion);
+        }
+        
+        return spacecraft;
+    }
+
+    deleteSpacecraft(spacecraftToDelete) {
+        if (!spacecraftToDelete || spacecraftToDelete === this.activeSpacecraft) return;
+        
+        const index = this.spacecraft.indexOf(spacecraftToDelete);
+        if (index > -1) {
+            this.spacecraft.splice(index, 1);
+            spacecraftToDelete.cleanup?.();
+            
+            // Increment version and notify listeners
+            this.spacecraftListVersion++;
+            if (this.onSpacecraftListChange) {
+                this.onSpacecraftListChange(this.spacecraftListVersion);
+            }
+        }
+    }
+
+    getSpacecraftList() {
+        return this.spacecraft;
+    }
+
+    getActiveSpacecraft() {
+        return this.activeSpacecraft;
+    }
+
+    setLoadingCallbacks(onProgress, onStatus) {
+        this.onLoadProgress = onProgress || (() => {});
+        this.onLoadStatus = onStatus || (() => {});
     }
 
     setupEventListeners() {
@@ -302,34 +336,6 @@ export class BasicWorld {
         this.camera.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.camera.updateProjectionMatrix();
         this.renderer.renderer.setSize(window.innerWidth, window.innerHeight);
-    }
-
-    startRenderLoop() {
-        const animate = () => {
-            requestAnimationFrame(animate);
-            
-            // Update physics
-            this.world.step(this.dt);
-            
-            // Update spacecraft
-            this.spacecraft.forEach(spacecraft => spacecraft.update());
-            
-            // Update camera to follow active spacecraft
-            const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.isActive);
-            if (activeSpacecraft) {
-                this.camera.updateOrbitTarget(activeSpacecraft.objects.box.position);
-                this.camera.controls.update(); // Update controls for smooth damping
-            }
-            
-            // Update debug renderer if enabled
-            if (this.cannonDebugRenderer) {
-                this.cannonDebugRenderer.update();
-            }
-            
-            // Render
-            this.renderer.renderer.render(this.camera.scene, this.camera.camera);
-        };
-        animate();
     }
 
     onDoubleClick(event) {
@@ -376,36 +382,33 @@ export class BasicWorld {
         this.cockpitInstance?.cleanup();
     }
 
-    onBackgroundLoadProgress(progress) {
-        const progressBar = document.getElementById('loading-progress');
-        if (progressBar) {
-            progressBar.style.width = `${progress * 100}%`;
-        }
+    startRenderLoop() {
+        const animate = () => {
+            requestAnimationFrame(animate);
+            
+            // Update physics
+            this.world.step(this.dt);
+            
+            // Update spacecraft
+            this.spacecraft.forEach(spacecraft => spacecraft.update());
+            
+            // Update camera to follow active spacecraft
+            const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.isActive);
+            if (activeSpacecraft) {
+                this.camera.updateOrbitTarget(activeSpacecraft.objects.box.position);
+                this.camera.controls.update(); // Update controls for smooth damping
+            }
+            
+            // Update debug renderer if enabled
+            if (this.cannonDebugRenderer) {
+                this.cannonDebugRenderer.update();
+            }
+            
+            // Render
+            this.renderer.renderer.render(this.camera.scene, this.camera.camera);
+        };
+        animate();
     }
 
-    onBackgroundLoadComplete() {
-        const progressBar = document.getElementById('loading-progress');
-        const loadingBar = document.getElementById('loading-bar');
-        if (progressBar && loadingBar) {
-            progressBar.style.width = '100%';
-            setTimeout(() => {
-                loadingBar.style.display = 'none';
-            }, 500);
-        }
-    }
-
-    initializeReactComponents() {
-        const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.isActive);
-        if (activeSpacecraft) {
-            this.cockpitInstance = initializeCockpit(
-                activeSpacecraft,
-                activeSpacecraft.spacecraftController
-            );
-        }
-    }
-
-    setLoadingCallbacks(onProgress, onStatus) {
-        this.onLoadProgress = onProgress;
-        this.onLoadStatus = onStatus;
-    }
+    // ... rest of the class implementation ...
 } 

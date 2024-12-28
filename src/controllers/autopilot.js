@@ -32,8 +32,8 @@ export class Autopilot {
             // Lower default PID gains, integral=0, smaller kd, etc.
             pidGains = {
                 orientation: { kp: 0.05, ki: 0.0, kd: 0.02 },
-                linear:      { kp: 5.0,  ki: 0.0, kd: 2.0 },
-                general:     { kp: 3.0,  ki: 0.0, kd: 1.0 },
+                linear: { kp: 5.0, ki: 0.0, kd: 2.0 },
+                general: { kp: 3.0, ki: 0.0, kd: 1.0 },
             },
             maxForce = 400,
             dampingFactor = 3.0,
@@ -66,8 +66,8 @@ export class Autopilot {
         this.config = {
             pid: {
                 orientation: pidGains.orientation,
-                linear:      pidGains.linear,
-                general:     pidGains.general,
+                linear: pidGains.linear,
+                general: pidGains.general,
             },
             derivativeAlpha,
             maxIntegral,
@@ -85,9 +85,9 @@ export class Autopilot {
         };
 
         // Build PIDs with our advanced features
-        this.pidController            = this.createPID(this.config.pid.general);
+        this.pidController = this.createPID(this.config.pid.general);
         this.orientationPidController = this.createPID(this.config.pid.orientation);
-        this.linearPidController      = this.createPID(this.config.pid.linear);
+        this.linearPidController = this.createPID(this.config.pid.linear);
 
         // Physics references
         this.spacecraftMass = spacecraft.objects.boxBody.mass;
@@ -158,7 +158,7 @@ export class Autopilot {
         }
 
         this.allocationMatrix = A;
-        const mat = new Matrix(A);        
+        const mat = new Matrix(A);
         this.allocationMatrixInv = pseudoInverse(mat);
     }
 
@@ -466,8 +466,8 @@ export class Autopilot {
         const forces = Array(24).fill(0);
         const axes = [
             { axis: 'z', groups: this.thrusterGroups.forward, positive: true },
-            { axis: 'y', groups: this.thrusterGroups.up,      positive: true },
-            { axis: 'x', groups: this.thrusterGroups.left,    positive: false },
+            { axis: 'y', groups: this.thrusterGroups.up, positive: true },
+            { axis: 'x', groups: this.thrusterGroups.left, positive: false },
         ];
 
         axes.forEach(({ axis, groups, positive }) => {
@@ -537,8 +537,8 @@ export class Autopilot {
         const thrusterForces = Array(24).fill(0);
 
         const pitchForce = this.calculateForcePerThruster(pidOutput.x, 'pitch');
-        const yawForce   = this.calculateForcePerThruster(pidOutput.y, 'yaw');
-        const rollForce  = this.calculateForcePerThruster(pidOutput.z, 'roll');
+        const yawForce = this.calculateForcePerThruster(pidOutput.y, 'yaw');
+        const rollForce = this.calculateForcePerThruster(pidOutput.z, 'roll');
 
         // If pidOutput.x >= 0 => thrusterGroups.pitch[1], else thrusterGroups.pitch[0], etc.
         this.applyForceToGroup(
@@ -658,20 +658,20 @@ export class Autopilot {
         // Bail out if there's no real difference
         const dir = new THREE.Vector3().subVectors(this.targetPosition, position);
         if (dir.lengthSq() < 1e-8) return;
-      
+
         // 1) Create a temporary object
         const tmpObj = new THREE.Object3D();
         tmpObj.position.copy(position);
-      
+
         // 2) local +Z looks at target:
         tmpObj.lookAt(this.targetPosition);
-      
+
         // 3) Convert to Euler, then set desired roll
         const eul = new THREE.Euler().setFromQuaternion(tmpObj.quaternion, 'YXZ');
         // eul.x => pitch, eul.y => yaw, eul.z => roll (in 'YXZ' mode)
-        eul.z = desiredRoll; 
+        eul.z = desiredRoll;
         tmpObj.quaternion.setFromEuler(eul);
-      
+
         // 4) Copy final orientation
         this.targetOrientation.copy(tmpObj.quaternion);
     }
@@ -762,7 +762,7 @@ export class Autopilot {
     setTargetObject(spacecraft, point = 'center') {
         this.targetObject = spacecraft;
         this.targetPoint = point;
-        
+
         // Update target position immediately
         this.updateTargetFromObject();
     }
@@ -780,15 +780,22 @@ export class Autopilot {
         if (this.targetPoint === 'center') {
             // Use center of mass (position of the physics body)
             this.targetPosition.copy(this.targetObject.objects.boxBody.position);
-        } else if (this.targetPoint === 'dockingPort') {
-            // Example: place target 2 units in front of the box
-            const forward = new THREE.Vector3(0, 0, 1);
-            const quaternion = this.targetObject.objects.box.quaternion;
-            forward.applyQuaternion(quaternion);
-            forward.multiplyScalar(2); // 2 units in front
+        } else if (this.targetPoint === 'front' || this.targetPoint === 'back') {
+            // Fallback to center if getDockingPortWorldPosition isn't available
+            if (typeof this.targetObject.getDockingPortWorldPosition !== 'function') {
+                console.warn('getDockingPortWorldPosition not available, falling back to center');
+                this.targetPosition.copy(this.targetObject.objects.boxBody.position);
+                return;
+            }
             
-            this.targetPosition.copy(this.targetObject.objects.boxBody.position);
-            this.targetPosition.add(forward);
+            // Use the specified docking port position
+            const portPosition = this.targetObject.getDockingPortWorldPosition(this.targetPoint);
+            if (portPosition) {
+                this.targetPosition.copy(portPosition);
+            } else {
+                // Fallback to center if port not found
+                this.targetPosition.copy(this.targetObject.objects.boxBody.position);
+            }
         }
     }
 }

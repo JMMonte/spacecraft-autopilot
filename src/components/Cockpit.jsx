@@ -16,41 +16,56 @@ import { HelperArrowsWindow } from './windows/HelperArrowsWindow';
 import { PIDControllerWindow } from './windows/PIDControllerWindow';
 import { AutopilotWindow } from './windows/AutopilotWindow';
 import { SpacecraftListWindow } from './windows/SpacecraftListWindow';
+import { DockingWindow } from './windows/DockingWindow';
 
-export function Cockpit({ spacecraft, controller, loadingProgress, loadingStatus, onCreateNewSpacecraft }) {
+export function Cockpit({ spacecraft, controller, loadingProgress, loadingStatus, onCreateNewSpacecraft, spacecraftListVersion }) {
+  console.log('Cockpit: Rendering with version:', spacecraftListVersion);
+  console.log('Cockpit: Spacecraft:', spacecraft?.name);
+  console.log('Cockpit: World from spacecraft:', spacecraft?.world ? 'exists' : 'undefined');
+  console.log('Cockpit: World spacecraft count:', spacecraft?.world?.spacecraft?.length);
+
+  // Get the world instance directly from the spacecraft
+  const world = spacecraft?.world;
+
   const calculateInitialPositions = () => {
     const padding = 20;
     const topBarHeight = 40;
-    const titleBarHeight = 32; // Height of window title bar
+    const titleBarHeight = 32;
     const windowWidth = 250;
-    const telemetryHeight = 180; // Approximate height of telemetry window when open
-    const horizonHeight = 240;   // Height of horizon window when open (200px canvas + padding)
-    const autopilotHeight = 150; // Height of autopilot window when open
+    const telemetryHeight = 180;
+    const horizonHeight = 240;
+    const autopilotHeight = 150;
 
-    // Left side windows
     let currentLeftY = topBarHeight + padding;
     const leftX = padding;
     
-    // Right side windows - start from top
     const rightX = window.innerWidth - windowWidth - padding;
     let currentRightY = topBarHeight + padding;
 
     return {
-      // Left column - windows attached to each other
       telemetry: { x: leftX, y: currentLeftY },
       horizon: { x: leftX, y: currentLeftY + telemetryHeight },
-
-      // Right column - windows attached to each other from top
       dimensions: { x: rightX, y: currentRightY },
       rcs: { x: rightX, y: currentRightY + titleBarHeight },
       pid: { x: rightX, y: currentRightY + titleBarHeight * 2 },
       arrows: { x: rightX, y: currentRightY + titleBarHeight * 3 },
       autopilot: { x: rightX, y: currentRightY + titleBarHeight * 4 },
-      spacecraftList: { x: leftX, y: currentLeftY + telemetryHeight + horizonHeight + padding }
+      spacecraftList: { x: leftX, y: currentLeftY + telemetryHeight + horizonHeight + padding },
+      docking: { x: leftX, y: currentLeftY + telemetryHeight + horizonHeight + autopilotHeight + padding * 2 }
     };
   };
 
-  const [visibleWindows, setVisibleWindows] = useState(INITIAL_WINDOW_STATE);
+  const [visibleWindows, setVisibleWindows] = useState({
+    telemetry: true,
+    horizon: true,
+    dimensions: false,
+    rcs: false,
+    arrows: false,
+    pid: false,
+    autopilot: true,
+    spacecraftList: true,
+    docking: true
+  });
   const [windowPositions, setWindowPositions] = useState(calculateInitialPositions);
   const [telemetryValues, setTelemetryValues] = useState({
     velocity: { x: 0, y: 0, z: 0 },
@@ -353,13 +368,15 @@ export function Cockpit({ spacecraft, controller, loadingProgress, loadingStatus
 
   const handleDeleteSpacecraft = (spacecraftToDelete) => {
     if (spacecraftToDelete === spacecraft) return; // Don't delete active spacecraft
-    
-    // Remove from world's spacecraft list
-    const index = spacecraftToDelete.world.spacecraft.indexOf(spacecraftToDelete);
-    if (index > -1) {
-      spacecraftToDelete.world.spacecraft.splice(index, 1);
-      spacecraftToDelete.cleanup?.();
-    }
+    spacecraftToDelete.world.deleteSpacecraft(spacecraftToDelete);
+  };
+
+  const handleSelectDockingTarget = () => {
+    // Show spacecraft list if it's not visible
+    setVisibleWindows(prev => ({
+      ...prev,
+      spacecraftList: true
+    }));
   };
 
   return (
@@ -385,11 +402,12 @@ export function Cockpit({ spacecraft, controller, loadingProgress, loadingStatus
             initiallyCollapsed={false}
           >
             <SpacecraftListWindow 
-              world={spacecraft.world}
+              world={world}
               activeSpacecraft={spacecraft}
               onCreateSpacecraft={onCreateNewSpacecraft}
               onSelectSpacecraft={handleSelectSpacecraft}
               onDeleteSpacecraft={handleDeleteSpacecraft}
+              version={spacecraftListVersion}
             />
           </DraggableWindow>
 
@@ -456,7 +474,26 @@ export function Cockpit({ spacecraft, controller, loadingProgress, loadingStatus
             onPositionChange={(position) => updateWindowPosition('autopilot', position)}
             initiallyCollapsed={false}
           >
-            <AutopilotWindow controller={controller} world={spacecraft.world} />
+            <AutopilotWindow 
+              controller={controller} 
+              world={world}
+              version={spacecraftListVersion}
+            />
+          </DraggableWindow>
+
+          <DraggableWindow 
+            title="Docking MFD"
+            defaultPosition={windowPositions.docking}
+            isVisible={visibleWindows.docking}
+            onPositionChange={(position) => updateWindowPosition('docking', position)}
+            initiallyCollapsed={false}
+          >
+            <DockingWindow 
+              spacecraft={spacecraft}
+              world={world}
+              controller={controller}
+              version={spacecraftListVersion}
+            />
           </DraggableWindow>
         </div>
 
