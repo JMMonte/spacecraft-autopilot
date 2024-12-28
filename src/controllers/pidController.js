@@ -1,4 +1,4 @@
-import * as CANNON from 'cannon';
+import * as CANNON from 'cannon-es';
 
 export class PIDController {
     constructor(kp, ki, kd) {
@@ -16,11 +16,25 @@ export class PIDController {
     }
 
     update(currentError, deltaTime) {
+        // currentError is a CANNON.Vec3 (e.g. position error or angular momentum error)
         this.tempErrorVector.set(currentError.x, currentError.y, currentError.z);
+
+        // Integral accumulation
         this.integral.vadd(this.tempErrorVector.scale(deltaTime), this.integral);
-        this.derivative.copy(this.tempErrorVector).vsub(this.previousError).scale(1 / deltaTime);
+
+        // Derivative = (error - previousError) / dt
+        this.derivative
+            .copy(this.tempErrorVector)
+            .vsub(this.previousError)
+            .scale(1 / deltaTime);
+
+        // Store current error as previous
         this.previousError.copy(this.tempErrorVector);
-        this.output.copy(this.tempErrorVector).scale(this.kp)
+
+        // Output = Kp * error + Ki * integral + Kd * derivative
+        this.output
+            .copy(this.tempErrorVector)
+            .scale(this.kp)
             .vadd(this.integral.scale(this.ki))
             .vadd(this.derivative.scale(this.kd));
 
@@ -28,7 +42,7 @@ export class PIDController {
             this.updatePIDParameters(currentError.length());
         }
 
-        return this.output;
+        return this.output; // CANNON.Vec3
     }
 
     reset() {
@@ -41,24 +55,30 @@ export class PIDController {
         this.errorHistory.push(currentErrorMagnitude);
 
         if (this.errorHistory.length > this.maxHistoryLength) {
-            this.errorHistory.shift(); // Maintain a fixed length of error history
+            this.errorHistory.shift(); // keep array at fixed length
         }
 
+        // Wait until we have enough data
         if (this.errorHistory.length < this.maxHistoryLength) {
-            return; // Not enough data to adjust PID parameters yet
+            return;
         }
 
-        const averageError = this.errorHistory.reduce((acc, err) => acc + err, 0) / this.errorHistory.length;
-        
-        // Simple heuristic-based adjustment
-        if (averageError > 0.1) { // Error threshold for tuning
-            this.kp *= 1.05; // Increase proportional gain
-            this.ki *= 1.05; // Increase integral gain
-            this.kd *= 1.05; // Increase derivative gain
-        } else if (averageError < 0.01) { // Another error threshold
-            this.kp *= 0.95; // Decrease proportional gain
-            this.ki *= 0.95; // Decrease integral gain
-            this.kd *= 0.95; // Decrease derivative gain
+        // Compute average error
+        const averageError =
+            this.errorHistory.reduce((acc, err) => acc + err, 0) /
+            this.errorHistory.length;
+
+        // Simple heuristic-based tuning
+        if (averageError > 0.1) {
+            // Error is "too big," gently raise PID gains
+            this.kp *= 1.05;
+            this.ki *= 1.05;
+            this.kd *= 1.05;
+        } else if (averageError < 0.01) {
+            // Error is "very small," gently lower PID gains
+            this.kp *= 0.95;
+            this.ki *= 0.95;
+            this.kd *= 0.95;
         }
     }
 }

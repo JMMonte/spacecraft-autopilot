@@ -1,78 +1,44 @@
 import * as THREE from 'three';
-import { Lensflare, LensflareElement } from 'three/examples/jsm/objects/Lensflare.js';
 
 export class SceneLights {
     constructor(scene, camera) {
         this.scene = scene;
         this.camera = camera;
+        this.lights = [];
+        this.setupLights();
+    }
 
-        // Lighting
-        // Add a Directional light
-        this.light = new THREE.DirectionalLight(0xffffff, 5);
-        this.light.position.copy(camera.position);
-        this.light.position.add(new THREE.Vector3(-200, 100, 200));
-        this.light.castShadow = true;
+    setupLights() {
+        // Ambient light
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.25);
+        this.scene.add(ambientLight);
+        this.lights.push(ambientLight);
 
-        const textureLoader = new THREE.TextureLoader();
-        const textureFlare0 = textureLoader.load("../images/lensflare0_alpha.png");
-        const textureFlare1 = textureLoader.load("../images/lensflare3.png");
-        const textureFlare2 = textureLoader.load("../images/lensflare2.png");
-        const textureFlare3 = textureLoader.load("../images/lensflare3.png");
-        const textureFlare4 = textureLoader.load("../images/hexangle.png");
-        const textureFlare5 = textureLoader.load("../images/lensflare3.png");
+        // Directional light
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        directionalLight.position.set(5, 10, 7.5);
+        this.scene.add(directionalLight);
+        this.lights.push(directionalLight);
 
-        this.lensflare = new Lensflare();
-        this.lensflare.addElement(new LensflareElement(textureFlare0, 812, 0));
-        this.lensflare.addElement(new LensflareElement(textureFlare1, 520, -0.1));
-        this.lensflare.addElement(new LensflareElement(textureFlare2, 60, 0.6));
-        this.lensflare.addElement(new LensflareElement(textureFlare3, 70, 0.7));
-        this.lensflare.addElement(new LensflareElement(textureFlare3, 70, -0.2));
-        this.lensflare.addElement(new LensflareElement(textureFlare4, 220, 0.9));
-        this.lensflare.addElement(new LensflareElement(textureFlare5, 220, 1));
-        this.light.add(this.lensflare);
-        this.scene.add(this.lensflare);
-
-        // Fixed direction vector   
-        this.direction = new THREE.Vector3(0, -1, -2);
-
-        // Set light initial target position
-        this.light.target.position.copy(camera.position);
-        this.light.target.position.add(this.direction);
-
-        // Adjust shadow size
-        this.light.shadow.mapSize.width = 2048 * 4;
-        this.light.shadow.mapSize.height = 2048 * 4;
-
-        // Adjust shadow camera properties
-        this.light.shadow.camera.left = -20;
-        this.light.shadow.camera.right = 20;
-        this.light.shadow.camera.top = 20;
-        this.light.shadow.camera.bottom = -20;
-        this.light.shadow.camera.near = 0.5;
-        this.light.shadow.camera.far = 500;
-
-        scene.add(this.light);
-        this.offset = new THREE.Vector3(-200, 100, 200);
+        // Add a hemisphere light for better ambient lighting
+        const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.5);
+        this.scene.add(hemisphereLight);
+        this.lights.push(hemisphereLight);
     }
 
     getLight() {
-        return this.light;
+        return this.lights[1]; // Return the directional light for helpers
     }
 
     update() {
-        // Update the light position to follow the camera, maintaining the offset
-        this.light.position.copy(this.camera.position).add(this.offset);
+        // Update light positions or intensities if needed
+    }
 
-        // Optionally adjust the light's target to maintain a fixed direction relative to the camera
-        // This is useful if your light direction should change as the camera rotates
-        // For a fixed direction in the world space, you might not need to adjust the target every frame
-        this.light.target.position.copy(this.camera.position).add(this.direction);
-
-        // Don't forget to update the matrix of the target object, as it's not part of the scene
-        this.light.target.updateMatrixWorld();
-
-        // Update the lensflare position to follow the light
-        this.lensflare.position.copy(this.light.position);
-        this.lensflare.updateMatrixWorld();
+    cleanup() {
+        this.lights.forEach(light => {
+            this.scene.remove(light);
+            light.dispose?.();
+        });
+        this.lights = [];
     }
 }

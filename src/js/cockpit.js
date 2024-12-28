@@ -3,15 +3,21 @@ import * as THREE from 'three';
 export class Cockpit {
     constructor(spacecraftController) {
         this.spacecraftController = spacecraftController;
+        this.isInitialized = false;
         this.init();
     }
 
     async init() {
-        await this.loadCockpitUI();
-        this.artificalHorizon = new ArtificialHorizon3D();
-        this.setupAutopilotControls();
-        this.setupTargetPositionInputs();
-        this.setupPopupControls();
+        try {
+            await this.loadCockpitUI();
+            this.artificalHorizon = new ArtificialHorizon3D();
+            this.setupAutopilotControls();
+            this.setupTargetPositionInputs();
+            this.setupPopupControls();
+            this.isInitialized = true;
+        } catch (error) {
+            console.error('Error initializing cockpit:', error);
+        }
     }
 
     async loadCockpitUI() {
@@ -20,6 +26,8 @@ export class Cockpit {
         const cockpitDiv = document.createElement('div');
         cockpitDiv.innerHTML = html;
         document.body.appendChild(cockpitDiv);
+        // Wait a frame to ensure DOM is updated
+        await new Promise(resolve => requestAnimationFrame(resolve));
     }
 
     setupAutopilotControls() {
@@ -110,33 +118,55 @@ export class Cockpit {
     }
 
     update(spacecraft) {
-        if (!this.artificalHorizon) return;
+        if (!this.isInitialized || !this.artificalHorizon) return;
 
         this.spacecraftController = spacecraft.spacecraftController;
 
+        // Get all elements first and check if they exist
+        const elements = {
+            name: document.getElementById('spacecraft-name'),
+            absVelocity: document.getElementById('abs-velocity'),
+            velocityX: document.getElementById('velocity-x'),
+            velocityY: document.getElementById('velocity-y'),
+            velocityZ: document.getElementById('velocity-z'),
+            absAngularVelocity: document.getElementById('abs-angular-velocity'),
+            angularVelocityX: document.getElementById('angular-velocity-x'),
+            angularVelocityY: document.getElementById('angular-velocity-y'),
+            angularVelocityZ: document.getElementById('angular-velocity-z'),
+            yaw: document.getElementById('yaw'),
+            pitch: document.getElementById('pitch'),
+            roll: document.getElementById('roll')
+        };
+
+        // Check if all elements exist
+        if (Object.values(elements).some(el => !el)) {
+            console.warn('Some cockpit elements are missing');
+            return;
+        }
+
         // Update spacecraft name
-        document.getElementById('spacecraft-name').textContent = spacecraft.name || 'Unknown Spacecraft';
+        elements.name.textContent = spacecraft.name || 'Unknown Spacecraft';
 
         // Update velocity
         const velocity = spacecraft.objects.boxBody.velocity;
-        document.getElementById('abs-velocity').textContent = velocity.length().toFixed(3);
-        document.getElementById('velocity-x').textContent = velocity.x.toFixed(3);
-        document.getElementById('velocity-y').textContent = velocity.y.toFixed(3);
-        document.getElementById('velocity-z').textContent = velocity.z.toFixed(3);
+        elements.absVelocity.textContent = velocity.length().toFixed(3);
+        elements.velocityX.textContent = velocity.x.toFixed(3);
+        elements.velocityY.textContent = velocity.y.toFixed(3);
+        elements.velocityZ.textContent = velocity.z.toFixed(3);
 
         // Update angular velocity
         const angularVelocity = spacecraft.objects.boxBody.angularVelocity;
-        document.getElementById('abs-angular-velocity').textContent = angularVelocity.length().toFixed(3);
-        document.getElementById('angular-velocity-x').textContent = angularVelocity.x.toFixed(3);
-        document.getElementById('angular-velocity-y').textContent = angularVelocity.y.toFixed(3);
-        document.getElementById('angular-velocity-z').textContent = angularVelocity.z.toFixed(3);
+        elements.absAngularVelocity.textContent = angularVelocity.length().toFixed(3);
+        elements.angularVelocityX.textContent = angularVelocity.x.toFixed(3);
+        elements.angularVelocityY.textContent = angularVelocity.y.toFixed(3);
+        elements.angularVelocityZ.textContent = angularVelocity.z.toFixed(3);
 
         // Update orientation
         const quaternion = spacecraft.objects.boxBody.quaternion;
         const { yaw, pitch, roll } = this.quaternionToEuler(quaternion);
-        document.getElementById('yaw').textContent = yaw.toFixed(1);
-        document.getElementById('pitch').textContent = pitch.toFixed(1);
-        document.getElementById('roll').textContent = roll.toFixed(1);
+        elements.yaw.textContent = yaw.toFixed(1);
+        elements.pitch.textContent = pitch.toFixed(1);
+        elements.roll.textContent = roll.toFixed(1);
 
         // Update artificial horizon
         this.artificalHorizon.update(quaternion);
@@ -186,7 +216,7 @@ class ArtificialHorizon3D {
     createHorizon() {
         // Load the texture
         const textureLoader = new THREE.TextureLoader();
-        textureLoader.load('images/rLHbWVB.png', (texture) => {
+        textureLoader.load('/images/textures/rLHbWVB.png', (texture) => {
             texture.mapping = THREE.EquirectangularReflectionMapping;
             
             // Flip the texture horizontally

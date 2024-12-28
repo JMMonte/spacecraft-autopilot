@@ -3,15 +3,21 @@ import * as THREE from 'three';
 export class WorldRenderer {
     constructor(canvas) {
         this.renderer = new THREE.WebGLRenderer({
-            canvas: canvas,
+            canvas,
             antialias: true,
+            alpha: true,
+            powerPreference: "high-performance"
         });
+        
+        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.renderer.toneMappingExposure = 1.0;
 
+        // Handle window resize
         window.addEventListener('resize', this.onWindowResize.bind(this), false);
     }
 
@@ -21,5 +27,10 @@ export class WorldRenderer {
 
     render(scene, camera) {
         this.renderer.render(scene, camera);
+    }
+
+    dispose() {
+        this.renderer.dispose();
+        window.removeEventListener('resize', this.onWindowResize);
     }
 }

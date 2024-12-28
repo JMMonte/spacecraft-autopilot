@@ -3,4 +3,4 @@ node_modules/
 dist/images/
 venv/
 compress_system.py
-compress.py
+compress.pynode_modules*

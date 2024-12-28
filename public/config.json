@@ -1,21 +1,44 @@
 {
+    "initialFocus": 0,
     "initialSpacecraft": [
         {
-            "name": "Alpha",
+            "name": "Main Spacecraft",
             "position": { "x": 0, "y": 0, "z": 2 },
             "width": 1,
             "height": 1,
             "depth": 2,
             "initialConeVisibility": false
-        },
-        {
-            "name": "Bravo",
-            "position": { "x": 2, "y": 2, "z": 2 },
-            "width": 1,
-            "height": 1,
-            "depth": 1,
-            "initialConeVisibility": false
         }
     ],
-    "initialFocus": 0
+    "camera": {
+        "initialPosition": {
+            "x": 0,
+            "y": 5,
+            "z": 10
+        },
+        "lookAt": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+        }
+    },
+    "physics": {
+        "gravity": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+        },
+        "timestep": 0.016667
+    },
+    "graphics": {
+        "gridSize": 100,
+        "gridDivisions": 100,
+        "ambientLightIntensity": 0.25,
+        "directionalLightIntensity": 1.0,
+        "directionalLightPosition": {
+            "x": 5,
+            "y": 10,
+            "z": 7.5
+        }
+    }
 }

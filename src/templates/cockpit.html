@@ -1,281 +1,67 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Compact Cockpit UI</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: 'Roboto', 'Arial', sans-serif;
-            background-color: #121212;
-            color: #ffffff;
-            overflow: hidden;
-        }
-        .cockpit-ui, .cockpit-second-ui {
-            position: fixed;
-            display: flex;
-            flex-wrap: wrap;
-            background: rgba(30, 30, 30, 0.8);
-            border-radius: 8px;
-            padding: 12px;
-            font-size: 12px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-        .cockpit-ui {
-            bottom: 20px;
-            left: 20px;
-        }
-        .cockpit-second-ui {
-            top: 20px;
-            left: 20px;
-        }
-        .instrument-panel {
-            display: flex;
-            flex-direction: column;
-            margin-right: 15px;
-        }
-        .no-margin {
-            margin-right: 0;
-        }
-        .instrument-group {
-            margin-bottom: 10px;
-            background: rgba(40, 40, 40, 0.5);
-            border-radius: 6px;
-            padding: 8px;
-        }
-        .instrument-title {
-            font-weight: 500;
-            margin-bottom: 5px;
-            color: #ffffff;
-            text-transform: uppercase;
-            font-size: 10px;
-            letter-spacing: 0.5px;
-        }
-        .instrument-value {
-            display: flex;
-            justify-content: space-between;
-            font-family: 'Roboto Mono', monospace;
-            font-size: 11px;
-            margin-bottom: 2px;
-        }
-        .value-label {
-            margin-right: 10px;
-            color: #bbbbbb;
-        }
-        #horizon-container {
-            width: 200px; /* Kept the same size */
-            height: 200px; /* Kept the same size */
-            border: 2px solid #ffffff;
-            border-radius: 50%;
-            margin: 10px auto;
-            background: linear-gradient(to bottom, #1a237e, #000000);
-            box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.1);
-        }
-        #spacecraft-name {
-            font-size: 16px;
-            font-weight: 500;
-            margin-bottom: 10px;
-            text-align: center;
-            color: #ffffff;
-        }
-        .autopilot-controls {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
-            margin-top: 10px;
-        }
-        .autopilot-button {
-            background-color: #333333;
-            color: #ffffff;
-            border: none;
-            padding: 6px;
-            cursor: pointer;
-            font-size: 10px;
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-        }
-        .autopilot-button:hover {
-            background-color: #444444;
-        }
-        .autopilot-button.active {
-            background-color: #1976d2;
-        }
-        .autopilot-button i {
-            margin-right: 4px;
-            font-size: 10px;
-        }
-        .target-position-container {
-            display: flex;
-            margin-top: 10px;
-            width: 100%;
-            flex-direction: column;
-        }
-        .target-position-input {
-            background: #333333;
-            border: none;
-            color: #ffffff;
-            padding: 4px;
-            border-radius: 4px;
-            font-size: 10px;
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 4px;
-        }
-        .cmd-icon {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            cursor: pointer;
-            color: #ffffff;
-            font-size: 18px;
-            background: rgba(30, 30, 30, 0.8);
-            border-radius: 50%;
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-        }
-        .cmd-icon:hover {
-            background: rgba(40, 40, 40, 0.8);
-        }
-        #keyboard-shortcuts-popup {
-            display: none;
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(30, 30, 30, 0.95);
-            color: #ffffff;
-            padding: 20px;
-            border-radius: 8px;
-            z-index: 1000;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            font-size: 12px;
-        }
-        #keyboard-shortcuts-popup h3 {
-            margin-top: 0;
-            color: #ffffff;
-            text-align: center;
-            font-weight: 500;
-            font-size: 14px;
-        }
-        #keyboard-shortcuts-popup .close-btn {
-            background: #333333;
-            border: none;
-            color: #ffffff;
-            padding: 8px 16px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            margin-top: 15px;
-            display: block;
-            width: 100%;
-            transition: all 0.3s ease;
-        }
-        #keyboard-shortcuts-popup .close-btn:hover {
-            background: #444444;
-        }
-    </style>
-</head>
-<body>
-    <div class="cockpit-ui">
-        <div class="instrument-panel">
-            <div id="spacecraft-name">Spacecraft Name</div>
-            <div class="instrument-group">
-                <div class="instrument-title">VELOCITY (m/s)</div>
-                <div class="instrument-value"><span class="value-label">Abs:</span><span id="abs-velocity">0.000</span></div>
-                <div class="instrument-value"><span class="value-label">X:</span><span id="velocity-x">0.000</span></div>
-                <div class="instrument-value"><span class="value-label">Y:</span><span id="velocity-y">0.000</span></div>
-                <div class="instrument-value"><span class="value-label">Z:</span><span id="velocity-z">0.000</span></div>
-            </div>
-            <div class="instrument-group">
-                <div class="instrument-title">ANGULAR VEL (rad/s)</div>
-                <div class="instrument-value"><span class="value-label">Abs:</span><span id="abs-angular-velocity">0.000</span></div>
-                <div class="instrument-value"><span class="value-label">X:</span><span id="angular-velocity-x">0.000</span></div>
-                <div class="instrument-value"><span class="value-label">Y:</span><span id="angular-velocity-y">0.000</span></div>
-                <div class="instrument-value"><span class="value-label">Z:</span><span id="angular-velocity-z">0.000</span></div>
-            </div>
+<div class="cockpit-container">
+    <div class="spacecraft-info">
+        <h2 id="spacecraft-name">Unknown Spacecraft</h2>
+    </div>
+
+    <div class="telemetry">
+        <div class="velocity-info">
+            <h3>Velocity (m/s)</h3>
+            <div>Absolute: <span id="abs-velocity">0.000</span></div>
+            <div>X: <span id="velocity-x">0.000</span></div>
+            <div>Y: <span id="velocity-y">0.000</span></div>
+            <div>Z: <span id="velocity-z">0.000</span></div>
         </div>
-        <div class="instrument-panel no-margin">
-            <div id="horizon-container"></div>
-            <div class="instrument-group">
-                <div class="instrument-title">ORIENTATION (deg)</div>
-                <div class="instrument-value"><span class="value-label">Yaw:</span><span id="yaw">0.0</span></div>
-                <div class="instrument-value"><span class="value-label">Pitch:</span><span id="pitch">0.0</span></div>
-                <div class="instrument-value"><span class="value-label">Roll:</span><span id="roll">0.0</span></div>
+
+        <div class="angular-velocity-info">
+            <h3>Angular Velocity (rad/s)</h3>
+            <div>Absolute: <span id="abs-angular-velocity">0.000</span></div>
+            <div>X: <span id="angular-velocity-x">0.000</span></div>
+            <div>Y: <span id="angular-velocity-y">0.000</span></div>
+            <div>Z: <span id="angular-velocity-z">0.000</span></div>
+        </div>
+
+        <div class="orientation-info">
+            <h3>Orientation (deg)</h3>
+            <div>Yaw: <span id="yaw">0.0</span></div>
+            <div>Pitch: <span id="pitch">0.0</span></div>
+            <div>Roll: <span id="roll">0.0</span></div>
+        </div>
+    </div>
+
+    <div id="horizon-container"></div>
+
+    <div class="autopilot-controls">
+        <h3>Autopilot Controls</h3>
+        <button id="cancelAndAlign">Cancel & Align</button>
+        <button id="cancelRotation">Cancel Rotation</button>
+        <button id="pointToPosition">Point to Position</button>
+        <button id="cancelLinearMotion">Cancel Linear Motion</button>
+        <button id="goToPosition">Go to Position</button>
+
+        <div class="target-position">
+            <h4>Target Position</h4>
+            <div>
+                <label>X: <input type="number" id="target-position-x" value="0"></label>
+                <label>Y: <input type="number" id="target-position-y" value="0"></label>
+                <label>Z: <input type="number" id="target-position-z" value="0"></label>
             </div>
         </div>
     </div>
-    <div class="cockpit-second-ui">
-        <div class="instrument-panel no-margin">
-            <div class="autopilot-controls">
-                <div class="instrument-title">AUTOPILOTS:</div>
-                <button id="cancelAndAlign" class="autopilot-button">
-                    <i class="fas fa-ban"></i>Cancel & Align
-                </button>
-                <button id="cancelRotation" class="autopilot-button">
-                    <i class="fas fa-undo-alt"></i>Cancel Rotation
-                </button>
-                <button id="pointToPosition" class="autopilot-button">
-                    <i class="fas fa-location-arrow"></i>Point to Position
-                </button>
-                <button id="cancelLinearMotion" class="autopilot-button">
-                    <i class="fas fa-stop"></i>Cancel Motion
-                </button>
-                <button id="goToPosition" class="autopilot-button">
-                    <i class="fas fa-play"></i>Go to Position
-                </button>
-            </div>
-            <div class="target-position-container">
-                <div class="instrument-title">TGT. POS:</div>
-                <div class="instrument-value">
-                    <span class="value-label">X:</span>
-                    <input type="number" id="target-position-x" class="target-position-input" placeholder="0.0" step="0.1">
-                </div>
-                <div class="instrument-value">
-                    <span class="value-label">Y:</span>
-                    <input type="number" id="target-position-y" class="target-position-input" placeholder="0.0" step="0.1">
-                </div>
-                <div class="instrument-value">
-                    <span class="value-label">Z:</span>
-                    <input type="number" id="target-position-z" class="target-position-input" placeholder="0.0" step="0.1">
-                </div>
-            </div>
+
+    <div class="cmd-icon">⌘</div>
+    <div id="keyboard-shortcuts-popup" style="display: none;">
+        <div class="popup-header">
+            <h3>Keyboard Shortcuts</h3>
+            <button class="close-btn">×</button>
+        </div>
+        <div class="shortcuts-content">
+            <p>W/S: Forward/Backward thrust</p>
+            <p>A/D: Left/Right thrust</p>
+            <p>Q/E: Up/Down thrust</p>
+            <p>Arrow keys: Pitch and Yaw</p>
+            <p>Z/X: Roll left/right</p>
+            <p>Shift: Increase thrust</p>
+            <p>Space: Emergency stop</p>
         </div>
     </div>
-    <div class="cmd-icon">
-        <i class="fas fa-keyboard"></i>
-    </div>
-    <div id="keyboard-shortcuts-popup">
-        <h3>Keyboard Shortcuts</h3>
-        <div>
-            <h4>Rotation</h4>
-            <p>A, D: Yaw</p>
-            <p>W, S: Pitch</p>
-            <p>Q, E: Roll</p>
-        </div>
-        <div>
-            <h4>Translation</h4>
-            <p>I, K: Up/Down</p>
-            <p>J, L: Left/Right</p>
-            <p>U, O: Forward/Backward</p>
-        </div>
-        <div>
-            <h4>Autopilots</h4>
-            <p>R: Stop Rotation</p>
-            <p>T: Stop Rotation and Point to Last Orientation</p>
-            <p>G: Stop Linear Motion</p>
-            <p>B: Go to Position</p>
-        </div>
-        <button class="close-btn">Close</button>
-    </div>
-</body>
-</html>
+</div>

@@ -1,45 +1,33 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon';
+import * as CANNON from 'cannon-es';
 import { RCSVisuals } from '../ui/rcsVisuals';
 import { BackgroundLoader } from '../helpers/backgroundLoader';
 import { SceneLights } from '../scenes/sceneLights';
 import { SceneHelpers } from '../scenes/sceneHelpers';
-import { GUIControls } from '../ui/guiControls';
 import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
 import { SceneObjects } from '../scenes/sceneObjects';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { CannonDebugRenderer } from '../helpers/cannonDebugRenderer';
-import { Cockpit } from './cockpit'; // Import the new Cockpit class
+import { Cockpit } from '../components/Cockpit';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import '../styles/index.css';
 
 // Configuration JSON object (example structure)
 let config = {};
 
-// Function to load config.json synchronously
-function loadConfig() {
-    const request = new XMLHttpRequest();
-    request.open('GET', 'config.json', false);  // 'false' makes the request synchronous
-    request.send(null);
-
-    if (request.status === 200) {
-        return JSON.parse(request.responseText);
-    } else {
-        throw new Error('Could not load config.json');
+// Function to load config.json
+async function loadConfig() {
+    try {
+        const response = await fetch('config.json');
+        if (!response.ok) throw new Error('Could not load config.json');
+        return await response.json();
+    } catch (error) {
+        console.error('Error loading config:', error);
+        return {};
     }
 }
-
-try {
-    config = loadConfig();  // Load the config and update the variable
-    console.log('Config loaded:', config);  // Log the loaded configuration
-} catch (error) {
-    console.error('Error loading config:', error);
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    const world = new BasicWorld(config);  // Initialize world with the config
-    console.log('World initialized');  // Confirm the world has been initialized
-    world.startRenderLoop();  // Start rendering loop
-});
 
 class Spacecraft {
     constructor(world, initialPosition = new CANNON.Vec3(0, 0, 2), width = 1, height = 1, depth = 2, initialConeVisibility = false, name = 'Spacecraft') {
@@ -53,15 +41,15 @@ class Spacecraft {
 
         this.objects.boxBody.position.copy(initialPosition);
 
-        this.helpers = new SceneHelpers(world.camera.scene, world.lights.getLight(), world.camera.camera); // Add helpers
-        this.helpers.disableHelpers(); // Ensure helpers are off at start
+        this.helpers = new SceneHelpers(world.camera.scene, world.lights.getLight(), world.camera.camera);
+        this.helpers.disableHelpers();
 
-        this.spacecraftController = new SpacecraftController(this, this.objects.box, this.helpers); // Pass helpers
+        this.spacecraftController = new SpacecraftController(this, this.objects.box, this.helpers);
     }
 
     update() {
         this.objects.update();
-        this.spacecraftController.applyForces(); // Always apply forces, including autopilot
+        this.spacecraftController.applyForces();
     }
 
     getThreeObjects() {
@@ -70,235 +58,139 @@ class Spacecraft {
 }
 
 class BasicWorld {
-    constructor(config) {
-        this.dt = 1.0 / 60.0;
-
-        // Create and append canvas
-        const canvas = document.createElement('canvas');
-        canvas.id = 'mainCanvas';
-        document.body.appendChild(canvas);
-
-        // Initialize the renderer with the canvas
-        this.renderer = new WorldRenderer(canvas);
-
-        this.camera = new SceneCamera(this.renderer.renderer, this);
-
-        // Position the camera to ensure it can see the objects
-        this.camera.camera.position.set(0, 5, 10);
-        this.camera.camera.lookAt(0, 0, 0);
-
-        this.lights = new SceneLights(this.camera.scene, this.camera.camera);
-
-        // Add a basic directional light to the scene
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5, 10, 7.5);
-        this.camera.scene.add(light);
-
-        // Add ambient light to the scene
-        const ambientLight = new THREE.AmbientLight(0x404040);
-        this.camera.scene.add(ambientLight);
-
-        this.world = new CANNON.World();
-        this.world.gravity.set(0, 0, 0);
-
-        // add grid helper
-        const gridHelper = new THREE.GridHelper(100, 100);
-        this.camera.scene.add(gridHelper);
-
+    constructor(config = {}, canvas) {
+        this.config = config;
+        this.canvas = canvas;
         this.spacecraft = [];
-        this.spacecraftControllers = [];
 
-        config.initialSpacecraft.forEach(spacecraftConfig => {
-            const initialPosition = new CANNON.Vec3(
-                spacecraftConfig.position.x,
-                spacecraftConfig.position.y,
-                spacecraftConfig.position.z
-            );
-            this.addSpacecraft(initialPosition, spacecraftConfig.width, spacecraftConfig.height, spacecraftConfig.depth, spacecraftConfig.initialConeVisibility, spacecraftConfig.name);
-        });
+        this.initializeWorld();
+        this.initializeScene();
+        this.initializeSpacecraft();
+        this.initializeReactComponents();
+        this.setupEventListeners();
+    }
 
-        this.keysPressed = {};
-        document.addEventListener("keydown", this.handleKeyDown.bind(this), false);
-        document.addEventListener("keyup", this.handleKeyUp.bind(this), false);
-        document.addEventListener('dblclick', this.onDoubleClick.bind(this), false);
+    initializeWorld() {
+        // Initialize Three.js scene
+        this.world = new CANNON.World();
+        this.world.gravity.set(0, 0, 0); // Space has no gravity
+        this.world.broadphase = new CANNON.NaiveBroadphase();
+        this.world.solver.iterations = 7;
 
-        this.cockpit = new Cockpit(this.spacecraft[config.initialFocus].spacecraftController); // Create the cockpit UI
+        // Initialize camera and lights
+        this.camera = new SceneCamera(this.canvas);
+        this.lights = new SceneLights();
 
-        this.controls = new GUIControls(
-            this.spacecraft[config.initialFocus].objects,
-            this.spacecraft[config.initialFocus].rcsVisuals,
-            this.spacecraft[config.initialFocus],
-            this.spacecraft[config.initialFocus].spacecraftController,
-            this.spacecraft[config.initialFocus].helpers
-        );
-        this.setActiveSpacecraft(this.spacecraft[config.initialFocus]); // Set the initial focus as active spacecraft
+        // Initialize renderer
+        this.renderer = new WorldRenderer(this.canvas);
 
-        this.background = new BackgroundLoader(
+        // Initialize background
+        this.backgroundLoader = new BackgroundLoader(
             this.camera.scene,
-            this.renderer.renderer,
-            this.onBackgroundLoadComplete.bind(this),
-            this.onBackgroundLoadProgress.bind(this)
+            () => this.onBackgroundLoadProgress(),
+            () => this.onBackgroundLoadComplete()
         );
-        this.simulateProgress();
 
-        // Debugger
-        this.cannonDebugRenderer = new CannonDebugRenderer(this.camera.scene, this.world);
-        this.handleWindowResize();
-
-        this.currentTarget = this.spacecraft[config.initialFocus].objects.box; // Set initial focus
-        this.currentTargetPosition = null; // Initialize currentTargetPosition
+        // Debug renderer (optional)
+        if (this.config.debug) {
+            this.cannonDebugRenderer = new CannonDebugRenderer(
+                this.camera.scene,
+                this.world
+            );
+        }
     }
 
-    simulateProgress() {
-        let progress = 0;
-        const interval = setInterval(() => {
-            progress += 5; // Increment by 5%
-            if (progress > 95) progress = 95; // Cap progress at 95% to avoid reaching 100% prematurely
-            this.onBackgroundLoadProgress(progress / 100);
-        }, 1000); // Update every second
-    
-        this.onBackgroundLoadComplete = () => {
-            clearInterval(interval); // Stop simulation
-            this.onBackgroundLoadProgress(1); // Jump to 100%
-            setTimeout(this.onBackgroundLoadComplete, 500); // Ensure final update visibility
-        };
-    }
-    
-    onBackgroundLoadProgress(progress) {
-        document.getElementById('loading-progress').style.width = `${progress * 100}%`;
-    }
-    
-    onBackgroundLoadComplete() {
-        const progressBar = document.getElementById('loading-progress');
-        progressBar.style.animation = 'none'; // Stop the animation
-        progressBar.style.width = '100%'; // Instantly set to 100%
-        setTimeout(() => {
-            document.getElementById('loading-bar').style.display = 'none'; // Hide after a delay to show completion
-        }, 500);
-    }
-
-    addSpacecraft(initialPosition, width = 1, height = 1, depth = 2, initialConeVisibility = false, name = 'Spacecraft') {
-        const spacecraft = new Spacecraft(this, initialPosition, width, height, depth, initialConeVisibility, name);
+    initializeSpacecraft() {
+        // Create spacecraft
+        const spacecraft = new Spacecraft(this);
         this.spacecraft.push(spacecraft);
-        this.spacecraftControllers.push(spacecraft.spacecraftController);
+        spacecraft.spacecraftController.isActive = true;
     }
 
-    handleKeyDown(event) {
-        this.keysPressed[event.code] = true;
-        const activeController = this.spacecraftControllers.find(controller => controller.isActive);
-        if (activeController) {
-            activeController.handleKeyDown(event);
-        }
+    initializeReactComponents() {
+        const cockpitContainer = document.createElement('div');
+        cockpitContainer.id = 'cockpit-root';
+        document.body.appendChild(cockpitContainer);
+
+        const root = createRoot(cockpitContainer);
+        const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.isActive);
+        
+        root.render(
+            <Cockpit
+                spacecraft={activeSpacecraft}
+                spacecraftController={activeSpacecraft?.spacecraftController}
+            />
+        );
     }
 
-    handleKeyUp(event) {
-        this.keysPressed[event.code] = false;
-        const activeController = this.spacecraftControllers.find(controller => controller.isActive);
-        if (activeController) {
-            activeController.handleKeyUp(event);
-        }
+    setupEventListeners() {
+        window.addEventListener('resize', () => this.onWindowResize());
     }
 
-    handleWindowResize() {
-        this.camera.camera.aspect = window.innerWidth / window.innerHeight;
-        this.camera.camera.updateProjectionMatrix();
-        this.renderer.renderer.setSize(window.innerWidth, window.innerHeight);
+    onWindowResize() {
+        this.camera.onWindowResize();
+        this.renderer.onWindowResize();
     }
 
     startRenderLoop() {
-        this.stepPhysicsWorld();
-        
-        this.lights.update();
-        this.updateObjects();
-        
-        this.spacecraft.forEach(spacecraft => {
-            spacecraft.update();
-        });
+        const animate = () => {
+            requestAnimationFrame(animate);
+            this.update();
+            this.render();
+        };
+        animate();
+    }
 
-        if (this.controls) {
-            this.controls.updateVelocityDisplays();
-            this.controls.updateAngularVelocityDisplays();
-        }
+    update() {
+        const deltaTime = 1.0 / 60.0;
+        this.world.step(deltaTime);
 
-        // Update the cockpit UI with the active spacecraft
-        const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.isActive);
-        if (activeSpacecraft) {
-            this.cockpit.update(activeSpacecraft);
-        }
+        // Update all spacecraft
+        this.spacecraft.forEach(spacecraft => spacecraft.update());
 
-        this.updateCameraTarget();
+        // Update camera
         this.camera.update();
 
-        // Debugging Render Loop
+        // Update debug renderer if enabled
+        if (this.cannonDebugRenderer) {
+            this.cannonDebugRenderer.update();
+        }
+    }
+
+    render() {
         this.renderer.render(this.camera.scene, this.camera.camera);
-        requestAnimationFrame(this.startRenderLoop.bind(this));
     }
 
-    updateCameraTarget() {
-        if (this.currentTarget && (!this.currentTargetPosition || !this.currentTarget.position.equals(this.currentTargetPosition))) {
-            this.currentTargetPosition = this.currentTarget.position.clone();
-            this.camera.updateOrbitTarget(this.currentTargetPosition);
+    cleanup() {
+        // Clean up Three.js resources
+        this.renderer.dispose();
+        this.camera.dispose();
+        this.lights.dispose();
+
+        // Clean up event listeners
+        window.removeEventListener('resize', () => this.onWindowResize());
+
+        // Clean up GUI if it exists
+        this.controls?.gui.destroy();
+    }
+
+    onBackgroundLoadProgress(progress) {
+        const progressBar = document.getElementById('loading-progress');
+        if (progressBar) {
+            progressBar.style.width = `${progress * 100}%`;
         }
     }
 
-    stepPhysicsWorld() {
-        this.world.step(this.dt);
-    }
-
-    updateObjects() {
-        this.spacecraft.forEach(spacecraft => spacecraft.update());
-    }
-
-    updateConeMeshes(coneMeshes, coneVisibility) {
-        coneMeshes.forEach((coneMesh, index) => {
-            const position = new THREE.Vector3();
-            const quaternion = new THREE.Quaternion();
-            coneMesh.getWorldPosition(position);
-            coneMesh.getWorldQuaternion(quaternion);
-            coneMesh.visible = coneVisibility[index];
-        });
-    }
-
-    onDoubleClick(event) {
-        event.preventDefault();
-
-        const mouse = new THREE.Vector2();
-        const rect = this.renderer.renderer.domElement.getBoundingClientRect();
-        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(mouse, this.camera.camera);
-
-        const clickableObjects = this.spacecraft.flatMap(spacecraft => spacecraft.getThreeObjects());
-        const intersects = raycaster.intersectObjects(clickableObjects, true);
-
-        if (intersects.length > 0) {
-            const newTarget = intersects[0].object;
-            this.camera.focusOnObject(newTarget);
-            this.currentTarget = newTarget;
-            const spacecraft = this.spacecraft.find(spacecraft => spacecraft.objects.box === newTarget);
-            if (spacecraft) {
-                this.setActiveSpacecraft(spacecraft);
-            }
+    onBackgroundLoadComplete() {
+        const progressBar = document.getElementById('loading-progress');
+        const loadingBar = document.getElementById('loading-bar');
+        if (progressBar && loadingBar) {
+            progressBar.style.width = '100%';
+            setTimeout(() => {
+                loadingBar.style.display = 'none';
+            }, 500);
         }
-    }
-
-    setActiveSpacecraft(spacecraft) {
-        this.spacecraftControllers.forEach(controller => {
-            controller.isActive = controller.spacecraft === spacecraft;
-        });
-
-        if (this.controls) {
-            this.controls.gui.destroy();
-        }
-
-        const activeController = this.spacecraftControllers.find(controller => controller.isActive);
-        if (activeController) {
-            this.controls = new GUIControls(spacecraft.objects, spacecraft.rcsVisuals, spacecraft, activeController, spacecraft.helpers);
-        }
-
-        // Update the cockpit with the new active spacecraft
-        this.cockpit.update(spacecraft);
     }
 }
+
+export { BasicWorld, Spacecraft };

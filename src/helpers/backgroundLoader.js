@@ -1,44 +1,31 @@
 import * as THREE from 'three';
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
-import panoramaImage from '../images/spacePanorama-caspianSea.exr';
 
 export class BackgroundLoader {
-    constructor(scene, renderer, onLoadComplete, onProgress) {
+    constructor(scene, renderer, onLoadComplete) {
         this.scene = scene;
         this.renderer = renderer;
         this.onLoadComplete = onLoadComplete;
-        this.onProgress = onProgress;
         this.loadBackground();
     }
 
     loadBackground() {
-        const manager = new THREE.LoadingManager();
-        manager.onStart = () => console.log('Loading started');
-        manager.onLoad = () => {
-            console.log('Loading complete');
-            if (this.onLoadComplete) {
-                this.onLoadComplete();
-            }
-        };
-        manager.onProgress = (url, itemsLoaded, itemsTotal) => {
-            const progress = itemsLoaded / itemsTotal;
-            console.log('Loading progress:', progress * 100, '%');
-            if (this.onProgress) {
-                this.onProgress(progress);
-            }
-        };
+        // Use the default loading manager
+        const loader = new EXRLoader();
         
-
-        new EXRLoader(manager).load(panoramaImage, (texture) => {
-            const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
-            pmremGenerator.compileEquirectangularShader();
-            const envMap = pmremGenerator.fromEquirectangular(texture).texture;
-            pmremGenerator.dispose();
-
-            this.scene.environment = envMap;
-            this.scene.background = envMap;
-        }, undefined, (error) => {
-            console.error('An error occurred while loading the EXR background:', error);
-        });
+        loader.load(
+            '/images/panoramas/spacePanorama-caspianSea.exr',
+            (texture) => {
+                texture.mapping = THREE.EquirectangularReflectionMapping;
+                this.scene.background = texture;
+                this.scene.environment = texture;
+                this.onLoadComplete?.();
+            },
+            undefined, // Progress is handled by DefaultLoadingManager
+            (error) => {
+                console.error('Error loading background:', error);
+                this.onLoadComplete?.();
+            }
+        );
     }
 }
