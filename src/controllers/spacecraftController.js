@@ -4,12 +4,20 @@
 
 import * as CANNON from 'cannon-es';
 import { applyQuaternionToVector } from '../utils/utils';
-import { Autopilot } from './autopilot';
+import { Autopilot } from './autopilot/Autopilot';
 
 export class SpacecraftController {
     constructor(spacecraft, currentTarget, helpers) {
         this.isActive = false; // so we can enable/disable input handling
         this.initializeProperties(spacecraft, currentTarget, helpers);
+    }
+
+    getIsActive() {
+        return this.isActive;
+    }
+
+    setIsActive(value) {
+        this.isActive = value;
     }
 
     initializeProperties(spacecraft, currentTarget, helpers) {

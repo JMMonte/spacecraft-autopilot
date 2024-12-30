@@ -21,38 +21,26 @@ export function DockingWindow({ spacecraft, world, controller, version }) {
 
     // Get the world instance from the spacecraft
     const worldInstance = spacecraft?.world;
-
-    // Debug logging
-    console.log('DockingWindow: Rendering with version:', version);
-    console.log('DockingWindow: World instance:', worldInstance ? 'exists' : 'undefined');
-    console.log('DockingWindow: Current target:', worldInstance?.currentTarget ? 'exists' : 'undefined');
-    console.log('DockingWindow: Controller target:', controller?.autopilot?.targetObject?.name);
-    console.log('DockingWindow: Controller target point:', controller?.autopilot?.targetPoint);
-
     // Load settings when active spacecraft changes or when autopilot target changes
     useEffect(() => {
-        console.log('DockingWindow: Settings effect triggered');
-        console.log('DockingWindow: Spacecraft name:', spacecraft?.name);
-        console.log('DockingWindow: Autopilot target point:', controller?.autopilot?.targetPoint);
-        
         if (spacecraft?.name && controller?.autopilot) {
             // Get the target port from autopilot if it's targeting a docking port
             const targetPoint = controller.autopilot.targetPoint;
             const isTargetingDockingPort = targetPoint === 'front' || targetPoint === 'back';
-            
-            console.log('DockingWindow: Target point:', targetPoint);
-            console.log('DockingWindow: Is targeting docking port:', isTargetingDockingPort);
-            
+
+            // Load saved settings or use defaults
             const savedSettings = portSettings[spacecraft.name] || {
                 our: 'front',
-                target: isTargetingDockingPort ? targetPoint : 'back'
+                target: 'back'
             };
+
+            // Update selected ports
+            setSelectedPorts({
+                our: savedSettings.our,
+                target: isTargetingDockingPort ? targetPoint : savedSettings.target
+            });
             
-            setSelectedPorts(prev => ({
-                ...prev,
-                target: isTargetingDockingPort ? targetPoint : prev.target
-            }));
-            
+            // Save settings if we're targeting a docking port
             if (isTargetingDockingPort) {
                 saveSettings({
                     ...savedSettings,
@@ -66,33 +54,36 @@ export function DockingWindow({ spacecraft, world, controller, version }) {
     const saveSettings = (newPorts) => {
         if (!spacecraft?.name) return;
         
-        setPortSettings(prev => ({
-            ...prev,
+        const updatedSettings = {
+            ...portSettings,
             [spacecraft.name]: newPorts
-        }));
+        };
+        setPortSettings(updatedSettings);
+        
+        // If we have a target, update the autopilot target point
+        if (targetSpacecraft && controller?.autopilot) {
+            controller.autopilot.setTargetObject(targetSpacecraft, newPorts.target);
+        }
     };
+
+    // Get target spacecraft from autopilot if available
+    const targetSpacecraft = controller?.autopilot?.targetObject;
 
     // Update docking information
     useEffect(() => {
-        if (!spacecraft || !worldInstance) return;
+        if (!spacecraft) return;
 
         const updateInterval = setInterval(() => {
-            const controller = spacecraft.dockingController;
-            // Update currentTarget from autopilot if available
-            const currentTarget = controller?.autopilot?.targetObject;
-            const target = currentTarget ? 
-                worldInstance.spacecraft.find(s => 
-                    s.objects.box.uuid === currentTarget.objects.box.uuid && 
-                    s !== spacecraft
-                ) : 
-                null;
+            const dockingController = spacecraft.dockingController;
             
-            console.log('DockingWindow: Update interval - Current target:', currentTarget?.name);
-            console.log('DockingWindow: Update interval - Found target:', target?.name);
+            // Get target either from docking controller or autopilot
+            const target = dockingController?.isDocking() 
+                ? dockingController.targetSpacecraft 
+                : controller?.autopilot?.targetObject;
             
             if (!target) {
                 setDockingInfo({
-                    phase: 'idle',
+                    phase: dockingController?.getDockingPhase() || 'idle',
                     range: 0,
                     closingSpeed: 0,
                     alignmentError: 0,
@@ -102,20 +93,17 @@ export function DockingWindow({ spacecraft, world, controller, version }) {
             }
 
             // Calculate relative position and velocity
-            const ourPos = spacecraft.objects.boxBody.position;
-            const targetPos = target.objects.boxBody.position;
-            const ourVel = spacecraft.objects.boxBody.velocity;
-            const targetVel = target.objects.boxBody.velocity;
+            const ourPos = new THREE.Vector3().copy(spacecraft.objects.boxBody.position);
+            const targetPos = new THREE.Vector3().copy(target.objects.boxBody.position);
+            const ourVel = new THREE.Vector3().copy(spacecraft.objects.boxBody.velocity);
+            const targetVel = new THREE.Vector3().copy(target.objects.boxBody.velocity);
 
-            // Get positions based on docking state
-            let ourRefPos, targetRefPos;
-            if (controller.isDocking()) {
-                ourRefPos = spacecraft.getDockingPortWorldPosition(controller.ourPortId);
-                targetRefPos = target.getDockingPortWorldPosition(controller.targetPortId);
-            } else {
-                ourRefPos = new THREE.Vector3().copy(ourPos);
-                targetRefPos = new THREE.Vector3().copy(targetPos);
-            }
+            // Get positions based on active ports (either from docking controller or selected)
+            const ourPortId = dockingController?.isDocking() ? dockingController.ourPortId : selectedPorts.our;
+            const targetPortId = dockingController?.isDocking() ? dockingController.targetPortId : selectedPorts.target;
+            
+            const ourRefPos = spacecraft.getDockingPortWorldPosition(ourPortId);
+            const targetRefPos = target.getDockingPortWorldPosition(targetPortId);
 
             // Calculate range and closing speed
             const range = ourRefPos.distanceTo(targetRefPos);
@@ -123,148 +111,312 @@ export function DockingWindow({ spacecraft, world, controller, version }) {
             const rangeVector = new THREE.Vector3().subVectors(targetRefPos, ourRefPos).normalize();
             const closingSpeed = relativeVel.dot(rangeVector);
 
-            // Calculate alignment errors if in docking mode
-            let alignmentError = 0;
-            let portAlignmentError = 0;
-            
-            if (controller.isDocking()) {
-                const ourPortDir = spacecraft.getDockingPortWorldDirection(controller.ourPortId);
-                const targetPortDir = target.getDockingPortWorldDirection(controller.targetPortId);
-                
-                // Port alignment error (angle between port directions)
-                portAlignmentError = Math.acos(ourPortDir.dot(targetPortDir.negate()));
-                
-                // General alignment error (how well we're pointed at the target)
-                const desiredDir = new THREE.Vector3().subVectors(targetRefPos, ourRefPos).normalize();
-                alignmentError = Math.acos(ourPortDir.dot(desiredDir));
-            }
-
-            setDockingInfo({
-                phase: controller.getDockingPhase(),
+            // Create base info object
+            const newInfo = {
+                phase: dockingController?.getDockingPhase() || 'idle',
                 range: range,
                 closingSpeed: closingSpeed,
-                alignmentError: THREE.MathUtils.radToDeg(alignmentError),
-                portAlignmentError: THREE.MathUtils.radToDeg(portAlignmentError)
-            });
+                alignmentError: 0,
+                portAlignmentError: 0,
+                rollAlignmentError: 0,
+                pitchError: 0,
+                yawError: 0,
+                lateralOffset: { x: 0, y: 0 }
+            };
+
+            // Calculate alignment errors
+            const ourPortDir = spacecraft.getDockingPortWorldDirection(ourPortId);
+            const targetPortDir = target.getDockingPortWorldDirection(targetPortId);
+            
+            // Port alignment error (angle between port directions)
+            const portAlignmentError = Math.acos(Math.min(1, Math.max(-1, ourPortDir.dot(targetPortDir.negate()))));
+            
+            // Calculate relative position vector
+            const relativePos = new THREE.Vector3().subVectors(targetRefPos, ourRefPos);
+            const distance = relativePos.length();
+            const desiredDir = relativePos.clone().normalize();
+
+            // Calculate pitch and yaw errors
+            // Project onto vertical plane for pitch
+            const pitchPlaneNormal = new THREE.Vector3(1, 0, 0); // X-axis for pitch
+            const pitchProjected = new THREE.Vector3().copy(ourPortDir)
+                .projectOnPlane(pitchPlaneNormal).normalize();
+            const targetPitchProjected = new THREE.Vector3().copy(targetPortDir)
+                .projectOnPlane(pitchPlaneNormal).normalize();
+            const pitchError = Math.acos(Math.min(1, Math.max(-1, pitchProjected.dot(targetPitchProjected))));
+            
+            // Project onto horizontal plane for yaw
+            const yawPlaneNormal = new THREE.Vector3(0, 1, 0); // Y-axis for yaw
+            const yawProjected = new THREE.Vector3().copy(ourPortDir)
+                .projectOnPlane(yawPlaneNormal).normalize();
+            const targetYawProjected = new THREE.Vector3().copy(targetPortDir)
+                .projectOnPlane(yawPlaneNormal).normalize();
+            const yawError = Math.acos(Math.min(1, Math.max(-1, yawProjected.dot(targetYawProjected))));
+
+            // Calculate lateral offset (perpendicular to target port direction)
+            const lateralOffset = new THREE.Vector3().copy(relativePos);
+            const alongPort = targetPortDir.multiplyScalar(relativePos.dot(targetPortDir));
+            lateralOffset.sub(alongPort);
+
+            // Calculate roll alignment error using right vectors
+            const worldUp = new THREE.Vector3(0, 1, 0);
+            const ourRight = new THREE.Vector3().crossVectors(ourPortDir, worldUp).normalize();
+            const targetRight = new THREE.Vector3().crossVectors(targetPortDir, worldUp).normalize();
+            const rollAlignmentError = Math.acos(Math.min(1, Math.max(-1, ourRight.dot(targetRight))));
+
+            // Update info with calculated values
+            newInfo.portAlignmentError = THREE.MathUtils.radToDeg(portAlignmentError);
+            newInfo.rollAlignmentError = THREE.MathUtils.radToDeg(rollAlignmentError);
+            newInfo.pitchError = THREE.MathUtils.radToDeg(pitchError) * Math.sign(ourPortDir.y - targetPortDir.y);
+            newInfo.yawError = THREE.MathUtils.radToDeg(yawError) * Math.sign(ourPortDir.x - targetPortDir.x);
+            newInfo.lateralOffset = {
+                x: lateralOffset.x,
+                y: lateralOffset.y
+            };
+
+            // Calculate relative motion in perpendicular plane
+            const relativeMotionPerp = new THREE.Vector3().copy(relativeVel);
+            // Remove velocity component along port direction
+            relativeMotionPerp.sub(ourPortDir.multiplyScalar(relativeMotionPerp.dot(ourPortDir)));
+            newInfo.relativeMotionPerp = relativeMotionPerp;
+
+            setDockingInfo(newInfo);
 
             // Draw docking visualization
             drawDockingDisplay(
                 canvasRef.current, 
-                range,
-                closingSpeed,
-                alignmentError,
-                portAlignmentError
+                newInfo.range,
+                newInfo.closingSpeed,
+                newInfo.alignmentError,
+                newInfo.portAlignmentError,
+                newInfo.rollAlignmentError,
+                newInfo.relativeMotionPerp
             );
 
-        }, 1000/30); // 30fps update rate
+        }, 1000/60); // 60fps update rate
 
         return () => clearInterval(updateInterval);
-    }, [spacecraft, worldInstance]);
+    }, [spacecraft, controller?.autopilot, selectedPorts]); // Add dependencies
+
+    // Draw vertical bar with logarithmic scale and arrows for out of bounds
+    const drawVerticalBar = (ctx, x, y, height, value, maxValue, label, unit = '') => {
+        // Draw bar background
+        ctx.strokeStyle = '#003300';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x, y + height);
+        ctx.stroke();
+
+        // Calculate logarithmic position
+        const logMax = Math.log10(maxValue + 1);
+        const logValue = Math.log10(Math.abs(value) + 1);
+        let normalizedPos = (logValue / logMax);
+        if (value < 0) normalizedPos = -normalizedPos;
+        
+        // Clamp position to bar limits
+        const clampedPos = Math.max(-1, Math.min(1, normalizedPos));
+        const barY = y + height/2 - (clampedPos * height/2);
+
+        // Draw indicator
+        ctx.fillStyle = '#00ff00';
+        if (Math.abs(value) > maxValue) {
+            // Draw arrow for out of bounds
+            const arrowSize = 5;
+            ctx.beginPath();
+            if (value > maxValue) {
+                ctx.moveTo(x - arrowSize, y + arrowSize);
+                ctx.lineTo(x, y);
+                ctx.lineTo(x + arrowSize, y + arrowSize);
+            } else {
+                ctx.moveTo(x - arrowSize, y + height - arrowSize);
+                ctx.lineTo(x, y + height);
+                ctx.lineTo(x + arrowSize, y + height - arrowSize);
+            }
+            ctx.stroke();
+        } else {
+            // Draw normal indicator
+            ctx.fillRect(x - 5, barY - 2, 10, 4);
+        }
+
+        // Draw label and value
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(label, x - 10, y - 8);
+        ctx.textAlign = 'left';
+        ctx.fillText(`${value.toFixed(1)}${unit}`, x + 10, y - 8);
+
+        // Draw scale marks with logarithmic spacing
+        ctx.textAlign = 'left';
+        const scalePoints = [-maxValue, -maxValue/2, 0, maxValue/2, maxValue];
+        scalePoints.forEach(point => {
+            const logPoint = Math.log10(Math.abs(point) + 1);
+            const normalizedPoint = point < 0 ? -logPoint/logMax : logPoint/logMax;
+            const scaleY = y + height/2 - (normalizedPoint * height/2);
+            ctx.fillText(point.toFixed(1), x + 12, scaleY + 4);
+            ctx.fillRect(x - 4, scaleY, 8, 1);
+        });
+    };
 
     // Draw docking visualization
-    const drawDockingDisplay = (canvas, range, closingSpeed, alignmentError, portAlignmentError) => {
+    const drawDockingDisplay = (canvas, range, closingSpeed, alignmentError, portAlignmentError, rollAlignmentError, relativeMotionPerp) => {
         if (!canvas) return;
         
         const ctx = canvas.getContext('2d');
         const width = canvas.width;
         const height = canvas.height;
         
-        // Clear canvas
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        // Clear canvas with a solid black background
+        ctx.fillStyle = 'rgb(0, 0, 0)';
         ctx.fillRect(0, 0, width, height);
-        
-        // Draw grid
-        ctx.strokeStyle = '#1a1a1a';
-        ctx.lineWidth = 1;
-        const gridSize = 20;
-        for (let x = 0; x <= width; x += gridSize) {
+
+        // Draw title bar
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '14px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('APPR/DOCK', 10, 20);
+        ctx.fillText('IDS', 100, 20);
+        ctx.fillText(`NAV2 ${(137.40).toFixed(2)}kHz`, width - 150, 20);
+
+        // Draw center radar display
+        const centerX = width/2;
+        const centerY = height/2;
+        const radarRadius = 120;
+
+        // Draw radar circles
+        ctx.strokeStyle = '#003300';
+        for (let r = radarRadius/3; r <= radarRadius; r += radarRadius/3) {
             ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, height);
+            ctx.arc(centerX, centerY, r, 0, Math.PI * 2);
             ctx.stroke();
         }
-        for (let y = 0; y <= height; y += gridSize) {
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(width, y);
-            ctx.stroke();
+
+        // Draw radar crosshairs
+        ctx.beginPath();
+        ctx.moveTo(centerX - radarRadius, centerY);
+        ctx.lineTo(centerX + radarRadius, centerY);
+        ctx.moveTo(centerX, centerY - radarRadius);
+        ctx.lineTo(centerX, centerY + radarRadius);
+        ctx.stroke();
+
+        // Draw target marker with roll indicator
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 2;
+        
+        // Center the target marker in the radar display
+        const targetX = centerX;
+        const targetY = centerY;
+        
+        // Draw target triangle
+        const triangleSize = 12;
+        ctx.beginPath();
+        ctx.moveTo(targetX, targetY - triangleSize);
+        ctx.lineTo(targetX + triangleSize, targetY + triangleSize);
+        ctx.lineTo(targetX - triangleSize, targetY + triangleSize);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Draw roll alignment indicator (larger circle)
+        const rollRadius = triangleSize * 4;
+        ctx.beginPath();
+        ctx.arc(targetX, targetY, rollRadius, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Draw roll alignment marker (larger)
+        const rollMarkerSize = 6;
+        const rollMarkerX = targetX + Math.cos(rollAlignmentError * Math.PI/180) * rollRadius;
+        const rollMarkerY = targetY + Math.sin(rollAlignmentError * Math.PI/180) * rollRadius;
+        ctx.beginPath();
+        ctx.arc(rollMarkerX, rollMarkerY, rollMarkerSize, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw port alignment vector (showing misalignment with target port)
+        const alignmentVector = radarRadius * 0.8;
+        const alignX = targetX + Math.sin(portAlignmentError * Math.PI/180) * alignmentVector;
+        const alignY = targetY - Math.cos(portAlignmentError * Math.PI/180) * alignmentVector;
+        
+        ctx.beginPath();
+        ctx.moveTo(targetX, targetY);
+        ctx.lineTo(alignX, alignY);
+        ctx.stroke();
+
+        // Draw relative motion vector
+        if (relativeMotionPerp) {
+            const motionScale = 40;
+            const motionMagnitude = relativeMotionPerp.length();
+            if (motionMagnitude > 0.01) {
+                const normalizedMotion = relativeMotionPerp.clone().normalize();
+                ctx.strokeStyle = '#ffff00';
+                ctx.beginPath();
+                ctx.moveTo(targetX, targetY);
+                ctx.lineTo(
+                    targetX + normalizedMotion.x * motionScale * motionMagnitude,
+                    targetY + normalizedMotion.y * motionScale * motionMagnitude
+                );
+                ctx.stroke();
+            }
         }
 
-        // Center of the display
-        const centerX = width / 2;
-        const centerY = height / 2;
+        // Draw vertical bars with logarithmic scales
+        const barHeight = height - 100;
+        const startY = 50;
 
-        // Draw target marker (center circle)
-        ctx.strokeStyle = '#00ff00';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, 5, 0, Math.PI * 2);
-        ctx.stroke();
+        // Range bar (logarithmic from 0.1m to 100m)
+        drawVerticalBar(ctx, width - 40, startY, barHeight, range, 100, 'DST', 'm');
 
-        // Draw approach vector
-        const vectorLength = Math.min(range * 10, width/4);
-        const vectorAngle = alignmentError * Math.PI / 180;
-        
-        ctx.strokeStyle = '#00ff00';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(centerX, centerY);
-        ctx.lineTo(
-            centerX + Math.cos(vectorAngle) * vectorLength,
-            centerY + Math.sin(vectorAngle) * vectorLength
-        );
-        ctx.stroke();
+        // Velocity bar (logarithmic from -1m/s to 1m/s)
+        drawVerticalBar(ctx, width - 120, startY, barHeight, closingSpeed, 1, 'CVEL', 'm/s');
 
-        // Draw velocity vector
-        const velScale = 50;
-        const velLength = Math.abs(closingSpeed) * velScale;
-        ctx.strokeStyle = closingSpeed < 0 ? '#00ff00' : '#ff0000';
-        ctx.beginPath();
-        ctx.moveTo(width - 40, height/2);
-        ctx.lineTo(width - 40, height/2 - velLength);
-        ctx.stroke();
-
-        // Draw alignment indicator
-        const alignScale = 2;
-        const alignOffset = portAlignmentError * alignScale;
-        ctx.strokeStyle = alignOffset < 10 ? '#00ff00' : '#ff0000';
-        ctx.beginPath();
-        ctx.moveTo(20, height/2);
-        ctx.lineTo(20, height/2 - alignOffset);
-        ctx.stroke();
+        // Port alignment bar (logarithmic from -45° to 45°)
+        drawVerticalBar(ctx, 40, startY, barHeight, portAlignmentError, 45, 'PERR', '°');
     };
 
     // Handle starting/stopping docking
     const handleDock = () => {
-        const controller = spacecraft.dockingController;
-        if (controller.isDocking()) {
-            controller.cancelDocking();
-        } else if (worldInstance?.currentTarget) {
-            const targetSpacecraft = worldInstance.spacecraft.find(
-                s => s.objects.box.uuid === worldInstance.currentTarget.uuid && 
-                    s !== spacecraft
+        if (!spacecraft || !targetSpacecraft) return;
+        
+        const dockingController = spacecraft.dockingController;
+        if (!dockingController) {
+            console.warn('No docking controller found on spacecraft');
+            return;
+        }
+
+        if (dockingController.isDocking()) {
+            dockingController.cancelDocking();
+        } else {
+            console.log('Starting docking with ports:', selectedPorts.our, selectedPorts.target);
+            dockingController.startDocking(
+                targetSpacecraft,
+                selectedPorts.our,
+                selectedPorts.target
             );
-            if (targetSpacecraft) {
-                controller.startDocking(
-                    targetSpacecraft,
-                    selectedPorts.our,
-                    selectedPorts.target
-                );
-            }
         }
     };
 
-    // Get target spacecraft from autopilot if available
-    const targetSpacecraft = controller?.autopilot?.targetObject;
-
     // Check port availability
     const isPortAvailable = (craftId, portId) => {
-        if (!spacecraft || !targetSpacecraft || spacecraft === targetSpacecraft) return false;
+        // Basic validation
+        if (!spacecraft || !targetSpacecraft || spacecraft === targetSpacecraft) {
+            return false;
+        }
         
+        // Get the correct spacecraft
         const craft = craftId === 'our' ? spacecraft : targetSpacecraft;
-        if (!craft.dockingPorts || !craft.dockingPorts[portId]) return false;
         
-        return !craft.dockingPorts[portId].isOccupied;
+        // Check if the port exists and is available
+        if (!craft.dockingPorts || !craft.dockingPorts[portId]) {
+            console.warn(`Port ${portId} not found on ${craftId === 'our' ? 'our' : 'target'} spacecraft`);
+            return false;
+        }
+        
+        // Check if the port is occupied
+        const isOccupied = craft.dockingPorts[portId].isOccupied;
+        if (isOccupied) {
+            console.log(`Port ${portId} on ${craftId === 'our' ? 'our' : 'target'} spacecraft is occupied`);
+        }
+        
+        return !isOccupied;
     };
 
     // Separate port selectors state
@@ -293,19 +445,25 @@ export function DockingWindow({ spacecraft, world, controller, version }) {
 
     return (
         <div className="flex flex-col gap-2 p-2 font-mono text-xs">
-            {/* Target selection status */}
-            {!targetSpacecraft && (
-                <div className="text-white/50 italic text-center bg-black/40 p-2 rounded border border-white/10">
-                    Select target in Autopilot MFD
-                </div>
-            )}
+            {/* Status information */}
+            <div className="grid grid-cols-3 gap-2 text-cyan-400">
+                <div>Phase: {dockingInfo.phase}</div>
+                <div>Range: {dockingInfo.range.toFixed(2)}m</div>
+                <div>Speed: {dockingInfo.closingSpeed.toFixed(2)}m/s</div>
+                <div>Pitch: {dockingInfo.pitchError?.toFixed(1)}°</div>
+                <div>Yaw: {dockingInfo.yawError?.toFixed(1)}°</div>
+                <div>Roll: {dockingInfo.rollAlignmentError?.toFixed(1)}°</div>
+                <div>X-off: {dockingInfo.lateralOffset?.x.toFixed(2)}m</div>
+                <div>Y-off: {dockingInfo.lateralOffset?.y.toFixed(2)}m</div>
+                <div>PERR: {dockingInfo.portAlignmentError?.toFixed(1)}°</div>
+            </div>
 
             {/* Docking visualization */}
             <canvas 
                 ref={canvasRef}
-                width={300}
-                height={200}
-                className="bg-black/80 border border-white/20 rounded"
+                width={400}
+                height={300}
+                className="bg-black border border-white/20 rounded"
             />
 
             {/* Port selection */}
@@ -393,14 +551,16 @@ export function DockingWindow({ spacecraft, world, controller, version }) {
                             ? 'bg-red-500/30 hover:bg-red-500/50 border-red-500/50'
                             : 'bg-cyan-500/30 hover:bg-cyan-500/50 border-cyan-500/50'
                     } border transition-colors duration-200 ${
-                        (!worldInstance?.currentTarget || !isPortAvailable('our', selectedPorts.our) || !isPortAvailable('target', selectedPorts.target))
+                        (!spacecraft?.dockingController?.isDocking() && 
+                         (!targetSpacecraft || !isPortAvailable('our', selectedPorts.our) || !isPortAvailable('target', selectedPorts.target)))
                         ? 'opacity-50 cursor-not-allowed'
                         : ''
                     }`}
                     onClick={handleDock}
-                    disabled={!worldInstance?.currentTarget || 
-                        !isPortAvailable('our', selectedPorts.our) || 
-                        !isPortAvailable('target', selectedPorts.target)}
+                    disabled={!spacecraft?.dockingController?.isDocking() && 
+                        (!targetSpacecraft || 
+                         !isPortAvailable('our', selectedPorts.our) || 
+                         !isPortAvailable('target', selectedPorts.target))}
                 >
                     {spacecraft?.dockingController?.isDocking() ? 'Cancel Docking' : 'Start Docking'}
                 </button>

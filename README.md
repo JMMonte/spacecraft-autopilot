@@ -20,24 +20,28 @@ A Three.js-based space simulator with realistic physics and an autopilot system.
 ### Installation
 
 1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/space-simulator.git
-cd space-simulator
-```
+
+    ```bash
+    git clone https://github.com/yourusername/space-simulator.git
+    cd space-simulator
+    ```
 
 2. Install dependencies:
-```bash
-npm install
-```
+
+    ```bash
+    npm install
+    ```
 
 3. Start the development server:
-```bash
-npm run dev
-```
+
+    ```bash
+    npm run dev
+    ```
 
 ## Controls
 
 ### Manual Control
+
 - W/S: Forward/Backward thrust
 - A/D: Left/Right thrust
 - Q/E: Up/Down thrust
@@ -47,6 +51,7 @@ npm run dev
 - Space: Emergency stop
 
 ### Autopilot Modes
+
 - Cancel & Align: Stops rotation and aligns with the current orientation
 - Cancel Rotation: Stops all rotational movement
 - Point to Position: Points the spacecraft towards a target position
@@ -55,7 +60,7 @@ npm run dev
 
 ## Project Structure
 
-```
+```plaintext
 space-simulator/
 ├── public/
 │   ├── images/
