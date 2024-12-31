@@ -1,0 +1,21 @@
+{
+    "initialSpacecraft": [
+        {
+            "name": "Alpha",
+            "position": { "x": 0, "y": 0, "z": 2 },
+            "width": 1,
+            "height": 1,
+            "depth": 2,
+            "initialConeVisibility": false
+        },
+        {
+            "name": "Bravo",
+            "position": { "x": 2, "y": 2, "z": 2 },
+            "width": 1,
+            "height": 1,
+            "depth": 1,
+            "initialConeVisibility": false
+        }
+    ],
+    "initialFocus": 0
+}

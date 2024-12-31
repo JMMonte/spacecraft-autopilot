@@ -1,0 +1,7 @@
+node_modules/
+.vscode/
+.DS_Store
+dist/images/
+venv/
+compress_system.py
+compress.pynode_modules*

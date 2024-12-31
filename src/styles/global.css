@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles that can't be handled by Tailwind */
+@layer base {
+  /* Range input thumb */
+  input[type="range"]::-webkit-slider-thumb {
+    @apply appearance-none w-3 h-3 rounded-full bg-cyan-300/90 cursor-pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    @apply w-3 h-3 rounded-full bg-cyan-300/90 cursor-pointer border-0;
+  }
+  input[type="range"]::-ms-thumb {
+    @apply w-3 h-3 rounded-full bg-cyan-300/90 cursor-pointer;
+  }
+
+  /* Range input track */
+  input[type="range"]::-webkit-slider-runnable-track {
+    @apply bg-white/20 rounded-full;
+  }
+  input[type="range"]::-moz-range-track {
+    @apply bg-white/20 rounded-full;
+  }
+  input[type="range"]::-ms-track {
+    @apply bg-white/20 rounded-full;
+  }
+} 
