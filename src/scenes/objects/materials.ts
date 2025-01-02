@@ -13,7 +13,7 @@ export class MaterialManager {
         const defaultProperties: { [key: string]: THREE.MeshPhysicalMaterialParameters } = {
             blue: { color: 0x0066cc, metalness: 0.8, roughness: 0.2 },
             gold: { color: 0xffd700, metalness: 0.8, roughness: 0.2 },
-            transparent: { transparent: true, opacity: 0.5, color: 0xffffff },
+            transparent: { transparent: true, opacity: 0.0, color: 0xffffff },
             truss: { 
                 color: 'silver', 
                 metalness: 1.0, 

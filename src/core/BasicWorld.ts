@@ -240,18 +240,55 @@ export class BasicWorld {
         this.onLoadStatus('Ready');
     }
 
+    private isPositionOverlapping(position: CANNON.Vec3, width: number, height: number, depth: number): boolean {
+        // Check if the new position would overlap with any existing spacecraft
+        // Add a small buffer distance between spacecraft
+        const buffer = 0.5;
+        
+        for (const existingSpacecraft of this.spacecraft) {
+            const existingPos = existingSpacecraft.objects.box.position;
+            const existingDimensions = existingSpacecraft.getMainBodyDimensions();
+            
+            // Check if boxes overlap in all dimensions
+            if (Math.abs(position.x - existingPos.x) < (width + existingDimensions.x) / 2 + buffer &&
+                Math.abs(position.y - existingPos.y) < (height + existingDimensions.y) / 2 + buffer &&
+                Math.abs(position.z - existingPos.z) < (depth + existingDimensions.z) / 2 + buffer) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public createNewSpacecraft(): Spacecraft {
-        // Create a random position near the origin
-        const randomPosition = new CANNON.Vec3(
-            (Math.random() - 0.5) * 10,  // x between -5 and 5
-            (Math.random() - 0.5) * 10,  // y between -5 and 5
-            Math.abs(Math.random() * 5) + 2  // z between 2 and 7 (always positive)
-        );
+        const maxAttempts = 50;
+        let attempt = 0;
+        let randomPosition: CANNON.Vec3;
+        const width = 1, height = 1, depth = 2;
+        const defaultRange = 20; // Increased from 10 and made symmetric
+
+        // Keep trying new positions until we find one that doesn't overlap
+        do {
+            randomPosition = new CANNON.Vec3(
+                (Math.random() - 0.5) * defaultRange,  // x between -10 and 10
+                (Math.random() - 0.5) * defaultRange,  // y between -10 and 10
+                (Math.random() - 0.5) * defaultRange   // z also between -10 and 10, no longer forcing positive
+            );
+            attempt++;
+
+            // If we can't find a non-overlapping position after many attempts,
+            // gradually increase the placement area
+            if (attempt > maxAttempts) {
+                const scale = 1 + (attempt - maxAttempts) / 10;
+                randomPosition.x *= scale;
+                randomPosition.y *= scale;
+                randomPosition.z *= scale;
+            }
+        } while (this.isPositionOverlapping(randomPosition, width, height, depth) && attempt < maxAttempts * 2);
 
         console.log('Creating new spacecraft at position:', randomPosition);
         const newSpacecraft = this.addSpacecraft(
             randomPosition,
-            1, 1, 2,
+            width, height, depth,
             false,
             `Spacecraft ${this.spacecraft.length + 1}`
         );

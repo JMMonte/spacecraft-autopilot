@@ -36,6 +36,7 @@ export class Spacecraft {
     public dockingPorts: DockingPorts;
     public name: string;
     public uuid: string;
+    private debugObjects: THREE.Object3D[] = [];
 
     constructor(
         world: CANNON.World,
@@ -63,7 +64,7 @@ export class Spacecraft {
         this.helpers.disableHelpers();
 
         this.spacecraftController = new SpacecraftController(this, this.objects.box, this.helpers);
-        this.dockingController = new DockingController(this as any);
+        this.dockingController = new DockingController(this, scene);
 
         // Initialize helper arrow visibility
         this.showVelocityArrow = false;
@@ -138,7 +139,11 @@ export class Spacecraft {
      * Get the world position of the spacecraft's center
      */
     public getWorldPosition(): THREE.Vector3 {
-        return Spacecraft.toThreeVec3(this.objects.boxBody.position);
+        return new THREE.Vector3(
+            this.objects.boxBody.position.x,
+            this.objects.boxBody.position.y,
+            this.objects.boxBody.position.z
+        );
     }
 
     /**
@@ -310,6 +315,123 @@ export class Spacecraft {
                 direction: direction
             };
         });
+    }
+
+    public getMainBodyDimensions(): CANNON.Vec3 {
+        const shape = this.objects.boxBody.shapes[0] as CANNON.Box;
+        return shape.halfExtents;
+    }
+
+    public getFullDimensions(): CANNON.Vec3 {
+        const mainBody = this.getMainBodyDimensions();
+        const portDepth = this.objects.dockingPortDepth || 0.3;
+        const portLength = this.objects.dockingPortLength || 0.1;
+        const extraDepth = portDepth + portLength;
+
+        return new CANNON.Vec3(
+            mainBody.x,
+            mainBody.y,
+            mainBody.z + extraDepth // Add docking port depth to each end
+        );
+    }
+
+    public getPortDimensions(): CANNON.Vec3 {
+        return new CANNON.Vec3(
+            this.objects.dockingPortRadius || 0.3,
+            this.objects.dockingPortRadius || 0.3,
+            this.objects.dockingPortLength || 0.1
+        );
+    }
+
+    public getPortOffset(portId: keyof DockingPorts): number {
+        const boxDepth = this.objects.boxDepth;
+        const dockingPortDepth = this.objects.dockingPortDepth || 0.3;
+        
+        return portId === 'front' ? 
+            boxDepth / 2 + dockingPortDepth :
+            -boxDepth / 2 - dockingPortDepth;
+    }
+
+    public getWorldOrientation(): THREE.Quaternion {
+        return new THREE.Quaternion(
+            this.objects.boxBody.quaternion.x,
+            this.objects.boxBody.quaternion.y,
+            this.objects.boxBody.quaternion.z,
+            this.objects.boxBody.quaternion.w
+        );
+    }
+
+    public getWorldVelocity(): THREE.Vector3 {
+        return new THREE.Vector3(
+            this.objects.boxBody.velocity.x,
+            this.objects.boxBody.velocity.y,
+            this.objects.boxBody.velocity.z
+        );
+    }
+
+    public getWorldAngularVelocity(): THREE.Vector3 {
+        return new THREE.Vector3(
+            this.objects.boxBody.angularVelocity.x,
+            this.objects.boxBody.angularVelocity.y,
+            this.objects.boxBody.angularVelocity.z
+        );
+    }
+
+    public visualizeDebugObjects(scene: THREE.Scene): void {
+        // Create debug objects for visualization
+        const debugObjects: THREE.Object3D[] = [];
+
+        // Create spacecraft center sphere
+        const centerSphere = new THREE.Mesh(
+            new THREE.SphereGeometry(0.3),
+            new THREE.MeshBasicMaterial({
+                color: 0xff8800,
+                transparent: true,
+                opacity: 0.5,
+                depthTest: false,
+                depthWrite: false
+            })
+        );
+        centerSphere.position.copy(this.getWorldPosition());
+        scene.add(centerSphere);
+        debugObjects.push(centerSphere);
+
+        // Create bounding box
+        const size = this.getFullDimensions();
+        const boxGeometry = new THREE.BoxGeometry(size.x * 2, size.y * 2, size.z * 2);
+        const boxMaterial = new THREE.MeshBasicMaterial({
+            color: 0xff8800,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.5,
+            depthTest: false,
+            depthWrite: false
+        });
+        const box = new THREE.Mesh(boxGeometry, boxMaterial);
+        box.position.copy(this.getWorldPosition());
+        box.quaternion.copy(this.getWorldOrientation());
+        scene.add(box);
+        debugObjects.push(box);
+
+        // Store debug objects for cleanup
+        this.debugObjects = debugObjects;
+    }
+
+    public clearDebugObjects(): void {
+        if (this.debugObjects) {
+            this.debugObjects.forEach(obj => {
+                if (obj instanceof THREE.Mesh) {
+                    obj.geometry.dispose();
+                    if (Array.isArray(obj.material)) {
+                        obj.material.forEach(m => m.dispose());
+                    } else {
+                        obj.material.dispose();
+                    }
+                }
+                obj.parent?.remove(obj);
+            });
+            this.debugObjects = [];
+        }
     }
 }
 

@@ -16,7 +16,6 @@
     "@react-three/cannon": "^6.6.0",
     "@react-three/drei": "^9.92.7",
     "@react-three/fiber": "^8.15.12",
-    "@types/cannon": "^0.1.13",
     "cannon-es": "^0.20.0",
     "cannon-es-debugger": "^1.0.0",
     "lucide-react": "^0.469.0",
@@ -32,8 +31,9 @@
     "three-subdivide": "^1.1.5"
   },
   "devDependencies": {
+    "@types/cannon": "^0.1.13",
     "@types/node": "^22.10.2",
-    "@types/react": "^18.2.55",
+    "@types/react": "^18.3.18",
     "@types/react-dom": "^18.2.19",
     "@types/three": "^0.157.2",
     "@vitejs/plugin-react": "^4.2.1",
