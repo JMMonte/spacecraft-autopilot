@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { Spacecraft } from '../../core/spacecraft';
 import { SpacecraftController } from '../../controllers/spacecraftController';
@@ -53,7 +53,6 @@ export interface AutopilotController {
 }
 
 export function DockingWindow({ spacecraft, controller }: DockingWindowProps): JSX.Element {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
     const [dockingInfo, setDockingInfo] = useState<DockingInfo>({
         phase: 'idle',
         range: 0,
@@ -213,111 +212,40 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
             const dockingController = spacecraft.dockingController;
             if (!dockingController) return;
 
-            // Get positions and velocities
-            const ourVel = new THREE.Vector3(
-                spacecraft.objects.boxBody.velocity.x,
-                spacecraft.objects.boxBody.velocity.y,
-                spacecraft.objects.boxBody.velocity.z
-            );
-            const targetVel = new THREE.Vector3(
-                targetSpacecraft.objects.boxBody.velocity.x,
-                targetSpacecraft.objects.boxBody.velocity.y,
-                targetSpacecraft.objects.boxBody.velocity.z
-            );
+            // Get basic info
+            const phase = dockingController.getDockingPhase();
+            const range = dockingController.getRange() ?? 0;
+            const closingSpeed = dockingController.getClosingSpeed() ?? 0;
 
-            // Get port positions
-            const ourPortId = dockingController.isDocking() ? dockingController.ourPortId : selectedPorts.our;
-            const targetPortId = dockingController.isDocking() ? dockingController.targetPortId : selectedPorts.target;
-            const ourRefPos = spacecraft.getDockingPortWorldPosition(ourPortId || 'front');
-            const targetRefPos = targetSpacecraft.getDockingPortWorldPosition(targetPortId || 'back');
+            // Get alignment info
+            const alignmentInfo = dockingController.getPortAlignmentInfo();
 
-            if (!ourRefPos || !targetRefPos) return;
-
-            // Calculate range and closing speed
-            const range = ourRefPos.distanceTo(targetRefPos);
-            const relativeVel = new THREE.Vector3().subVectors(ourVel, targetVel);
-            const rangeVector = new THREE.Vector3().subVectors(targetRefPos, ourRefPos).normalize();
-            const closingSpeed = relativeVel.dot(rangeVector);
-
-            // Get trajectory information
+            // Get trajectory info
             const trajectory = dockingController.getTrajectory();
             const currentWaypoint = dockingController.getCurrentWaypointIndex();
             const totalWaypoints = trajectory ? trajectory.getWaypoints().length : 0;
             const waypointThreshold = dockingController.getCurrentWaypointThreshold();
-            const distanceToWaypoint = dockingController.getDistanceToWaypoint() || 0;
+            const distanceToWaypoint = dockingController.getDistanceToWaypoint() ?? 0;
 
-            // Create base info object
+            // Create info object
             const newInfo: DockingInfo = {
-                phase: dockingController.getDockingPhase(),
+                phase,
                 range,
                 closingSpeed,
                 alignmentError: 0,
-                portAlignmentError: 0,
-                rollAlignmentError: 0,
-                pitchError: 0,
-                yawError: 0,
-                lateralOffset: { x: 0, y: 0 },
+                portAlignmentError: alignmentInfo?.portAlignmentError ?? 0,
+                rollAlignmentError: alignmentInfo?.rollError ?? 0,
+                pitchError: alignmentInfo?.pitchError ?? 0,
+                yawError: alignmentInfo?.yawError ?? 0,
+                lateralOffset: alignmentInfo ? {
+                    x: alignmentInfo.lateralOffset.x,
+                    y: alignmentInfo.lateralOffset.y
+                } : { x: 0, y: 0 },
                 currentWaypoint,
                 totalWaypoints,
                 waypointThreshold,
                 distanceToWaypoint
             };
-
-            // Calculate alignment errors
-            const ourPortDir = spacecraft.getDockingPortWorldDirection(ourPortId || 'front');
-            const targetPortDir = targetSpacecraft.getDockingPortWorldDirection(targetPortId || 'back');
-            
-            if (ourPortDir && targetPortDir) {
-                // Port alignment error (angle between port directions)
-                const portAlignmentError = Math.acos(Math.min(1, Math.max(-1, ourPortDir.dot(targetPortDir.negate()))));
-                
-                // Calculate relative position vector
-                const relativePos = new THREE.Vector3().subVectors(targetRefPos, ourRefPos);
-                
-                // Calculate pitch and yaw errors
-                // Project onto vertical plane for pitch
-                const pitchPlaneNormal = new THREE.Vector3(1, 0, 0); // X-axis for pitch
-                const pitchProjected = new THREE.Vector3().copy(ourPortDir)
-                    .projectOnPlane(pitchPlaneNormal).normalize();
-                const targetPitchProjected = new THREE.Vector3().copy(targetPortDir)
-                    .projectOnPlane(pitchPlaneNormal).normalize();
-                const pitchError = Math.acos(Math.min(1, Math.max(-1, pitchProjected.dot(targetPitchProjected))));
-                
-                // Project onto horizontal plane for yaw
-                const yawPlaneNormal = new THREE.Vector3(0, 1, 0); // Y-axis for yaw
-                const yawProjected = new THREE.Vector3().copy(ourPortDir)
-                    .projectOnPlane(yawPlaneNormal).normalize();
-                const targetYawProjected = new THREE.Vector3().copy(targetPortDir)
-                    .projectOnPlane(yawPlaneNormal).normalize();
-                const yawError = Math.acos(Math.min(1, Math.max(-1, yawProjected.dot(targetYawProjected))));
-
-                // Calculate lateral offset (perpendicular to target port direction)
-                const lateralOffset = new THREE.Vector3().copy(relativePos);
-                const alongPort = targetPortDir.multiplyScalar(relativePos.dot(targetPortDir));
-                lateralOffset.sub(alongPort);
-
-                // Calculate roll alignment error using right vectors
-                const worldUp = new THREE.Vector3(0, 1, 0);
-                const ourRight = new THREE.Vector3().crossVectors(ourPortDir, worldUp).normalize();
-                const targetRight = new THREE.Vector3().crossVectors(targetPortDir, worldUp).normalize();
-                const rollAlignmentError = Math.acos(Math.min(1, Math.max(-1, ourRight.dot(targetRight))));
-
-                // Update info with calculated values
-                newInfo.portAlignmentError = THREE.MathUtils.radToDeg(portAlignmentError);
-                newInfo.rollAlignmentError = THREE.MathUtils.radToDeg(rollAlignmentError);
-                newInfo.pitchError = THREE.MathUtils.radToDeg(pitchError) * Math.sign(ourPortDir.y - targetPortDir.y);
-                newInfo.yawError = THREE.MathUtils.radToDeg(yawError) * Math.sign(ourPortDir.x - targetPortDir.x);
-                newInfo.lateralOffset = {
-                    x: lateralOffset.x,
-                    y: lateralOffset.y
-                };
-
-                // Calculate relative motion perpendicular to docking axis
-                const relativeMotionPerp = new THREE.Vector3().copy(relativeVel);
-                const motionAlongPort = targetPortDir.multiplyScalar(relativeVel.dot(targetPortDir));
-                relativeMotionPerp.sub(motionAlongPort);
-                newInfo.relativeMotionPerp = relativeMotionPerp;
-            }
 
             setDockingInfo(newInfo);
         }, 100);
@@ -326,35 +254,49 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
     }, [spacecraft, targetSpacecraft, selectedPorts]);
 
     return (
-        <div className="flex flex-col gap-2 p-2 font-mono text-xs">
+        <div className="flex flex-col gap-0.5 p-1 font-mono text-[10px]">
             <div className="grid grid-cols-3 gap-2 text-cyan-400">
-                <div>Phase: {dockingInfo.phase}</div>
-                <div>Range: {dockingInfo.range.toFixed(2)}m</div>
-                <div>Speed: {dockingInfo.closingSpeed.toFixed(2)}m/s</div>
-                <div>Pitch: {dockingInfo.pitchError?.toFixed(1)}°</div>
-                <div>Yaw: {dockingInfo.yawError?.toFixed(1)}°</div>
-                <div>Roll: {dockingInfo.rollAlignmentError?.toFixed(1)}°</div>
-                <div>X-off: {dockingInfo.lateralOffset?.x.toFixed(2)}m</div>
-                <div>Y-off: {dockingInfo.lateralOffset?.y.toFixed(2)}m</div>
-                <div>PERR: {dockingInfo.portAlignmentError?.toFixed(1)}°</div>
-                <div>Waypoint: {dockingInfo.currentWaypoint !== undefined ? dockingInfo.currentWaypoint + 1 : '-'}/{dockingInfo.totalWaypoints || '-'}</div>
-                <div>Threshold: {dockingInfo.waypointThreshold?.toFixed(2)}m</div>
-                <div>To WP: {dockingInfo.distanceToWaypoint?.toFixed(2)}m</div>
+                <div className={`col-span-3 ${dockingInfo.phase === 'idle' ? 'text-white/50' : dockingInfo.phase === 'docked' ? 'text-green-400' : 'text-yellow-400'}`}>
+                    Phase: {dockingInfo.phase.toUpperCase()}
+                </div>
+                
+                <div className={`${Math.abs(dockingInfo.closingSpeed) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
+                    Range: {dockingInfo.range.toFixed(2)}m
+                </div>
+                <div className={`${Math.abs(dockingInfo.closingSpeed) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
+                    Speed: {dockingInfo.closingSpeed.toFixed(2)}m/s
+                </div>
+                <div className={`${Math.abs(dockingInfo.portAlignmentError || 0) > 5 ? 'text-red-400' : 'text-cyan-400'}`}>
+                    PERR: {(dockingInfo.portAlignmentError || 0).toFixed(1)}°
+                </div>
+
+                <div className={`${Math.abs(dockingInfo.pitchError || 0) > 5 ? 'text-red-400' : 'text-cyan-400'}`}>
+                    Pitch: {(dockingInfo.pitchError || 0).toFixed(1)}°
+                </div>
+                <div className={`${Math.abs(dockingInfo.yawError || 0) > 5 ? 'text-red-400' : 'text-cyan-400'}`}>
+                    Yaw: {(dockingInfo.yawError || 0).toFixed(1)}°
+                </div>
+                <div className={`${Math.abs(dockingInfo.rollAlignmentError || 0) > 5 ? 'text-red-400' : 'text-cyan-400'}`}>
+                    Roll: {(dockingInfo.rollAlignmentError || 0).toFixed(1)}°
+                </div>
+
+                <div className={`${Math.abs(dockingInfo.lateralOffset?.x || 0) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
+                    X-off: {(dockingInfo.lateralOffset?.x || 0).toFixed(2)}m
+                </div>
+                <div className={`${Math.abs(dockingInfo.lateralOffset?.y || 0) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
+                    Y-off: {(dockingInfo.lateralOffset?.y || 0).toFixed(2)}m
+                </div>
+                <div className="text-white/50">
+                    WP: {dockingInfo.currentWaypoint !== undefined ? dockingInfo.currentWaypoint + 1 : '-'}/{dockingInfo.totalWaypoints || '-'}
+                </div>
             </div>
 
-            <canvas 
-                ref={canvasRef}
-                width={400}
-                height={300}
-                className="bg-black border border-white/20 rounded"
-            />
-
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2 mt-2">
                 <div className="flex flex-col gap-1">
                     <div className="text-white/50">Our Port:</div>
                     <div className="flex gap-1">
                         <button
-                            className={`flex-1 px-2 py-1 rounded ${selectedPorts.our === 'front' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/60 border-white/20'} border text-white/90 text-xs font-mono ${
+                            className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.our === 'front' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
                                 isPortAvailable('our', 'front') ? '' : 'text-red-400'
                             }`}
                             onClick={() => handlePortSelect('our', 'front')}
@@ -362,7 +304,7 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
                             Front
                         </button>
                         <button
-                            className={`flex-1 px-2 py-1 rounded ${selectedPorts.our === 'back' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/60 border-white/20'} border text-white/90 text-xs font-mono ${
+                            className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.our === 'back' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
                                 isPortAvailable('our', 'back') ? '' : 'text-red-400'
                             }`}
                             onClick={() => handlePortSelect('our', 'back')}
@@ -376,7 +318,7 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
                     <div className="text-white/50">Target Port:</div>
                     <div className="flex gap-1">
                         <button
-                            className={`flex-1 px-2 py-1 rounded ${selectedPorts.target === 'front' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/60 border-white/20'} border text-white/90 text-xs font-mono ${
+                            className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.target === 'front' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
                                 !targetSpacecraft ? 'opacity-50' :
                                 isPortAvailable('target', 'front') ? '' : 'text-red-400'
                             }`}
@@ -386,7 +328,7 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
                             Front
                         </button>
                         <button
-                            className={`flex-1 px-2 py-1 rounded ${selectedPorts.target === 'back' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/60 border-white/20'} border text-white/90 text-xs font-mono ${
+                            className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.target === 'back' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
                                 !targetSpacecraft ? 'opacity-50' :
                                 isPortAvailable('target', 'back') ? '' : 'text-red-400'
                             }`}
@@ -400,9 +342,9 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
             </div>
 
             <button
-                className={`w-full px-2 py-1 rounded ${
+                className={`w-full mt-2 px-2 py-1 rounded ${
                     spacecraft?.dockingController?.getDockingPhase() === 'docked'
-                        ? 'bg-yellow-500/30 border-yellow-500/50'
+                        ? 'bg-green-500/30 border-green-500/50'
                         : spacecraft?.dockingController?.isDocking()
                             ? 'bg-red-500/30 border-red-500/50'
                             : 'bg-cyan-500/30 border-cyan-500/50'
@@ -420,7 +362,7 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
             </button>
 
             {targetSpacecraft && (
-                <div className="text-cyan-400 text-xs">
+                <div className="text-cyan-400 text-[10px] mt-1">
                     Target: {targetSpacecraft.name}
                 </div>
             )}

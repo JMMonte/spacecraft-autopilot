@@ -1,28 +1,34 @@
 import React from 'react';
 
 interface NumberInputProps {
-  label: string;
+  label?: string;
   value: number;
   onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  step?: number;
   className?: string;
 }
 
 export const NumberInput: React.FC<NumberInputProps> = ({ 
   label, 
   value, 
-  onChange, 
+  onChange,
+  step,
   className = "" 
 }) => {
   return (
     <div className={className}>
-      <label className="text-white/90 block mb-1 drop-shadow-md">
-        {label}
-      </label>
+      {label && (
+        <label className="text-[10px] text-white/70 font-mono">
+          {label}
+        </label>
+      )}
       <input
         type="number"
         value={value}
         onChange={onChange}
-        className="bg-black/60 text-white/90 px-1 py-0.5 rounded w-16 border border-white/20 font-mono drop-shadow-md"
+        step={step}
+        className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 
+                  text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
       />
     </div>
   );

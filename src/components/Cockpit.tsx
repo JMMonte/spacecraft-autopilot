@@ -539,6 +539,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             <PIDControllerWindow 
                                 controller={controller?.getAutopilot()?.getOrientationPidController() ?? null}
                                 linearController={controller?.getAutopilot()?.getLinearPidController() ?? null}
+                                momentumController={controller?.getAutopilot()?.getMomentumPidController() ?? null}
                             />
                         </DraggableWindow>
                     )}

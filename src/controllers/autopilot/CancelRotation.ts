@@ -16,8 +16,7 @@ export class CancelRotation extends AutopilotMode {
         // PID controller works in local space
         const pidOut = this.pidController.update(
             angularMomentumError,
-            dt,
-            localAngularMomentum
+            dt
         );
         const pidVector = this.toThreeVector(pidOut);
 

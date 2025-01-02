@@ -13,6 +13,8 @@
   "license": "ISC",
   "dependencies": {
     "@andersonmancini/lens-flare": "^1.0.1",
+    "@dimforge/rapier3d": "^0.14.0",
+    "@dimforge/rapier3d-compat": "^0.14.0",
     "@react-three/cannon": "^6.6.0",
     "@react-three/drei": "^9.92.7",
     "@react-three/fiber": "^8.15.12",

@@ -10,6 +10,7 @@ interface RangeInputProps {
   unit?: string;
   defaultValue?: number | null;
   step?: number | null;
+  className?: string;
 }
 
 export const RangeInput: React.FC<RangeInputProps> = ({ 
@@ -20,13 +21,14 @@ export const RangeInput: React.FC<RangeInputProps> = ({
   max, 
   unit = "", 
   defaultValue = null,
-  step = null
+  step = null,
+  className = ""
 }) => {
   const displayValue: number | null = value ?? defaultValue;
   
   return (
-    <div>
-      <label className="text-white/90 block mb-1 drop-shadow-md">
+    <div className={className}>
+      <label className="text-[10px] text-white/70 font-mono block mb-0.5">
         {label} {unit}
       </label>
       <input

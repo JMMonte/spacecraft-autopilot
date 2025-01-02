@@ -83,7 +83,7 @@ export class SpacecraftController {
             {
                 pidGains: {
                     orientation: { kp: 0.05, ki: 0.0, kd: 0.02 },
-                    position: { kp: 0.3, ki: 0.005, kd: 1.0 },
+                    position: { kp: 3.0, ki: 0.0005, kd: 4.0 },
                     momentum: { kp: 3.0, ki: 0.0, kd: 1.0 }
                 },
                 maxForce: this.thrust * 24,
@@ -164,8 +164,8 @@ export class SpacecraftController {
         // Map keys to autopilot modes
         const keyModeMap: { [key: string]: () => void } = {
             'KeyT': () => {
-                console.log('Toggling cancelAndAlign');
-                this.autopilot.cancelAndAlign();
+                console.log('Toggling orientationMatch');
+                this.autopilot.orientationMatch();
             },
             'KeyY': () => {
                 console.log('Toggling pointToPosition');
@@ -368,5 +368,12 @@ export class SpacecraftController {
     public destroy(): void {
         document.removeEventListener("keydown", this.boundHandleKeyDown);
         document.removeEventListener("keyup", this.boundHandleKeyUp);
+    }
+
+    handleKeyPress(event: KeyboardEvent): void {
+        if (event.key === 't' || event.key === 'T') {
+            console.log('Toggling orientationMatch');
+            this.autopilot.orientationMatch();
+        }
     }
 } 

@@ -54,11 +54,14 @@ export class GoToPosition extends AutopilotMode {
         const targetVec = this.toCannonVec(this.targetPosition);
         const positionError = targetVec.vsub(currentPosition);
 
-        // Convert to local space
+        // Convert position error to local space for PID control
         const localPositionError = body.quaternion.inverse().vmult(positionError);
-        
-        // Apply PID control
-        const pidOut = this.pidController.update(localPositionError, dt, currentVelocity);
+
+        // Convert velocity to local space for damping
+        const localVelocity = body.quaternion.inverse().vmult(currentVelocity);
+
+        // Apply PID control in local space
+        const pidOut = this.pidController.update(localPositionError.scale(this.config.damping.factor), dt);
 
         // Calculate force in local space
         const localForce = new CANNON.Vec3(
@@ -67,8 +70,7 @@ export class GoToPosition extends AutopilotMode {
             pidOut.z * body.mass
         );
 
-        // Apply damping to current velocity
-        const localVelocity = body.quaternion.inverse().vmult(currentVelocity);
+        // Apply damping to local velocity
         const dampingForce = localVelocity.scale(-this.config.damping.factor * body.mass);
         localForce.vadd(dampingForce, localForce);
 
@@ -78,5 +80,42 @@ export class GoToPosition extends AutopilotMode {
         }
 
         return this.applyTranslationalForcesToThrusterGroups(localForce);
+    }
+
+    protected applyTranslationalForcesToThrusterGroups(localForce: CANNON.Vec3): number[] {
+        const thrusterForces = Array(24).fill(0);
+        const forceMultiplier = 1.0;
+
+        // Forward/Back translation (Z-axis)
+        // Positive Z means we need back thrusters (index 1)
+        if (Math.abs(localForce.z) > this.config.limits.epsilon) {
+            const zGroup = this.thrusterGroups.forward[localForce.z >= 0 ? 0 : 1];
+            const forcePerThruster = Math.min(Math.abs(localForce.z), this.thrust) * forceMultiplier / zGroup.length;
+            zGroup.forEach((index: number) => {
+                thrusterForces[index] = forcePerThruster;
+            });
+        }
+
+        // Up/Down translation (Y-axis)
+        // Positive Y means we need up thrusters (index 0)
+        if (Math.abs(localForce.y) > this.config.limits.epsilon) {
+            const yGroup = this.thrusterGroups.up[localForce.y >= 0 ? 0 : 1];
+            const forcePerThruster = Math.min(Math.abs(localForce.y), this.thrust) * forceMultiplier / yGroup.length;
+            yGroup.forEach((index: number) => {
+                thrusterForces[index] = forcePerThruster;
+            });
+        }
+
+        // Left/Right translation (X-axis)
+        // Positive X means we need right thrusters (index 1)
+        if (Math.abs(localForce.x) > this.config.limits.epsilon) {
+            const xGroup = this.thrusterGroups.left[localForce.x >= 0 ? 1 : 0];
+            const forcePerThruster = Math.min(Math.abs(localForce.x), this.thrust) * forceMultiplier / xGroup.length;
+            xGroup.forEach((index: number) => {
+                thrusterForces[index] = forcePerThruster;
+            });
+        }
+
+        return thrusterForces;
     }
 } 

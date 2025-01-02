@@ -4,74 +4,47 @@ import { PIDController } from '../pidController';
 import * as CANNON from 'cannon-es';
 
 export class CancelLinearMotion extends AutopilotMode {
-    private referenceVelocity: CANNON.Vec3;
-
     constructor(
         spacecraft: Spacecraft,
         config: AutopilotConfig,
         thrusterGroups: any,
         thrust: number,
-        pidController: PIDController
+        momentumPidController: PIDController
     ) {
-        super(spacecraft, config, thrusterGroups, thrust, pidController);
-        // Default to global reference frame (zero velocity)
-        this.referenceVelocity = new CANNON.Vec3(0, 0, 0);
+        super(spacecraft, config, thrusterGroups, thrust, momentumPidController);
     }
 
-    public setReferenceFrame(velocity: CANNON.Vec3) {
-        this.referenceVelocity = velocity.clone();
-    }
+    calculateForces(dt: number): number[] {
+        const body = this.spacecraft.objects.boxBody;
+        const currentQuaternion = body.quaternion;
+        const currentVelocity = body.velocity;
 
-    public calculateForces(dt: number): number[] {
-        // Get current velocity in world space
-        const worldVelocity = this.spacecraft.objects.boxBody.velocity;
+        // Convert global velocity to local space
+        const localVelocity = currentQuaternion.inverse().vmult(currentVelocity);
 
-        // Calculate relative velocity (subtract reference velocity)
-        const relativeVelocity = new CANNON.Vec3(
-            worldVelocity.x - this.referenceVelocity.x,
-            worldVelocity.y - this.referenceVelocity.y,
-            worldVelocity.z - this.referenceVelocity.z
+        // Calculate error in local space (we want zero velocity)
+        const dampingFactor = this.config.damping.factor;
+        const velocityError = localVelocity.clone().negate().scale(dampingFactor);
+
+        // PID controller works in local space
+        const pidOut = this.pidController.update(
+            velocityError,
+            dt
         );
 
-        // Convert relative velocity to local space using spacecraft's orientation
-        const localVelocity = this.spacecraft.objects.boxBody.quaternion.inverse().vmult(relativeVelocity, new CANNON.Vec3());
-
-        // Calculate error (desired relative velocity is zero)
-        const velocityError = new CANNON.Vec3(
-            -localVelocity.x,
-            -localVelocity.y,
-            -localVelocity.z
+        // Calculate force in local space (F = ma)
+        const localForce = new CANNON.Vec3(
+            pidOut.x * body.mass,
+            pidOut.y * body.mass,
+            pidOut.z * body.mass
         );
 
-        // Calculate PID output (force per unit mass)
-        const pidOutput = this.pidController.update(velocityError, dt);
+        // Limit maximum force
+        if (localForce.length() > this.config.limits.maxForce) {
+            localForce.scale(this.config.limits.maxForce / localForce.length());
+        }
 
-        // Scale by mass to get actual force
-        const force = new CANNON.Vec3(
-            pidOutput.x * this.spacecraft.objects.boxBody.mass,
-            pidOutput.y * this.spacecraft.objects.boxBody.mass,
-            pidOutput.z * this.spacecraft.objects.boxBody.mass
-        );
-
-        // Map forces to thrusters
-        const forces = Array(24).fill(0);
-        const axes = [
-            { axis: 'z' as keyof CANNON.Vec3, groups: this.thrusterGroups.forward, positive: true },
-            { axis: 'y' as keyof CANNON.Vec3, groups: this.thrusterGroups.up, positive: true },
-            { axis: 'x' as keyof CANNON.Vec3, groups: this.thrusterGroups.left, positive: false }
-        ];
-
-        axes.forEach(({ axis, groups, positive }) => {
-            const val = force[axis] as number;
-            if (Math.abs(val) > 0.001) { // Small epsilon to avoid numerical noise
-                const thrusterGroup = val * (positive ? 1 : -1) > 0 ? groups[0] : groups[1];
-                const thrusterForce = Math.min(Math.abs(val) / 4, this.thrust);
-                thrusterGroup.forEach((index: number) => {
-                    forces[index] = thrusterForce;
-                });
-            }
-        });
-
-        return forces;
+        // Apply translational forces to thruster groups
+        return this.applyTranslationalForcesToThrusterGroups(localForce);
     }
 } 

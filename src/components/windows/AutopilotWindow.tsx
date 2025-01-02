@@ -24,7 +24,7 @@ interface TargetSettingsMap {
 }
 
 interface AutopilotButton {
-    key: 'cancelAndAlign' | 'pointToPosition' | 'cancelRotation' | 'cancelLinearMotion' | 'goToPosition';
+    key: 'orientationMatch' | 'pointToPosition' | 'cancelRotation' | 'cancelLinearMotion' | 'goToPosition';
     label: string;
     description: string;
 }
@@ -143,7 +143,11 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
     };
 
     const autopilotButtons: AutopilotButton[] = [
-        { key: 'cancelAndAlign', label: 'Cancel and Align (T)', description: 'Cancels rotation and aligns with current orientation' },
+        { 
+            key: 'orientationMatch', 
+            label: 'Match Orientation (T)', 
+            description: 'Matches orientation with target spacecraft (or reverses)' 
+        },
         { key: 'pointToPosition', label: 'Point to Position (Y)', description: 'Points spacecraft to target position' },
         { key: 'cancelRotation', label: 'Cancel Rotation (R)', description: 'Cancels all rotational movement' },
         { key: 'cancelLinearMotion', label: 'Cancel Linear Motion (G)', description: 'Cancels all linear movement' },
@@ -151,14 +155,17 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
     ];
 
     return (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur w-[160px]">
             {/* Autopilot Buttons */}
-            <div className="flex flex-col gap-1">
+            <div className="space-y-0.5">
+                <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Commands</h3>
                 {autopilotButtons.map(({ key, label, description }) => (
                     <button
                         key={key}
-                        className={`px-2 py-1 bg-black/60 hover:bg-white/20 text-white/90 rounded transition-colors duration-200 text-xs border border-white/20 font-mono drop-shadow-md w-full ${autopilot?.getActiveAutopilots()?.[key] ? 'bg-cyan-300/20 border-cyan-300/40 text-white' : ''
-                            }`}
+                        className={`w-full px-1 py-0.5 bg-black/60 hover:bg-white/20 text-white/90 
+                                  text-[10px] border border-white/20 font-mono disabled:opacity-50
+                                  ${autopilot?.getActiveAutopilots()?.[key] 
+                                  ? 'bg-cyan-300/20 border-cyan-300/40 text-white' : ''}`}
                         onClick={() => autopilot?.[key]?.()}
                         title={description}
                     >
@@ -168,10 +175,11 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
             </div>
 
             {/* Target Selection */}
-            <div className="flex flex-col gap-2 mt-2">
-                <h4 className="text-cyan-300/90 font-medium drop-shadow-md">Target Type</h4>
+            <div className="space-y-0.5">
+                <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Target Selection</h3>
                 <select
-                    className="w-full px-2 py-1 bg-black/60 text-white/90 rounded border border-white/20 text-xs font-mono"
+                    className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 
+                              text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
                     value={targetType}
                     onChange={handleTargetTypeChange}
                 >
@@ -180,11 +188,12 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                 </select>
 
                 {targetType === 'spacecraft' ? (
-                    <div className="flex flex-col gap-2">
+                    <div className="space-y-0.5">
                         {otherSpacecraft.length > 0 ? (
                             <>
                                 <select
-                                    className="w-full px-2 py-1 bg-black/60 text-white/90 rounded border border-white/20 text-xs font-mono"
+                                    className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 
+                                              text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
                                     value={selectedSpacecraft?.name || ''}
                                     onChange={handleSpacecraftSelect}
                                 >
@@ -197,7 +206,8 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                                 </select>
 
                                 <select
-                                    className="w-full px-2 py-1 bg-black/60 text-white/90 rounded border border-white/20 text-xs font-mono"
+                                    className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 
+                                              text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
                                     value={targetPoint}
                                     onChange={handleTargetPointChange}
                                     disabled={!selectedSpacecraft}
@@ -208,21 +218,30 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                                 </select>
                             </>
                         ) : (
-                            <div className="text-white/50 italic text-center bg-black/40 p-2 rounded border border-white/10">
+                            <div className="text-white/50 italic text-center bg-black/40 p-1 text-[10px] border border-white/10">
                                 No other spacecraft available
                             </div>
                         )}
                     </div>
                 ) : (
-                    <div className="grid grid-cols-3 gap-1">
+                    <div className="space-y-0.5">
                         {(['x', 'y', 'z'] as const).map(axis => (
-                            <NumberInput
-                                key={axis}
-                                label={axis.toUpperCase()}
-                                value={autopilot?.getTargetPosition()?.[axis] ?? 0}
-                                onChange={(e: ChangeEvent<HTMLInputElement>) => handleCustomPositionChange(axis, e.target.value)}
-                            />
+                            <div key={axis} className="flex items-center gap-1">
+                                <label className="text-[10px] text-cyan-300/90 font-mono w-4">{axis}</label>
+                                <NumberInput
+                                    value={autopilot?.getTargetPosition()?.[axis] ?? 0}
+                                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                                        handleCustomPositionChange(axis, e.target.value)}
+                                    step={0.1}
+                                    className="flex-1"
+                                />
+                            </div>
                         ))}
+                        {selectedSpacecraft && (
+                            <div className="text-cyan-400 text-[10px] font-mono">
+                                Current Target: {selectedSpacecraft.name}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

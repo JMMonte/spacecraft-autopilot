@@ -291,20 +291,25 @@ export class TrajectoryVisualizer {
         const portBox = this.createBoundingBox(
             position,
             new CANNON.Vec3(
-                dimensions.x, // Use radius for width/height
-                dimensions.x, // Use radius for width/height
-                dimensions.z / 2 // Half the length since we're using full dimensions
+                dimensions.x * 2, // Double the radius for full width
+                dimensions.x * 2, // Double the radius for full height
+                dimensions.z     // Full length
             ),
             color,
             0.3,
-            undefined,
+            new THREE.Quaternion().setFromUnitVectors(
+                new THREE.Vector3(0, 0, 1),
+                direction
+            ),
             false // Uses full dimensions
         );
         this.scene.add(portBox);
         this.debugObjects.push(portBox);
 
         // Calculate the front face center of the docking port
-        const frontFacePosition = position.clone();
+        const frontFacePosition = position.clone().add(
+            direction.clone().multiplyScalar(dimensions.z / 2)
+        );
 
         // Port sphere - place it at the front face center
         const portSphere = this.createDebugSphere(frontFacePosition, color, 0.2, 1.0);

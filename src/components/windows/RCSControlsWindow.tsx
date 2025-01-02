@@ -8,7 +8,8 @@ interface RCSControlsWindowProps {
 
 export const RCSControlsWindow: React.FC<RCSControlsWindowProps> = ({ spacecraft }) => {
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur">
+      <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">RCS Controls</h3>
       <RangeInput
         label="RCS Thrust"
         unit="N"
@@ -21,6 +22,7 @@ export const RCSControlsWindow: React.FC<RCSControlsWindowProps> = ({ spacecraft
         min={0}
         max={1000}
         defaultValue={100}
+        className="text-[10px] font-mono"
       />
     </div>
   );

@@ -5,11 +5,11 @@ import { AutopilotConfig } from './AutopilotMode';
 import { CancelRotation } from './CancelRotation';
 import { CancelLinearMotion } from './CancelLinearMotion';
 import { PointToPosition } from './PointToPosition';
-import { CancelAndAlign } from './CancelAndAlign';
+import { OrientationMatchAutopilot } from './OrientationMatchAutopilot';
 import { GoToPosition } from './GoToPosition';
 
 interface AutopilotModes {
-    cancelAndAlign: boolean;
+    orientationMatch: boolean;
     cancelRotation: boolean;
     cancelLinearMotion: boolean;
     pointToPosition: boolean;
@@ -32,12 +32,13 @@ export class Autopilot {
     private cancelRotationMode!: CancelRotation;
     private cancelLinearMotionMode!: CancelLinearMotion;
     private pointToPositionMode!: PointToPosition;
-    private cancelAndAlignMode!: CancelAndAlign;
+    private orientationMatchMode!: OrientationMatchAutopilot;
     private goToPositionMode!: GoToPosition;
 
     // PID Controllers
     private orientationPidController: PIDController;
     private linearPidController: PIDController;
+    private momentumPidController: PIDController;
 
     constructor(
         spacecraft: Spacecraft,
@@ -85,22 +86,34 @@ export class Autopilot {
         this.orientationPidController = new PIDController(
             this.config.pid.orientation.kp,
             this.config.pid.orientation.ki,
-            this.config.pid.orientation.kd
+            this.config.pid.orientation.kd,
+            'angularMomentum'
         );
 
         this.linearPidController = new PIDController(
             this.config.pid.position.kp,
             this.config.pid.position.ki,
-            this.config.pid.position.kd
+            this.config.pid.position.kd,
+            'position'
+        );
+
+        this.momentumPidController = new PIDController(
+            this.config.pid.momentum.kp,
+            this.config.pid.momentum.ki,
+            this.config.pid.momentum.kd,
+            'linearMomentum'
         );
         
         // Configure additional PID parameters
         this.linearPidController.setMaxIntegral(0.1);      // Limit integral windup
         this.linearPidController.setDerivativeAlpha(0.95); // Smoother derivative
 
+        this.momentumPidController.setMaxIntegral(0.2);    // Higher integral limit for momentum
+        this.momentumPidController.setDerivativeAlpha(0.9); // Less smoothing for momentum
+
         // Initialize state
         this.activeAutopilots = {
-            cancelAndAlign: false,
+            orientationMatch: false,
             cancelRotation: false,
             cancelLinearMotion: false,
             pointToPosition: false,
@@ -125,7 +138,7 @@ export class Autopilot {
             this.config,
             this.thrusterGroups,
             this.thrust,
-            this.linearPidController
+            this.momentumPidController
         );
 
         this.pointToPositionMode = new PointToPosition(
@@ -137,7 +150,7 @@ export class Autopilot {
             this.targetPosition
         );
 
-        this.cancelAndAlignMode = new CancelAndAlign(
+        this.orientationMatchMode = new OrientationMatchAutopilot(
             this.spacecraft,
             this.config,
             this.thrusterGroups,
@@ -203,8 +216,8 @@ export class Autopilot {
         return this.isEnabled;
     }
 
-    public cancelAndAlign(): void {
-        this.setMode('cancelAndAlign', !this.activeAutopilots.cancelAndAlign);
+    public orientationMatch(): void {
+        this.setMode('orientationMatch', !this.activeAutopilots.orientationMatch);
     }
 
     public pointToPosition(): void {
@@ -243,8 +256,8 @@ export class Autopilot {
         if (this.activeAutopilots.pointToPosition) {
             forces = this.mergeForces(forces, this.pointToPositionMode.calculateForces(dt));
         }
-        if (this.activeAutopilots.cancelAndAlign) {
-            forces = this.mergeForces(forces, this.cancelAndAlignMode.calculateForces(dt));
+        if (this.activeAutopilots.orientationMatch) {
+            forces = this.mergeForces(forces, this.orientationMatchMode.calculateForces(dt));
         }
         if (this.activeAutopilots.goToPosition) {
             forces = this.mergeForces(forces, this.goToPositionMode.calculateForces(dt));
@@ -259,7 +272,7 @@ export class Autopilot {
 
     public setMode(mode: keyof AutopilotModes, enabled: boolean = true): void {
         console.log('setMode called:', mode, enabled);
-        const rotationModes = ['cancelAndAlign', 'cancelRotation', 'pointToPosition'];
+        const rotationModes = ['orientationMatch', 'cancelRotation', 'pointToPosition'];
         const translationModes = ['cancelLinearMotion', 'goToPosition'];
 
         if (enabled) {
@@ -299,7 +312,7 @@ export class Autopilot {
 
     public setTargetOrientation(orientation: THREE.Quaternion): void {
         this.targetOrientation.copy(orientation);
-        this.cancelAndAlignMode.setTargetOrientation(orientation);
+        this.orientationMatchMode.setTargetOrientation(orientation);
     }
 
     public cleanup(): void {
@@ -308,7 +321,7 @@ export class Autopilot {
             cancelRotation: false,
             cancelLinearMotion: false,
             pointToPosition: false,
-            cancelAndAlign: false,
+            orientationMatch: false,
             goToPosition: false
         };
         
@@ -328,6 +341,10 @@ export class Autopilot {
 
     public getLinearPidController(): PIDController {
         return this.linearPidController;
+    }
+
+    public getMomentumPidController(): PIDController {
+        return this.momentumPidController;
     }
 
     public setTargetPosition(position: THREE.Vector3): void {

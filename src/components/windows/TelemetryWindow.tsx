@@ -65,7 +65,7 @@ export const TelemetryWindow: React.FC<TelemetryWindowProps> = ({ telemetry }) =
   return (
     <div className="space-y-1">
       {sections.map(section => (
-        <div key={section.title} className="text-xs">
+        <div key={section.title} className="text-[10px]">
           <h4 className="text-cyan-300/90 font-medium mb-0.5 drop-shadow-md">
             {section.title}
           </h4>
@@ -79,7 +79,7 @@ export const TelemetryWindow: React.FC<TelemetryWindowProps> = ({ telemetry }) =
           </div>
         </div>
       ))}
-      <div className="text-xs">
+      <div className="text-[10px]">
         <h4 className="text-cyan-300/90 font-medium mb-0.5 drop-shadow-md">
           Thrusters
         </h4>

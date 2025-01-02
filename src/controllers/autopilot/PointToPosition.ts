@@ -56,8 +56,7 @@ export class PointToPosition extends AutopilotMode {
         // Apply PID control
         const pidOut = this.pidController.update(
             angularMomentumError,
-            dt,
-            localAngularMomentum
+            dt
         );
         const pidVector = this.toThreeVector(pidOut);
 

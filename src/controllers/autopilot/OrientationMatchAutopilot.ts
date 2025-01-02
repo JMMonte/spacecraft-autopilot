@@ -3,8 +3,10 @@ import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import * as THREE from 'three';
 
-export class CancelAndAlign extends AutopilotMode {
+export class OrientationMatchAutopilot extends AutopilotMode {
     private targetOrientation: THREE.Quaternion;
+    private targetSpacecraft: Spacecraft | null;
+    private reverseAlign: boolean;
 
     constructor(
         spacecraft: Spacecraft,
@@ -12,20 +14,47 @@ export class CancelAndAlign extends AutopilotMode {
         thrusterGroups: any,
         thrust: number,
         pidController: PIDController,
-        targetOrientation: THREE.Quaternion
+        targetOrientation?: THREE.Quaternion,
+        targetSpacecraft?: Spacecraft,
+        reverseAlign: boolean = false
     ) {
         super(spacecraft, config, thrusterGroups, thrust, pidController);
-        this.targetOrientation = targetOrientation;
+        this.targetOrientation = targetOrientation || new THREE.Quaternion();
+        this.targetSpacecraft = targetSpacecraft || null;
+        this.reverseAlign = reverseAlign;
     }
 
     setTargetOrientation(orientation: THREE.Quaternion): void {
         this.targetOrientation = orientation;
     }
 
+    setTargetSpacecraft(spacecraft: Spacecraft | null, reverseAlign?: boolean): void {
+        this.targetSpacecraft = spacecraft;
+        if (reverseAlign !== undefined) {
+            this.reverseAlign = reverseAlign;
+        }
+    }
+
+    setReverseAlign(reverse: boolean): void {
+        this.reverseAlign = reverse;
+    }
+
     calculateForces(dt: number): number[] {
         const body = this.spacecraft.objects.boxBody;
         const currentQuaternion = body.quaternion;
         const currentAngularMomentum = body.angularVelocity;
+
+        // Update target orientation if following a target spacecraft
+        if (this.targetSpacecraft) {
+            const targetQuat = this.targetSpacecraft.objects.boxBody.quaternion;
+            this.targetOrientation = this.toThreeQuaternion(targetQuat);
+            
+            if (this.reverseAlign) {
+                // Rotate 180 degrees around the Y axis for reverse alignment
+                const reverseRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+                this.targetOrientation.multiply(reverseRotation);
+            }
+        }
 
         // Calculate error quaternion in global space
         const targetQuat = this.toCannonQuaternion(this.targetOrientation);
@@ -50,8 +79,7 @@ export class CancelAndAlign extends AutopilotMode {
         // Apply PID control in local space
         const pidOut = this.pidController.update(
             angularMomentumError,
-            dt,
-            localAngularMomentum
+            dt
         );
         const pidVector = this.toThreeVector(pidOut);
 
