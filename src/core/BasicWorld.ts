@@ -1,12 +1,15 @@
 import * as THREE from 'three';
+import Stats from 'three/examples/jsm/libs/stats.module.js';
 import { createPhysicsEngine, PhysicsEngine } from '../physics';
 import { SceneLights } from '../scenes/sceneLights';
+import { LENS_FLARE_LAYER } from '../effects/lensFlareConfig';
 import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
 import { Spacecraft } from './spacecraft';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { BackgroundLoader } from '../helpers/backgroundLoader';
 import { ProceduralAsteroid } from '../objects/ProceduralAsteroid';
+import { AsteroidSystem, AsteroidSystemConfig } from '../objects/AsteroidSystem';
 import { createLogger } from '../utils/logger';
 
 interface WorldConfig {
@@ -21,6 +24,11 @@ interface WorldConfig {
         name: string;
     }>;
     initialFocus?: number;
+    asteroids?: Array<{
+        position: { x: number; y: number; z: number };
+        size?: number;
+    }>;
+    asteroidSystem?: AsteroidSystemConfig;
 }
 
 interface LoadingQueueItem {
@@ -53,6 +61,8 @@ export class BasicWorld {
     private currentFile: string;
     private backgroundLoader!: BackgroundLoader;
     private asteroid: ProceduralAsteroid | null = null;
+    private asteroids: ProceduralAsteroid[] = [];
+    private asteroidSystem: AsteroidSystem | null = null;
 
     // Three.js components
     public renderer!: WorldRenderer;
@@ -61,6 +71,7 @@ export class BasicWorld {
     private physics!: PhysicsEngine;
     private rafId: number | null = null;
     private running: boolean = false;
+    private stats: Stats | null = null;
 
     constructor(config: WorldConfig = {}, canvas: HTMLCanvasElement) {
         this.config = config;
@@ -146,7 +157,26 @@ export class BasicWorld {
         this.camera = new SceneCamera(this.renderer.renderer, this);
         this.camera.camera.position.set(0, 5, 10);
         this.camera.camera.lookAt(0, 0, 0);
+        // Ensure main camera renders the global lens flare overlay
+        this.camera.camera.layers.enable(LENS_FLARE_LAYER);
         this.resize();
+
+        // Setup performance stats overlay (bottom-left)
+        // Use the stable ESM module from three/examples
+        const enableStats = this.config.debug !== false; // default on unless explicitly disabled
+        if (enableStats) {
+            this.stats = new Stats();
+            this.stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
+            const dom = this.stats.dom as HTMLDivElement;
+            dom.style.position = 'fixed';
+            dom.style.left = '8px';
+            dom.style.bottom = '8px';
+            dom.style.top = 'auto';
+            dom.style.zIndex = '1000';
+            dom.style.pointerEvents = 'none';
+            document.body.appendChild(dom);
+            this.log.debug('Stats overlay attached');
+        }
 
         // Initialize background
         this.backgroundLoader = new BackgroundLoader(this.camera.scene, this.camera.camera, () => {
@@ -170,18 +200,46 @@ export class BasicWorld {
 
         // Add grid helper
         const gridHelper = new THREE.GridHelper(100, 100);
+        // Prevent grid from occluding lens flares
+        (gridHelper as any).userData = { ...(gridHelper as any).userData, lensflare: 'no-occlusion' };
         this.camera.scene.add(gridHelper);
 
-        // Add procedural asteroid (Rapier uses detailed trimesh collider via physics engine)
-        this.asteroid = new ProceduralAsteroid(
-            this.camera.scene,
-            {} as any,
-            new THREE.Vector3(0, 0, 0),
-            200,
-            false,
-            0,
-            this.physics
-        );
+        // Prefer realistic asteroid system when configured
+        if (this.config.asteroidSystem) {
+            this.asteroidSystem = new AsteroidSystem(this.camera.scene, this.physics, this.config.asteroidSystem);
+        } else {
+            // Add asteroids from config if provided; otherwise create a default one
+            const asteroidConfigs = this.config.asteroids || [];
+            if (asteroidConfigs.length > 0) {
+                asteroidConfigs.forEach((cfg, idx) => {
+                    const pos = new THREE.Vector3(cfg.position.x, cfg.position.y, cfg.position.z);
+                    const size = cfg.size ?? 200;
+                    const asteroid = new ProceduralAsteroid(
+                        this.camera.scene,
+                        {} as any,
+                        pos,
+                        size,
+                        false,
+                        idx % 6,
+                        this.physics,
+                        true // use explicit position/size
+                    );
+                    this.asteroids.push(asteroid);
+                });
+            } else {
+                // Backwards-compatible single asteroid
+                this.asteroid = new ProceduralAsteroid(
+                    this.camera.scene,
+                    {} as any,
+                    new THREE.Vector3(0, 0, 0),
+                    200,
+                    false,
+                    0,
+                    this.physics,
+                    false
+                );
+            }
+        }
 
         // Initialize spacecraft after scene and physics are ready
         const initialSpacecraft = this.config.initialSpacecraft || [];
@@ -417,6 +475,10 @@ export class BasicWorld {
         const { width, height } = this.renderer.updateSize();
         this.camera.camera.aspect = width / height;
         this.camera.camera.updateProjectionMatrix();
+        // Propagate resolution to effects (e.g., lens flare)
+        if (this.lights && 'updateResolution' in this.lights) {
+            (this.lights as any).updateResolution(width, height);
+        }
     }
 
     public startRenderLoop(): void {
@@ -426,12 +488,19 @@ export class BasicWorld {
             if (!this.running) return;
             this.rafId = requestAnimationFrame(animate);
 
+            // Begin performance measurement
+            this.stats?.begin();
+
             const deltaTime = this.dt;
             this.physics.step(deltaTime);
 
-            // Update asteroid
-            if (this.asteroid) {
-                this.asteroid.update();
+            // Update asteroids
+            if (this.asteroid) this.asteroid.update();
+            this.asteroids.forEach(a => a.update());
+            if (this.asteroidSystem) {
+                // Keep an internal elapsed time in seconds for orbital updates
+                (this as any)._t = ((this as any)._t ?? 0) + deltaTime;
+                this.asteroidSystem.update((this as any)._t);
             }
 
             // Update lights
@@ -458,6 +527,9 @@ export class BasicWorld {
 
             // Render the scene
             this.renderer.render(this.camera.scene, this.camera.camera);
+
+            // End performance measurement
+            this.stats?.end();
         };
 
         animate();
@@ -485,6 +557,19 @@ export class BasicWorld {
         if (this.asteroid) {
             this.asteroid.dispose();
             this.asteroid = null;
+        }
+        this.asteroids.forEach(a => a.dispose());
+        this.asteroids = [];
+        if (this.asteroidSystem) {
+            this.asteroidSystem.dispose();
+            this.asteroidSystem = null;
+        }
+
+        // Remove stats overlay
+        if (this.stats) {
+            const dom = this.stats.dom as HTMLElement | null;
+            if (dom && dom.parentNode) dom.parentNode.removeChild(dom);
+            this.stats = null;
         }
     }
 } 

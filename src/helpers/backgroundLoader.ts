@@ -4,6 +4,10 @@ export class BackgroundLoader {
     private scene: THREE.Scene;
     private onLoadComplete?: () => void;
     private texture: THREE.Texture | null = null;
+    // Note: We intentionally avoid creating a PMREM environment to prevent
+    // image-based lighting (ambient reflections) from the starfield.
+    private pmrem: THREE.PMREMGenerator | null = null;
+    private envRT: THREE.WebGLRenderTarget | null = null;
 
     constructor(scene: THREE.Scene, _camera: THREE.Camera, onLoadComplete?: () => void) {
         this.scene = scene;
@@ -24,6 +28,10 @@ export class BackgroundLoader {
 
                 this.scene.background = tex;
                 this.texture = tex;
+
+                // Do NOT assign an environment map: we want no ambient reflections
+                // from the starfield. Keep only the visual background.
+                this.scene.environment = null;
                 this.onLoadComplete?.();
             },
             undefined,
@@ -41,6 +49,17 @@ export class BackgroundLoader {
             }
             this.texture.dispose();
             this.texture = null;
+        }
+        if (this.envRT) {
+            if (this.scene.environment === this.envRT.texture) {
+                this.scene.environment = null;
+            }
+            this.envRT.dispose();
+            this.envRT = null;
+        }
+        if (this.pmrem) {
+            this.pmrem.dispose();
+            this.pmrem = null;
         }
     }
 }
