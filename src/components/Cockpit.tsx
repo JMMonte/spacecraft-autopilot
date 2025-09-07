@@ -16,10 +16,12 @@ import { PIDControllerWindow } from './windows/PIDControllerWindow';
 import { AutopilotWindow } from './windows/AutopilotWindow';
 import { SpacecraftListWindow } from './windows/SpacecraftListWindow';
 import { DockingWindow } from './windows/DockingWindow';
+import { DockingCamerasWindow } from './windows/DockingCamerasWindow';
 import { Spacecraft } from '../core/spacecraft';
+import { useElementSize } from '../hooks/useElementSize';
 import { SpacecraftController } from '../controllers/spacecraftController';
 
-type WindowKey = 'telemetry' | 'horizon' | 'dimensions' | 'rcs' | 'arrows' | 'pid' | 'autopilot' | 'spacecraftList' | 'docking';
+type WindowKey = 'telemetry' | 'horizon' | 'dimensions' | 'rcs' | 'arrows' | 'pid' | 'autopilot' | 'spacecraftList' | 'docking' | 'dockingCameras';
 
 interface WindowStates extends Record<string, boolean> {
     telemetry: boolean;
@@ -31,6 +33,7 @@ interface WindowStates extends Record<string, boolean> {
     autopilot: boolean;
     spacecraftList: boolean;
     docking: boolean;
+    dockingCameras: boolean;
 }
 
 interface WindowPositions {
@@ -60,7 +63,7 @@ interface AutopilotState {
     goToPosition: boolean;
 }
 
-const calculateInitialPositions = (): WindowPositions => {
+const calculateInitialPositions = (viewportWidth: number): WindowPositions => {
     const padding = 10;
     const topBarHeight = 10;
     const titleBarHeight = 32;
@@ -70,7 +73,7 @@ const calculateInitialPositions = (): WindowPositions => {
     let currentLeftY = topBarHeight + padding;
     const leftX = padding;
 
-    const rightX = window.innerWidth - windowWidth - padding;
+    const rightX = viewportWidth - windowWidth - padding;
     let currentRightY = topBarHeight + padding;
 
     return {
@@ -82,7 +85,8 @@ const calculateInitialPositions = (): WindowPositions => {
         arrows: { x: rightX, y: currentRightY + titleBarHeight * 3 },
         autopilot: { x: rightX, y: currentRightY + titleBarHeight * 4 + padding * 2 },
         spacecraftList: { x: rightX, y: currentRightY },
-        docking: { x: leftX, y: currentLeftY + horizonHeight + padding * 2 }
+        docking: { x: leftX, y: currentLeftY + horizonHeight + padding * 2 },
+        dockingCameras: { x: leftX + 270, y: currentLeftY + horizonHeight + padding * 2 }
     };
 };
 
@@ -107,9 +111,10 @@ export const Cockpit: React.FC<CockpitProps> = ({
         pid: false,
         autopilot: true,
         spacecraftList: true,
-        docking: true
+        docking: true,
+        dockingCameras: false
     });
-    const [windowPositions, setWindowPositions] = useState<WindowPositions>(calculateInitialPositions());
+    const [windowPositions, setWindowPositions] = useState<WindowPositions>(calculateInitialPositions(typeof window !== 'undefined' ? window.innerWidth : 1024));
     const [telemetryValues, setTelemetryValues] = useState<TelemetryValues>({
         position: new THREE.Vector3(),
         velocity: new THREE.Vector3(),
@@ -128,30 +133,28 @@ export const Cockpit: React.FC<CockpitProps> = ({
     const horizonRendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const sphereMeshRef = useRef<THREE.Mesh | null>(null);
 
-    // Window resize handler
+    // Reactful resize handling using ResizeObserver on the UI container
+    const uiContainerRef = useRef<HTMLDivElement>(null);
+    const { width: uiWidth } = useElementSize(uiContainerRef.current);
+    const { width: horizonCanvasWidth, height: horizonCanvasHeight } = useElementSize(horizonRef.current);
     useEffect(() => {
-        const handleResize = () => {
-            setWindowPositions(calculateInitialPositions());
-        };
-
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
+        if (uiWidth > 0) setWindowPositions(calculateInitialPositions(uiWidth));
+    }, [uiWidth]);
 
     const updateTelemetry = useCallback(() => {
         if (spacecraft?.objects?.box) {
-            // Get velocity from the physics body
-            const velocity = spacecraft.objects.boxBody?.velocity ?? { x: 0, y: 0, z: 0 };
-            const angularVelocity = spacecraft.objects.boxBody?.angularVelocity ?? { x: 0, y: 0, z: 0 };
+            // Read from abstractions (supports Rapier)
+            const v = spacecraft.getWorldVelocity();
+            const av = spacecraft.getWorldAngularVelocity();
             const quaternion = spacecraft.objects.box?.quaternion ?? { x: 0, y: 0, z: 0, w: 1 };
 
             // Update telemetry values for display
             setTelemetryValues({
                 position: spacecraft.objects.box.position,
                 velocity: new THREE.Vector3(
-                    Number(velocity.x?.toFixed(2)) ?? 0,
-                    Number(velocity.y?.toFixed(2)) ?? 0,
-                    Number(velocity.z?.toFixed(2)) ?? 0
+                    Number(v.x?.toFixed(2)) ?? 0,
+                    Number(v.y?.toFixed(2)) ?? 0,
+                    Number(v.z?.toFixed(2)) ?? 0
                 ),
                 orientation: new THREE.Quaternion(
                     quaternion.x ?? 0,
@@ -160,11 +163,11 @@ export const Cockpit: React.FC<CockpitProps> = ({
                     quaternion.w ?? 1
                 ),
                 angularVelocity: new THREE.Vector3(
-                    Number(angularVelocity.x?.toFixed(2)) ?? 0,
-                    Number(angularVelocity.y?.toFixed(2)) ?? 0,
-                    Number(angularVelocity.z?.toFixed(2)) ?? 0
+                    Number(av.x?.toFixed(2)) ?? 0,
+                    Number(av.y?.toFixed(2)) ?? 0,
+                    Number(av.z?.toFixed(2)) ?? 0
                 ),
-                mass: spacecraft.objects.boxBody?.mass ?? 0,
+                mass: spacecraft.getMass() ?? 0,
                 thrusterStatus: spacecraft.getThrusterStatus() ?? []
             });
 
@@ -187,12 +190,11 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 const autopilot = controller?.getAutopilot();
                 const autopilotState = autopilot?.getActiveAutopilots() as AutopilotState | undefined;
                 const targetPosition = autopilot?.getTargetPosition();
-                const currentPosition = spacecraft?.objects?.boxBody?.position;
+                const wp = spacecraft?.getWorldPosition();
 
-                if ((autopilotState?.pointToPosition || autopilotState?.goToPosition) && targetPosition && currentPosition && targetMarkerRef.current) {
-                    // Convert CANNON.Vec3 to THREE.Vector3
+                if ((autopilotState?.pointToPosition || autopilotState?.goToPosition) && targetPosition && wp && targetMarkerRef.current) {
                     const targetVec = new THREE.Vector3(targetPosition.x, targetPosition.y, targetPosition.z);
-                    const currentVec = new THREE.Vector3(currentPosition.x, currentPosition.y, currentPosition.z);
+                    const currentVec = new THREE.Vector3(wp.x, wp.y, wp.z);
 
                     // Calculate direction to target in world space
                     const direction = new THREE.Vector3()
@@ -252,13 +254,22 @@ export const Cockpit: React.FC<CockpitProps> = ({
         };
     }, [spacecraft, controller, updateTelemetry]);
 
-    // Initialize horizon canvas size
+    // Keep horizon renderer in sync with canvas size
     useEffect(() => {
-        if (horizonRef.current) {
-            horizonRef.current.width = 200;
-            horizonRef.current.height = 200;
+        const renderer = horizonRendererRef.current;
+        const camera = horizonCameraRef.current;
+        if (!renderer || !camera) return;
+
+        const w = Math.max(1, Math.floor(horizonCanvasWidth || 0));
+        const h = Math.max(1, Math.floor(horizonCanvasHeight || 0));
+        if (w > 0 && h > 0) {
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            renderer.setPixelRatio(dpr);
+            renderer.setSize(w, h, false);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
         }
-    }, []);
+    }, [horizonCanvasWidth, horizonCanvasHeight]);
 
     // Initialize horizon
     useEffect(() => {
@@ -279,9 +290,15 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 const renderer = new THREE.WebGLRenderer({
                     canvas: horizonRef.current,
                     alpha: true,
-                    antialias: true
+                    antialias: true,
+                    logarithmicDepthBuffer: true
                 });
-                renderer.setSize(200, 200);
+                // Size to current canvas CSS box
+                const cw = Math.max(1, Math.floor(horizonRef.current.clientWidth || 200));
+                const ch = Math.max(1, Math.floor(horizonRef.current.clientHeight || 200));
+                const dpr = Math.min(window.devicePixelRatio || 1, 2);
+                renderer.setPixelRatio(dpr);
+                renderer.setSize(cw, ch, false);
                 renderer.setClearColor(0x000000, 0.2);
                 horizonRendererRef.current = renderer;
 
@@ -439,7 +456,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
     };
 
     return (
-        <div className="relative w-full h-full">
+        <div ref={uiContainerRef} className="relative w-full h-full">
             {loadingProgress < 100 && (
                 <LoadingOverlay progress={loadingProgress} status={loadingStatus} />
             )}
@@ -568,10 +585,23 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             onPositionChange={(pos) => updateWindowPosition('docking', pos)}
                             onClose={() => toggleWindow('docking')}
                         >
-                            <DockingWindow
-                                spacecraft={spacecraft}
-                                controller={controller}
-                            />
+                        <DockingWindow
+                            spacecraft={spacecraft}
+                            controller={controller}
+                            world={world}
+                            version={spacecraftListVersion}
+                        />
+                        </DraggableWindow>
+                    )}
+
+                    {visibleWindows.dockingCameras && (
+                        <DraggableWindow
+                            title="Docking Cameras"
+                            defaultPosition={windowPositions.dockingCameras}
+                            onPositionChange={(pos) => updateWindowPosition('dockingCameras', pos)}
+                            onClose={() => toggleWindow('dockingCameras')}
+                        >
+                            <DockingCamerasWindow world={world} version={spacecraftListVersion} />
                         </DraggableWindow>
                     )}
                 </div>

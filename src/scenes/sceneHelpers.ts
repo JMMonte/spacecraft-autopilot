@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 
 export class SceneHelpers {
     private scene: THREE.Scene;
@@ -64,36 +63,37 @@ export class SceneHelpers {
         this.disableHelpers();
     }
 
-    public updateAutopilotArrow(position: CANNON.Vec3, direction: CANNON.Vec3): void {
+    public updateAutopilotArrow(position: THREE.Vector3 | { x: number; y: number; z: number }, direction: THREE.Vector3 | { x: number; y: number; z: number }): void {
         if (!this.autopilotArrow) return;
         this.updateArrow(this.autopilotArrow, position, direction);
     }
 
-    public updateAutopilotTorqueArrow(position: CANNON.Vec3, torque: CANNON.Vec3): void {
+    public updateAutopilotTorqueArrow(position: THREE.Vector3 | { x: number; y: number; z: number }, torque: THREE.Vector3 | { x: number; y: number; z: number }): void {
         if (!this.autopilotTorqueArrow) return;
         this.updateArrow(this.autopilotTorqueArrow, position, torque);
     }
 
-    public updateRotationAxisArrow(position: CANNON.Vec3, axis: CANNON.Vec3): void {
+    public updateRotationAxisArrow(position: THREE.Vector3 | { x: number; y: number; z: number }, axis: THREE.Vector3 | { x: number; y: number; z: number }): void {
         if (!this.rotationAxisArrow) return;
         this.updateArrow(this.rotationAxisArrow, position, axis);
     }
 
-    public updateOrientationArrow(position: CANNON.Vec3, orientation: CANNON.Vec3): void {
+    public updateOrientationArrow(position: THREE.Vector3 | { x: number; y: number; z: number }, orientation: THREE.Vector3 | { x: number; y: number; z: number }): void {
         if (!this.orientationArrow) return;
         this.updateArrow(this.orientationArrow, position, orientation);
     }
 
-    public updateVelocityArrow(position: CANNON.Vec3, velocity: CANNON.Vec3): void {
+    public updateVelocityArrow(position: THREE.Vector3 | { x: number; y: number; z: number }, velocity: THREE.Vector3 | { x: number; y: number; z: number }): void {
         if (!this.velocityArrow) return;
         this.updateArrow(this.velocityArrow, position, velocity);
     }
 
-    private updateArrow(arrow: THREE.ArrowHelper, position: CANNON.Vec3, direction: CANNON.Vec3): void {
-        arrow.position.set(position.x, position.y, position.z);
-        const length = Math.sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+    private updateArrow(arrow: THREE.ArrowHelper, position: THREE.Vector3 | { x: number; y: number; z: number }, direction: THREE.Vector3 | { x: number; y: number; z: number }): void {
+        arrow.position.set((position as any).x, (position as any).y, (position as any).z);
+        const dx = (direction as any).x, dy = (direction as any).y, dz = (direction as any).z;
+        const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (length > 0.001) {
-            arrow.setDirection(new THREE.Vector3(direction.x / length, direction.y / length, direction.z / length));
+            arrow.setDirection(new THREE.Vector3(dx / length, dy / length, dz / length));
             arrow.setLength(length);
         }
     }

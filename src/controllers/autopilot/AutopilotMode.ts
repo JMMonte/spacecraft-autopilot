@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 
@@ -76,12 +75,12 @@ export abstract class AutopilotMode {
         return thrusterForces;
     }
 
-    protected applyTranslationalForcesToThrusterGroups(localForce: CANNON.Vec3): number[] {
+    protected applyTranslationalForcesToThrusterGroups(localForce: THREE.Vector3): number[] {
         const forces = Array(24).fill(0);
         const axes = [
-            { axis: 'z' as keyof CANNON.Vec3, groups: this.thrusterGroups.forward, positive: true },
-            { axis: 'y' as keyof CANNON.Vec3, groups: this.thrusterGroups.up, positive: true },
-            { axis: 'x' as keyof CANNON.Vec3, groups: this.thrusterGroups.left, positive: false },
+            { axis: 'z' as keyof THREE.Vector3, groups: this.thrusterGroups.forward, positive: true },
+            { axis: 'y' as keyof THREE.Vector3, groups: this.thrusterGroups.up, positive: true },
+            { axis: 'x' as keyof THREE.Vector3, groups: this.thrusterGroups.left, positive: false },
         ];
 
         axes.forEach(({ axis, groups, positive }) => {
@@ -98,26 +97,9 @@ export abstract class AutopilotMode {
         return forces;
     }
 
-    protected toCannonVec(vec: THREE.Vector3): CANNON.Vec3 {
-        return new CANNON.Vec3(vec.x, vec.y, vec.z);
-    }
-
-    protected toThreeVector(vec: CANNON.Vec3): THREE.Vector3 {
-        return new THREE.Vector3(vec.x, vec.y, vec.z);
-    }
-
-    protected toThreeQuaternion(quat: CANNON.Quaternion): THREE.Quaternion {
-        return new THREE.Quaternion(quat.x, quat.y, quat.z, quat.w);
-    }
-
-    protected toCannonQuaternion(quat: THREE.Quaternion): CANNON.Quaternion {
-        return new CANNON.Quaternion(quat.x, quat.y, quat.z, quat.w);
-    }
-
     protected calculateMomentOfInertia(): number {
-        const mass = this.spacecraft.objects.boxBody.mass;
-        const shape = this.spacecraft.objects.boxBody.shapes[0] as CANNON.Box;
-        const size = shape.halfExtents;
+        const mass = this.spacecraft.getMass();
+        const size = this.spacecraft.getMainBodyDimensions();
 
         const w = size.x;
         const h = size.y;

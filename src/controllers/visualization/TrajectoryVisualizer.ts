@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 
 export class TrajectoryVisualizer {
     private debugObjects: THREE.Object3D[] = [];
@@ -19,7 +18,7 @@ export class TrajectoryVisualizer {
         options?: {
             // Active spacecraft info
             ourPosition?: THREE.Vector3;
-            ourSize?: CANNON.Vec3;
+            ourSize?: THREE.Vector3;
             ourOrientation?: THREE.Quaternion;
             ourPortPosition?: THREE.Vector3;
             ourPortDirection?: THREE.Vector3;
@@ -27,21 +26,21 @@ export class TrajectoryVisualizer {
 
             // Target spacecraft info
             targetPosition?: THREE.Vector3;
-            targetSize?: CANNON.Vec3;
+            targetSize?: THREE.Vector3;
             targetOrientation?: THREE.Quaternion;
             targetPortPosition?: THREE.Vector3;
             targetPortDirection?: THREE.Vector3;
             targetPortOffset?: number;
 
             // Common info
-            portDimensions?: CANNON.Vec3;
+            portDimensions?: THREE.Vector3;
             waypointThreshold?: number;
 
             // Other spacecraft info
             otherSpacecraft?: Array<{
                 position: THREE.Vector3;
-                size: CANNON.Vec3;
-                safetySize: CANNON.Vec3;
+                size: THREE.Vector3;
+                safetySize: THREE.Vector3;
                 orientation?: THREE.Quaternion;
             }>;
         }
@@ -199,7 +198,7 @@ export class TrajectoryVisualizer {
 
     private createBoundingBox(
         position: THREE.Vector3,
-        size: CANNON.Vec3,
+        size: THREE.Vector3,
         color: number,
         opacity: number = 1.0,
         orientation?: THREE.Quaternion,
@@ -284,17 +283,13 @@ export class TrajectoryVisualizer {
     private visualizeDockingPort(
         position: THREE.Vector3,
         direction: THREE.Vector3,
-        dimensions: CANNON.Vec3,
+        dimensions: THREE.Vector3,
         color: number
     ): void {
         // Create port bounding box
         const portBox = this.createBoundingBox(
             position,
-            new CANNON.Vec3(
-                dimensions.x * 2, // Double the radius for full width
-                dimensions.x * 2, // Double the radius for full height
-                dimensions.z     // Full length
-            ),
+            new THREE.Vector3(dimensions.x * 2, dimensions.x * 2, dimensions.z),
             color,
             0.3,
             new THREE.Quaternion().setFromUnitVectors(

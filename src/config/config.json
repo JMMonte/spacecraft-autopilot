@@ -1,4 +1,5 @@
 {
+    "physicsEngine": "rapier",
     "initialSpacecraft": [
         {
             "name": "Alpha",

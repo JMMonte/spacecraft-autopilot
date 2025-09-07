@@ -1,4 +1,4 @@
-import * as CANNON from 'cannon-es';
+import * as THREE from 'three';
 
 export class PIDController {
     private kp: number;
@@ -6,11 +6,11 @@ export class PIDController {
     private kd: number;
     private maxIntegral: number;
     private derivativeAlpha: number;
-    private integral: CANNON.Vec3;
-    private lastError: CANNON.Vec3;
-    private lastDerivative: CANNON.Vec3;
-    private tempErrorVector: CANNON.Vec3;
-    private output: CANNON.Vec3;
+    private integral: THREE.Vector3;
+    private lastError: THREE.Vector3;
+    private lastDerivative: THREE.Vector3;
+    private tempErrorVector: THREE.Vector3;
+    private output: THREE.Vector3;
     private calibrationData: {
         samples: { error: number; time: number }[];
         startTime: number;
@@ -29,11 +29,11 @@ export class PIDController {
         this.kd = kd;
         this.maxIntegral = 1.0;
         this.derivativeAlpha = 0.9;
-        this.integral = new CANNON.Vec3();
-        this.lastError = new CANNON.Vec3();
-        this.lastDerivative = new CANNON.Vec3();
-        this.tempErrorVector = new CANNON.Vec3();
-        this.output = new CANNON.Vec3();
+        this.integral = new THREE.Vector3();
+        this.lastError = new THREE.Vector3();
+        this.lastDerivative = new THREE.Vector3();
+        this.tempErrorVector = new THREE.Vector3();
+        this.output = new THREE.Vector3();
         this.calibrationData = {
             samples: [],
             startTime: 0,
@@ -57,9 +57,9 @@ export class PIDController {
 
         try {
             // Reset gains and accumulators
-            this.integral = new CANNON.Vec3();
-            this.lastError = new CANNON.Vec3();
-            this.lastDerivative = new CANNON.Vec3();
+            this.integral = new THREE.Vector3();
+            this.lastError = new THREE.Vector3();
+            this.lastDerivative = new THREE.Vector3();
 
             // Start with zero gains
             this.kp = 0;
@@ -113,7 +113,7 @@ export class PIDController {
      * @param dt Time step in seconds
      * @returns Control output vector
      */
-    public update(error: CANNON.Vec3, dt: number): CANNON.Vec3 {
+    public update(error: THREE.Vector3, dt: number): THREE.Vector3 {
         // If calibrating, collect samples
         if (this.calibrationData.isCalibrating) {
             this.calibrationData.samples.push({
@@ -131,30 +131,30 @@ export class PIDController {
         this.tempErrorVector.copy(error);
 
         // Proportional term
-        const p = error.clone().scale(this.kp);
+        const p = error.clone().multiplyScalar(this.kp);
 
         // Integral term
-        this.integral.vadd(error.clone().scale(dt), this.integral);
+        this.integral.add(error.clone().multiplyScalar(dt));
         if (this.integral.length() > this.maxIntegral) {
             this.integral.normalize();
-            this.integral.scale(this.maxIntegral);
+            this.integral.multiplyScalar(this.maxIntegral);
         }
-        const i = this.integral.clone().scale(this.ki);
+        const i = this.integral.clone().multiplyScalar(this.ki);
 
         // Derivative term (with filtering)
-        const errorDiff = error.clone().vsub(this.lastError);
-        const currentDerivative = errorDiff.scale(1 / dt);
-        this.lastDerivative.scale(this.derivativeAlpha)
-            .vadd(currentDerivative.scale(1 - this.derivativeAlpha), this.lastDerivative);
-        const d = this.lastDerivative.clone().scale(this.kd);
+        const errorDiff = error.clone().sub(this.lastError);
+        const currentDerivative = errorDiff.multiplyScalar(1 / dt);
+        this.lastDerivative.multiplyScalar(this.derivativeAlpha)
+            .add(currentDerivative.multiplyScalar(1 - this.derivativeAlpha));
+        const d = this.lastDerivative.clone().multiplyScalar(this.kd);
 
         // Update last error
         this.lastError.copy(error);
 
         // Combine terms
         this.output.copy(p);
-        this.output.vadd(i, this.output);
-        this.output.vadd(d, this.output);
+        this.output.add(i);
+        this.output.add(d);
 
         return this.output;
     }

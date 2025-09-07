@@ -14,7 +14,8 @@ export const WINDOWS: Windows = {
   arrows: { label: 'Helpers' },
   pid: { label: 'PID' },
   autopilot: { label: 'Autopilot' },
-  spacecraftList: { label: 'Spacecraft' }
+  spacecraftList: { label: 'Spacecraft' },
+  dockingCameras: { label: 'Dock Cameras' }
 };
 
 export const INITIAL_WINDOW_STATE: { [key: string]: boolean } = Object.keys(WINDOWS).reduce((acc, key) => {

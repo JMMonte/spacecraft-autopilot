@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import { Spacecraft } from '../../core/spacecraft';
 import { TrajectoryPlanner } from '../trajectory/TrajectoryPlanner';
 import { TrajectoryVisualizer } from '../visualization/TrajectoryVisualizer';
@@ -66,7 +65,7 @@ export class DockingController {
     private getSpacecraftInfo() {
         if (!this.targetSpacecraft) return null;
 
-        const portDimensions = new CANNON.Vec3(
+        const portDimensions = new THREE.Vector3(
             this.spacecraft.objects.dockingPortRadius,
             this.spacecraft.objects.dockingPortRadius,
             this.spacecraft.objects.dockingPortLength
@@ -97,13 +96,21 @@ export class DockingController {
             target: {
                 position: this.targetSpacecraft.getWorldPosition(),
                 orientation: this.targetSpacecraft.getWorldOrientation(),
-                size: this.targetSpacecraft.getMainBodyDimensions(),
+                size: new THREE.Vector3(
+                    this.targetSpacecraft.getMainBodyDimensions().x,
+                    this.targetSpacecraft.getMainBodyDimensions().y,
+                    this.targetSpacecraft.getMainBodyDimensions().z
+                ),
                 fullDimensions: this.targetSpacecraft.getFullDimensions()
             },
             our: {
                 position: this.spacecraft.getWorldPosition(),
                 orientation: this.spacecraft.getWorldOrientation(),
-                size: this.spacecraft.getMainBodyDimensions(),
+                size: new THREE.Vector3(
+                    this.spacecraft.getMainBodyDimensions().x,
+                    this.spacecraft.getMainBodyDimensions().y,
+                    this.spacecraft.getMainBodyDimensions().z
+                ),
                 fullDimensions: this.spacecraft.getFullDimensions()
             },
             ports: {
@@ -115,8 +122,8 @@ export class DockingController {
             },
             others: this.visualSpacecraft.map(s => ({
                 position: s.getWorldPosition(),
-                size: s.getMainBodyDimensions(),
-                safetySize: new CANNON.Vec3(
+                size: new THREE.Vector3(s.getMainBodyDimensions().x, s.getMainBodyDimensions().y, s.getMainBodyDimensions().z),
+                safetySize: new THREE.Vector3(
                     s.getFullDimensions().x * 1.5,
                     s.getFullDimensions().y * 1.5,
                     s.getFullDimensions().z * 1.5
@@ -168,9 +175,7 @@ export class DockingController {
         if (!info || !info.ports.ourDirection || !info.ports.targetDirection) return;
 
         // Calculate safe distance based on spacecraft dimensions plus extra margin
-        const ourShape = this.spacecraft.objects.boxBody.shapes[0] as CANNON.Box;
-        const targetShape = this.targetSpacecraft.objects.boxBody.shapes[0] as CANNON.Box;
-        const safeDistance = (ourShape.halfExtents.z + targetShape.halfExtents.z) * 3.0;
+        const safeDistance = (info.our.fullDimensions.z + info.target.fullDimensions.z) * 3.0;
 
         const waypoints: THREE.Vector3[] = [info.ports.ourPosition.clone()];
 
@@ -188,7 +193,7 @@ export class DockingController {
                 approachPos,
                 this.collisionSpacecraft.map(s => ({
                     position: s.getWorldPosition(),
-                    size: s.getFullDimensions(),
+                    size: new THREE.Vector3(s.getFullDimensions().x, s.getFullDimensions().y, s.getFullDimensions().z),
                     isTarget: s === this.targetSpacecraft
                 }))
             ));

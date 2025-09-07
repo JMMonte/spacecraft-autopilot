@@ -1,16 +1,17 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
+import { createPhysicsEngine, PhysicsEngine } from '../physics';
 import { SceneLights } from '../scenes/sceneLights';
 import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
-import { CannonDebugRenderer } from '../helpers/cannonDebugRenderer';
 import { Spacecraft } from './spacecraft';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { BackgroundLoader } from '../helpers/backgroundLoader';
 import { ProceduralAsteroid } from '../objects/ProceduralAsteroid';
+import { createLogger } from '../utils/logger';
 
 interface WorldConfig {
     debug?: boolean;
+    physicsEngine?: 'rapier';
     initialSpacecraft?: Array<{
         position: { x: number; y: number; z: number };
         width: number;
@@ -35,6 +36,7 @@ interface ThreeScene extends THREE.Scene {
 }
 
 export class BasicWorld {
+    private log = createLogger('core:BasicWorld');
     private config: WorldConfig;
     private canvas: HTMLCanvasElement;
     private spacecraft: Spacecraft[];
@@ -52,12 +54,13 @@ export class BasicWorld {
     private backgroundLoader!: BackgroundLoader;
     private asteroid: ProceduralAsteroid | null = null;
 
-    // Three.js and Cannon.js components
+    // Three.js components
     public renderer!: WorldRenderer;
     public camera!: SceneCamera;
     public lights!: SceneLights;
-    public world!: CANNON.World;
-    private cannonDebugRenderer?: CannonDebugRenderer;
+    private physics!: PhysicsEngine;
+    private rafId: number | null = null;
+    private running: boolean = false;
 
     constructor(config: WorldConfig = {}, canvas: HTMLCanvasElement) {
         this.config = config;
@@ -81,7 +84,7 @@ export class BasicWorld {
 
     private configureLoadingManager(): void {
         THREE.DefaultLoadingManager.onStart = (url: string) => {
-            console.log('Started loading:', url);
+            this.log.debug('Started loading:', url);
             this.currentFile = url;
             this.loadingQueue.set(url, { loaded: 0, total: 0 });
             this.updateLoadingStatus();
@@ -94,19 +97,19 @@ export class BasicWorld {
             this.currentFile = url;
             
             const progress = Math.round((loaded / total) * 100);
-            console.log(`Loading ${url}: ${loaded}/${total} (${progress}%)`);
+            this.log.debug(`Loading ${url}: ${loaded}/${total} (${progress}%)`);
             
             this.updateLoadingStatus();
         };
 
         THREE.DefaultLoadingManager.onLoad = () => {
-            console.log('Batch complete');
+            this.log.debug('Batch complete');
             this.loadingQueue.clear();
             this.updateLoadingStatus();
         };
 
         THREE.DefaultLoadingManager.onError = (url: string) => {
-            console.error('Error loading:', url);
+            this.log.error('Error loading:', url);
             this.loadingQueue.delete(url);
             this.updateLoadingStatus();
         };
@@ -143,6 +146,7 @@ export class BasicWorld {
         this.camera = new SceneCamera(this.renderer.renderer, this);
         this.camera.camera.position.set(0, 5, 10);
         this.camera.camera.lookAt(0, 0, 0);
+        this.resize();
 
         // Initialize background
         this.backgroundLoader = new BackgroundLoader(this.camera.scene, this.camera.camera, () => {
@@ -150,59 +154,40 @@ export class BasicWorld {
             this.onLoadStatus('Ready');
         });
 
-        // Initialize lights
+        // Initialize lights (centralized in SceneLights)
         this.lights = new SceneLights(this.camera.scene as ThreeScene, this.camera.camera);
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5, 10, 7.5);
-        light.castShadow = true;
-        
-        // Configure shadow properties
-        light.shadow.mapSize.width = 2048;
-        light.shadow.mapSize.height = 2048;
-        light.shadow.camera.near = 0.1;
-        light.shadow.camera.far = 500;
-        light.shadow.camera.left = -50;
-        light.shadow.camera.right = 50;
-        light.shadow.camera.top = 50;
-        light.shadow.camera.bottom = -50;
-        light.shadow.bias = -0.0001;
-        
-        this.camera.scene.add(light);
-        const ambientLight = new THREE.AmbientLight(0x404040);
-        this.camera.scene.add(ambientLight);
 
         // Store camera and light in scene's userData for access by other components
         (this.camera.scene as ThreeScene).userData.camera = this.camera.camera;
-        (this.camera.scene as ThreeScene).userData.light = light;
+        (this.camera.scene as ThreeScene).userData.light = this.lights.getLight();
 
         // Initialize post-processing
         this.renderer.setupPostProcessing(this.camera.scene, this.camera.camera);
 
-        // Initialize physics
-        const world = new CANNON.World({
-            gravity: new CANNON.Vec3(0, 0, 0)
-        });
-        world.broadphase = new CANNON.NaiveBroadphase();
-        (world.solver as any).iterations = 7;
-        this.world = world;
+        // Initialize physics via abstraction
+        const engineName = this.config.physicsEngine ?? 'rapier';
+        this.physics = await createPhysicsEngine(engineName, { gravity: { x: 0, y: 0, z: 0 } });
 
         // Add grid helper
         const gridHelper = new THREE.GridHelper(100, 100);
         this.camera.scene.add(gridHelper);
 
-        // Add procedural asteroid
+        // Add procedural asteroid (Rapier uses detailed trimesh collider via physics engine)
         this.asteroid = new ProceduralAsteroid(
             this.camera.scene,
-            this.world,
-            new THREE.Vector3(0, 0, 0), // Center position, the constructor will adjust Y to be below
-            200 // Larger radius for a more expansive surface
+            {} as any,
+            new THREE.Vector3(0, 0, 0),
+            200,
+            false,
+            0,
+            this.physics
         );
 
         // Initialize spacecraft after scene and physics are ready
         const initialSpacecraft = this.config.initialSpacecraft || [];
         if (initialSpacecraft.length > 0) {
             await Promise.all(initialSpacecraft.map(async spacecraftConfig => {
-                const initialPosition = new CANNON.Vec3(
+                const initialPosition = new THREE.Vector3(
                     spacecraftConfig.position.x,
                     spacecraftConfig.position.y,
                     spacecraftConfig.position.z
@@ -217,7 +202,7 @@ export class BasicWorld {
                 );
             }));
         } else {
-            await this.addSpacecraft(new CANNON.Vec3(0, 0, 2));
+            await this.addSpacecraft(new THREE.Vector3(0, 0, 2));
         }
 
         // Initialize active spacecraft
@@ -226,21 +211,11 @@ export class BasicWorld {
             this.setActiveSpacecraft(this.spacecraft[initialFocusIndex]);
         }
 
-        // Debug renderer (optional)
-        if (this.config.debug) {
-            this.cannonDebugRenderer = new CannonDebugRenderer(
-                this.camera.scene,
-                this.world
-            );
-        }
-
-        this.setupEventListeners();
-
         this.onLoadProgress(100);
         this.onLoadStatus('Ready');
     }
 
-    private isPositionOverlapping(position: CANNON.Vec3, width: number, height: number, depth: number): boolean {
+    private isPositionOverlapping(position: THREE.Vector3, width: number, height: number, depth: number): boolean {
         // Check if the new position would overlap with any existing spacecraft
         // Add a small buffer distance between spacecraft
         const buffer = 0.5;
@@ -262,13 +237,13 @@ export class BasicWorld {
     public createNewSpacecraft(): Spacecraft {
         const maxAttempts = 50;
         let attempt = 0;
-        let randomPosition: CANNON.Vec3;
+        let randomPosition: THREE.Vector3;
         const width = 1, height = 1, depth = 2;
         const defaultRange = 20; // Increased from 10 and made symmetric
 
         // Keep trying new positions until we find one that doesn't overlap
         do {
-            randomPosition = new CANNON.Vec3(
+            randomPosition = new THREE.Vector3(
                 (Math.random() - 0.5) * defaultRange,  // x between -10 and 10
                 (Math.random() - 0.5) * defaultRange,  // y between -10 and 10
                 (Math.random() - 0.5) * defaultRange   // z also between -10 and 10, no longer forcing positive
@@ -285,7 +260,7 @@ export class BasicWorld {
             }
         } while (this.isPositionOverlapping(randomPosition, width, height, depth) && attempt < maxAttempts * 2);
 
-        console.log('Creating new spacecraft at position:', randomPosition);
+        this.log.debug('Creating new spacecraft at position:', randomPosition);
         const newSpacecraft = this.addSpacecraft(
             randomPosition,
             width, height, depth,
@@ -321,7 +296,7 @@ export class BasicWorld {
     }
 
     public addSpacecraft(
-        initialPosition: CANNON.Vec3,
+        initialPosition: THREE.Vector3,
         width: number = 1,
         height: number = 1,
         depth: number = 2,
@@ -329,16 +304,16 @@ export class BasicWorld {
         name: string = 'Spacecraft'
     ): Spacecraft {
         const spacecraft = new Spacecraft(
-            this.world,
+            {},
             this.camera.scene as ThreeScene,
             initialPosition,
             width,
             height,
             depth,
-            this
+            this,
+            this.physics
         );
         spacecraft.name = name;
-        spacecraft.world = this.world;
         
         if (initialConeVisibility) {
             spacecraft.rcsVisuals.showCones();
@@ -397,14 +372,8 @@ export class BasicWorld {
         this.onActiveSpacecraftChange = callback;
     }
 
-    private setupEventListeners(): void {
-        document.addEventListener("keydown", this.handleKeyDown.bind(this));
-        document.addEventListener("keyup", this.handleKeyUp.bind(this));
-        document.addEventListener('dblclick', this.onDoubleClick.bind(this));
-        window.addEventListener('resize', this.handleWindowResize.bind(this));
-    }
-
-    private handleKeyDown(event: KeyboardEvent): void {
+    // Public wrappers so React can forward events without global listeners
+    public onKeyDown(event: KeyboardEvent): void {
         this.keysPressed[event.code] = true;
         const activeController = this.spacecraftControllers.find(controller => controller.getIsActive());
         if (activeController) {
@@ -412,7 +381,7 @@ export class BasicWorld {
         }
     }
 
-    private handleKeyUp(event: KeyboardEvent): void {
+    public onKeyUp(event: KeyboardEvent): void {
         this.keysPressed[event.code] = false;
         const activeController = this.spacecraftControllers.find(controller => controller.getIsActive());
         if (activeController) {
@@ -420,7 +389,7 @@ export class BasicWorld {
         }
     }
 
-    private onDoubleClick(event: MouseEvent): void {
+    public onDoubleClick(event: MouseEvent): void {
         event.preventDefault();
 
         const mouse = new THREE.Vector2();
@@ -443,24 +412,33 @@ export class BasicWorld {
         }
     }
 
-    private handleWindowResize(): void {
-        this.camera.camera.aspect = window.innerWidth / window.innerHeight;
+    public resize(): void {
+        if (!this.renderer || !this.camera) return;
+        const { width, height } = this.renderer.updateSize();
+        this.camera.camera.aspect = width / height;
         this.camera.camera.updateProjectionMatrix();
-        this.renderer.renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
     public startRenderLoop(): void {
+        if (this.running) return;
+        this.running = true;
         const animate = () => {
-            requestAnimationFrame(animate);
-            
+            if (!this.running) return;
+            this.rafId = requestAnimationFrame(animate);
+
             const deltaTime = this.dt;
-            this.world.step(deltaTime);
+            this.physics.step(deltaTime);
 
             // Update asteroid
             if (this.asteroid) {
                 this.asteroid.update();
             }
-            
+
+            // Update lights
+            if (this.lights) {
+                this.lights.update();
+            }
+
             // Update spacecraft
             this.spacecraft.forEach(spacecraft => spacecraft.update());
 
@@ -470,19 +448,14 @@ export class BasicWorld {
                     controller.applyForces(deltaTime);
                 }
             });
-            
+
             // Update camera to follow active spacecraft
             const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.getIsActive());
             if (activeSpacecraft) {
                 this.camera.updateOrbitTarget(activeSpacecraft.objects.box.position);
                 this.camera.controls.update();
             }
-            
-            // Update debug renderer if enabled
-            if (this.cannonDebugRenderer) {
-                this.cannonDebugRenderer.update();
-            }
-            
+
             // Render the scene
             this.renderer.render(this.camera.scene, this.camera.camera);
         };
@@ -491,11 +464,12 @@ export class BasicWorld {
     }
 
     public cleanup(): void {
-        // Remove event listeners
-        document.removeEventListener("keydown", this.handleKeyDown);
-        document.removeEventListener("keyup", this.handleKeyUp);
-        document.removeEventListener('dblclick', this.onDoubleClick);
-        window.removeEventListener('resize', this.handleWindowResize);
+        // Stop loop
+        this.running = false;
+        if (this.rafId !== null) {
+            cancelAnimationFrame(this.rafId);
+            this.rafId = null;
+        }
 
         // Dispose Three.js resources
         this.renderer.renderer.dispose();

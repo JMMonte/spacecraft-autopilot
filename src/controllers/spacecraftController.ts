@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import { Spacecraft } from '../core/spacecraft';
 import { SceneHelpers } from '../scenes/sceneHelpers';
 import { Autopilot } from './autopilot/Autopilot';
+import { createLogger } from '../utils/logger';
 
 interface KeyMap {
     [key: string]: boolean;
@@ -13,6 +13,7 @@ interface ThrusterMap {
 }
 
 export class SpacecraftController {
+    private log = createLogger('controllers:SpacecraftController');
     private isActive: boolean = false;
     private spacecraft!: Spacecraft;
     private currentTarget!: string | null;
@@ -21,24 +22,11 @@ export class SpacecraftController {
     private mass!: number;
     private thrust!: number;
     public autopilot!: Autopilot;
-    private boundHandleKeyDown: (event: KeyboardEvent) => void;
-    private boundHandleKeyUp: (event: KeyboardEvent) => void;
 
     constructor(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers) {
-        console.log('SpacecraftController constructor called');
-        // Bind event handlers
-        this.boundHandleKeyDown = this.handleKeyDown.bind(this);
-        this.boundHandleKeyUp = this.handleKeyUp.bind(this);
-
+        this.log.debug('SpacecraftController constructor called');
         this.initializeProperties(spacecraft, currentTarget, helpers);
-        this.registerEventListeners();
-        console.log('SpacecraftController initialized, isActive:', this.isActive);
-    }
-
-    private registerEventListeners(): void {
-        console.log('Registering event listeners');
-        document.addEventListener("keydown", this.boundHandleKeyDown);
-        document.addEventListener("keyup", this.boundHandleKeyUp);
+        this.log.debug('SpacecraftController initialized, isActive:', this.isActive);
     }
 
     public getIsActive(): boolean {
@@ -46,7 +34,7 @@ export class SpacecraftController {
     }
 
     public setIsActive(value: boolean): void {
-        console.log('Setting isActive to:', value);
+        this.log.debug('Setting isActive to:', value);
         this.isActive = value;
     }
 
@@ -59,7 +47,7 @@ export class SpacecraftController {
     }
 
     private initializeProperties(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers): void {
-        console.log('Initializing SpacecraftController properties');
+        this.log.debug('Initializing SpacecraftController properties');
         this.spacecraft = spacecraft;
         this.currentTarget = currentTarget?.uuid || null;
         this.helpers = helpers;
@@ -68,13 +56,13 @@ export class SpacecraftController {
         this.keysPressed = {};
 
         // Derive a "thrust per thruster"
-        this.mass = spacecraft.objects.boxBody.mass;
+        this.mass = spacecraft.getMass();
         const thrustFactor = 5;
         this.thrust = (this.mass / 24) * thrustFactor;
 
         // Create autopilot with correct parameters
         const thrusterGroups = this.getThrusterGroups();
-        console.log('Creating autopilot with thruster groups:', thrusterGroups);
+        this.log.debug('Creating autopilot with thruster groups:', thrusterGroups);
         
         this.autopilot = new Autopilot(
             this.spacecraft,
@@ -93,7 +81,7 @@ export class SpacecraftController {
 
         // Enable autopilot by default
         this.autopilot.setEnabled(true);
-        console.log('Autopilot created and enabled with thrust:', this.thrust);
+        this.log.debug('Autopilot created and enabled with thrust:', this.thrust);
     }
 
     private getThrusterGroups() {
@@ -153,34 +141,34 @@ export class SpacecraftController {
     }
 
     private handleAutopilotControl(code: string): void {
-        console.log('Handling autopilot control for key:', code);
+        this.log.debug('Handling autopilot control for key:', code);
         
         // Ensure autopilot is enabled
         if (!this.autopilot.getAutopilotEnabled()) {
-            console.log('Enabling autopilot');
+            this.log.debug('Enabling autopilot');
             this.autopilot.setEnabled(true);
         }
 
         // Map keys to autopilot modes
         const keyModeMap: { [key: string]: () => void } = {
             'KeyT': () => {
-                console.log('Toggling orientationMatch');
+                this.log.debug('Toggling orientationMatch');
                 this.autopilot.orientationMatch();
             },
             'KeyY': () => {
-                console.log('Toggling pointToPosition');
+                this.log.debug('Toggling pointToPosition');
                 this.autopilot.pointToPosition();
             },
             'KeyR': () => {
-                console.log('Toggling cancelRotation');
+                this.log.debug('Toggling cancelRotation');
                 this.autopilot.cancelRotation();
             },
             'KeyG': () => {
-                console.log('Toggling cancelLinearMotion');
+                this.log.debug('Toggling cancelLinearMotion');
                 this.autopilot.cancelLinearMotion();
             },
             'KeyB': () => {
-                console.log('Toggling goToPosition');
+                this.log.debug('Toggling goToPosition');
                 this.autopilot.goToPosition();
             }
         };
@@ -188,12 +176,12 @@ export class SpacecraftController {
         // Execute the corresponding mode toggle if key is mapped
         const modeToggle = keyModeMap[code];
         if (modeToggle) {
-            console.log('Executing mode toggle for key:', code);
+            this.log.debug('Executing mode toggle for key:', code);
             modeToggle();
             
             // Log the new autopilot state
             const activeAutopilots = this.autopilot.getActiveAutopilots();
-            console.log('New autopilot state:', activeAutopilots);
+            this.log.debug('New autopilot state:', activeAutopilots);
         }
     }
 
@@ -214,7 +202,7 @@ export class SpacecraftController {
         const combined = manualForces.map((val, i) => val + autopilotForces[i]);
 
         // 4) Apply
-        const coneVisibility = this.applyForcesToThrusters(combined);
+        const coneVisibility = this.applyForcesToThrusters(combined, dt);
 
         // 5) Debug helpers
         this.updateHelpers(combined);
@@ -222,17 +210,13 @@ export class SpacecraftController {
         return coneVisibility;
     }
 
-    private toCannonQuat(threeQuat: THREE.Quaternion): CANNON.Quaternion {
-        return new CANNON.Quaternion(threeQuat.x, threeQuat.y, threeQuat.z, threeQuat.w);
-    }
-
     private updateHelpers(thrustForces: number[]): void {
-        if (!this.spacecraft?.objects?.boxBody || !this.autopilot?.getTargetOrientation()) {
+        if (!this.autopilot?.getTargetOrientation()) {
             return;
         }
-        const body = this.spacecraft.objects.boxBody;
-        const currentAngularVelocity = body.angularVelocity;
-        const currentVelocity = body.velocity;
+        const bodyPosition = this.spacecraft.getWorldPosition();
+        const currentAngularVelocity = this.spacecraft.getWorldAngularVelocity();
+        const currentVelocity = this.spacecraft.getWorldVelocity();
 
         // Example "torques" for debug
         // (You can refine how you compute these based on thruster geometry)
@@ -240,29 +224,24 @@ export class SpacecraftController {
         const yawTorque   = thrustForces[8] + thrustForces[11] + thrustForces[12] + thrustForces[15];
         const rollTorque  = thrustForces[1] + thrustForces[2] + thrustForces[5] + thrustForces[6];
 
-        const defaultForwardVector = new CANNON.Vec3(0, 0, 1);
-        const targetOrientationQuat = this.toCannonQuat(this.autopilot.getTargetOrientation());
-        const targetOrientationVector = new CANNON.Vec3(0, 0, 1);
-        targetOrientationQuat.vmult(targetOrientationVector, targetOrientationVector);
+        const defaultForwardVector = new THREE.Vector3(0, 0, 1);
+        const targetOrientationQuat = this.autopilot.getTargetOrientation();
+        const targetOrientationVector = defaultForwardVector.clone().applyQuaternion(targetOrientationQuat);
 
-        const autopilotTorque = new CANNON.Vec3(pitchTorque, yawTorque, rollTorque);
-        const rotationAxis = new CANNON.Vec3(
-            currentAngularVelocity.x,
-            currentAngularVelocity.y,
-            currentAngularVelocity.z
-        );
+        const autopilotTorque = new THREE.Vector3(pitchTorque, yawTorque, rollTorque);
+        const rotationAxis = currentAngularVelocity.clone();
 
-        const orientationVector = body.quaternion.vmult(defaultForwardVector, new CANNON.Vec3());
+        const orientationVector = defaultForwardVector.clone().applyQuaternion(this.spacecraft.getWorldOrientation());
 
         // Update your arrow helpers
-        this.helpers.updateAutopilotArrow(body.position, targetOrientationVector);
-        this.helpers.updateAutopilotTorqueArrow(body.position, autopilotTorque);
-        this.helpers.updateRotationAxisArrow(body.position, rotationAxis);
-        this.helpers.updateOrientationArrow(body.position, orientationVector);
-        this.helpers.updateVelocityArrow(body.position, currentVelocity);
+        this.helpers.updateAutopilotArrow(bodyPosition, targetOrientationVector);
+        this.helpers.updateAutopilotTorqueArrow(bodyPosition, autopilotTorque);
+        this.helpers.updateRotationAxisArrow(bodyPosition, rotationAxis);
+        this.helpers.updateOrientationArrow(bodyPosition, orientationVector);
+        this.helpers.updateVelocityArrow(bodyPosition, currentVelocity);
     }
 
-    private applyForcesToThrusters(forces: number[]): boolean[] {
+    private applyForcesToThrusters(forces: number[], dt: number): boolean[] {
         // Show/hide thruster cones
         const coneVisibility = forces.map(f => f > 0);
 
@@ -270,7 +249,7 @@ export class SpacecraftController {
             // clamp
             const clamped = Math.min(Math.max(force, 0), this.thrust);
             if (clamped > 0) {
-                this.spacecraft.rcsVisuals.applyForce(index, clamped);
+                this.spacecraft.rcsVisuals.applyForce(index, clamped, dt);
             }
         });
 
@@ -326,9 +305,7 @@ export class SpacecraftController {
     }
 
     public cleanup(): void {
-        // Clean up event listeners
-        document.removeEventListener("keydown", this.boundHandleKeyDown);
-        document.removeEventListener("keyup", this.boundHandleKeyUp);
+        // No global listeners to remove here; BasicWorld manages input
 
         // Clean up autopilot
         if (this.autopilot) {
@@ -366,13 +343,12 @@ export class SpacecraftController {
     }
 
     public destroy(): void {
-        document.removeEventListener("keydown", this.boundHandleKeyDown);
-        document.removeEventListener("keyup", this.boundHandleKeyUp);
+        // No-op; BasicWorld manages global listeners
     }
 
     handleKeyPress(event: KeyboardEvent): void {
         if (event.key === 't' || event.key === 'T') {
-            console.log('Toggling orientationMatch');
+            this.log.debug('Toggling orientationMatch');
             this.autopilot.orientationMatch();
         }
     }

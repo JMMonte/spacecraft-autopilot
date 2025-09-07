@@ -2,7 +2,6 @@ import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
 import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 
 export class GoToPosition extends AutopilotMode {
     private targetPosition: THREE.Vector3;
@@ -46,43 +45,44 @@ export class GoToPosition extends AutopilotMode {
     }
 
     calculateForces(dt: number): number[] {
-        const body = this.spacecraft.objects.boxBody;
-        const currentPosition = body.position;
-        const currentVelocity = body.velocity;
+        const currentPosition = this.spacecraft.getWorldPosition();
+        const currentVelocity = this.spacecraft.getWorldVelocity();
+        const q = this.spacecraft.getWorldOrientation();
+        const qInv = q.clone().invert();
 
         // Calculate position error in world space
-        const targetVec = this.toCannonVec(this.targetPosition);
-        const positionError = targetVec.vsub(currentPosition);
+        const positionError = this.targetPosition.clone().sub(currentPosition);
 
         // Convert position error to local space for PID control
-        const localPositionError = body.quaternion.inverse().vmult(positionError);
+        const localPositionError = positionError.clone().applyQuaternion(qInv);
 
         // Convert velocity to local space for damping
-        const localVelocity = body.quaternion.inverse().vmult(currentVelocity);
+        const localVelocity = currentVelocity.clone().applyQuaternion(qInv);
 
         // Apply PID control in local space
-        const pidOut = this.pidController.update(localPositionError.scale(this.config.damping.factor), dt);
+        const pidOut = this.pidController.update(localPositionError.clone().multiplyScalar(this.config.damping.factor), dt);
 
         // Calculate force in local space
-        const localForce = new CANNON.Vec3(
-            pidOut.x * body.mass,
-            pidOut.y * body.mass,
-            pidOut.z * body.mass
+        const mass = this.spacecraft.getMass();
+        const localForce = new THREE.Vector3(
+            pidOut.x * mass,
+            pidOut.y * mass,
+            pidOut.z * mass
         );
 
         // Apply damping to local velocity
-        const dampingForce = localVelocity.scale(-this.config.damping.factor * body.mass);
-        localForce.vadd(dampingForce, localForce);
+        const dampingForce = localVelocity.clone().multiplyScalar(-this.config.damping.factor * mass);
+        localForce.add(dampingForce);
 
         // Limit maximum force
         if (localForce.length() > this.config.limits.maxForce) {
-            localForce.scale(this.config.limits.maxForce / localForce.length());
+            localForce.multiplyScalar(this.config.limits.maxForce / localForce.length());
         }
 
         return this.applyTranslationalForcesToThrusterGroups(localForce);
     }
 
-    protected applyTranslationalForcesToThrusterGroups(localForce: CANNON.Vec3): number[] {
+    protected applyTranslationalForcesToThrusterGroups(localForce: THREE.Vector3): number[] {
         const thrusterForces = Array(24).fill(0);
         const forceMultiplier = 1.0;
 

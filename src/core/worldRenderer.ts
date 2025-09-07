@@ -12,24 +12,16 @@ export class WorldRenderer {
             logarithmicDepthBuffer: true
         });
         
-        this.renderer.setPixelRatio(window.devicePixelRatio);
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.updateSize();
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.0;
-
-        // Handle window resize
-        window.addEventListener('resize', this.onWindowResize.bind(this), false);
     }
 
     public setupPostProcessing(_scene: THREE.Scene, _camera: THREE.Camera): void {
         // Post-processing disabled
-    }
-
-    public onWindowResize(): void {
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
     public render(scene: THREE.Scene, camera: THREE.Camera): void {
@@ -38,6 +30,17 @@ export class WorldRenderer {
 
     public dispose(): void {
         this.renderer.dispose();
-        window.removeEventListener('resize', this.onWindowResize);
     }
-} 
+
+    public updateSize(): { width: number; height: number } {
+        const canvas = this.renderer.domElement as HTMLCanvasElement;
+        const rect = canvas.getBoundingClientRect();
+        const width = Math.max(1, Math.floor(rect.width));
+        const height = Math.max(1, Math.floor(rect.height));
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        this.renderer.setPixelRatio(dpr);
+        // Do not modify canvas style dimensions here; assume CSS controls it
+        this.renderer.setSize(width, height, false);
+        return { width, height };
+    }
+}

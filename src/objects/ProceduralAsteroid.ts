@@ -1,22 +1,30 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
-import { TextureLoader, Group, Box3 } from 'three';
+// Uses physics engine for colliders
+import { TextureLoader, Group, Box3, BufferGeometry } from 'three';
+import type { PhysicsEngine, RigidBody } from '../physics';
+// @ts-ignore
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 
 // @ts-ignore
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { createLogger } from '../utils/logger';
 
 export class ProceduralAsteroid {
+    private log = createLogger('objects:ProceduralAsteroid');
     private mesh!: THREE.Mesh;
-    private body!: CANNON.Body;
+    // Engine rigid body (Rapier) used for collisions
+    private rigid?: RigidBody;
     private scene: THREE.Scene;
-    private world: CANNON.World;
+    // No direct physics world reference
+    private physics?: PhysicsEngine;
     private static fbxLoader = new FBXLoader();
     private static textureLoader = new TextureLoader();
     private desiredSize: number;
 
-    constructor(scene: THREE.Scene, world: CANNON.World, position: THREE.Vector3, desiredSize: number = 20, isChild: boolean = false, mainIndex: number = 0) {
+    constructor(scene: THREE.Scene, _world: unknown, position: THREE.Vector3, desiredSize: number = 20, isChild: boolean = false, mainIndex: number = 0, physics?: PhysicsEngine) {
         this.scene = scene;
-        this.world = world;
+        // world unused; physics engine manages colliders
+        this.physics = physics;
         this.desiredSize = isChild ? desiredSize * 0.6 : 500;  // Main asteroids 500 units
         
         // If this is the main asteroid (not a child), position it in a specific pattern around origin
@@ -73,7 +81,7 @@ export class ProceduralAsteroid {
             asteroidType = '1a';
         }
 
-        console.log(`Loading asteroid ${asteroidType} at position:`, position.toArray());
+        this.log.debug(`Loading asteroid ${asteroidType} at position:`, position.toArray());
         
         // Load the high-res model
         ProceduralAsteroid.fbxLoader.load(
@@ -109,44 +117,53 @@ export class ProceduralAsteroid {
                         return;
                     }
 
-                    // Create physics shape from the scaled geometry
-                    const vertices = scaledGeometry.attributes.position.array;
-                    
-                    // Create a simplified convex hull using fewer points
-                    const simplifiedPoints: CANNON.Vec3[] = [];
-                    const stride = Math.floor(vertices.length / (3 * 100)); // Use ~100 points for the hull
-                    for (let i = 0; i < vertices.length; i += 3 * stride) {
-                        simplifiedPoints.push(new CANNON.Vec3(
-                            vertices[i],
-                            vertices[i + 1],
-                            vertices[i + 2]
+                    // Build a convex hull geometry from the mesh points (robust and stable)
+                    const hullPoints: THREE.Vector3[] = [];
+                    const posAttr = scaledGeometry.getAttribute('position');
+                    const totalVerts = posAttr.count;
+                    // Sample up to ~300 points evenly to keep hull reasonable
+                    const targetPoints = 300;
+                    const step = Math.max(1, Math.floor(totalVerts / targetPoints));
+                    for (let i = 0; i < totalVerts; i += step) {
+                        hullPoints.push(new THREE.Vector3(
+                            posAttr.getX(i),
+                            posAttr.getY(i),
+                            posAttr.getZ(i)
                         ));
                     }
 
-                    // Create a simple sphere shape as fallback if convex hull fails
-                    const boundingSphere = new THREE.Sphere();
-                    scaledGeometry.computeBoundingSphere();
-                    const radius = scaledGeometry.boundingSphere?.radius || this.desiredSize / 2;
-                    
-                    let physicsShape: CANNON.Shape;
-                    try {
-                        // Try to create convex hull with simplified points
-                        physicsShape = new CANNON.ConvexPolyhedron({
-                            vertices: simplifiedPoints,
-                            faces: [] // Let Cannon.js generate the faces
-                        });
-                        console.log('Created convex hull physics shape with', simplifiedPoints.length, 'vertices');
-                    } catch (e) {
-                        console.warn('Failed to create convex hull, falling back to sphere:', e);
-                        physicsShape = new CANNON.Sphere(radius);
+                    const convexGeom: BufferGeometry = new ConvexGeometry(hullPoints);
+                    convexGeom.computeVertexNormals();
+
+                    // Build ConvexPolyhedron from convex hull geometry (works well with all narrowphases)
+                    const geomPos = convexGeom.getAttribute('position');
+                    const geomIndex = convexGeom.getIndex();
+                    if (!geomIndex) convexGeom.setIndex([...Array(geomPos.count).keys()]);
+                    const idxAttr = convexGeom.getIndex()!;
+
+                    // Map unique vertices from indexed geometry
+                    const uniqueMap = new Map<number, number>();
+                    const hullVertices: any[] = [];
+                    for (let i = 0; i < geomPos.count; i++) {
+                        const v = { x: geomPos.getX(i), y: geomPos.getY(i), z: geomPos.getZ(i) } as any;
+                        uniqueMap.set(i, hullVertices.push(v) - 1);
+                    }
+                    // Triangular faces from indices (triples)
+                    const faces: number[][] = [];
+                    for (let i = 0; i < idxAttr.count; i += 3) {
+                        const a = idxAttr.getX(i);
+                        const b = idxAttr.getX(i + 1);
+                        const c = idxAttr.getX(i + 2);
+                        faces.push([uniqueMap.get(a)!, uniqueMap.get(b)!, uniqueMap.get(c)!]);
                     }
 
-                    // Calculate volume and mass based on size
-                    const volume = (4/3) * Math.PI * Math.pow(radius, 3);
-                    const density = 2500;  // kg/m³
-                    const mass = volume * density;
-                    
-                    console.log(`Asteroid ${asteroidType} - Radius: ${radius}m, Mass: ${mass.toExponential(2)} kg`);
+                    // convex hull retained only as reference for non-trimesh paths (disabled)
+
+                    // Use static body for large asteroids (more stable collisions)
+                    convexGeom.computeBoundingSphere();
+                    const radius = convexGeom.boundingSphere?.radius || this.desiredSize / 2;
+                    // static collider (mass unused under engine path)
+                    this.log.debug(`Asteroid ${asteroidType} - Convex hull radius ~ ${radius.toFixed(2)}, using STATIC body`);
 
                     // Create our mesh using the scaled geometry
                     const baseTexturePath = `/Asteroid_${asteroidType}_FBX/2K/Asteroid${asteroidType}`;
@@ -175,7 +192,7 @@ export class ProceduralAsteroid {
                                 );
                             });
                         } catch (e) {
-                            console.log(`Color map not found for ${asteroidType}`);
+                            this.log.debug(`Color map not found for ${asteroidType}`);
                         }
 
                         // Load normal map
@@ -205,7 +222,7 @@ export class ProceduralAsteroid {
                                 });
                                 break;
                             } catch (e) {
-                                console.log(`Failed to load normal map: ${path}`);
+                                this.log.debug(`Failed to load normal map: ${path}`);
                             }
                         }
 
@@ -223,7 +240,7 @@ export class ProceduralAsteroid {
                                 );
                             });
                         } catch (e) {
-                            console.log(`Roughness map not found for ${asteroidType}`);
+                            this.log.debug(`Roughness map not found for ${asteroidType}`);
                         }
 
                         // Load AO map
@@ -247,7 +264,7 @@ export class ProceduralAsteroid {
                                 });
                                 break;
                             } catch (e) {
-                                console.log(`Failed to load AO map: ${path}`);
+                                this.log.debug(`Failed to load AO map: ${path}`);
                             }
                         }
 
@@ -297,68 +314,37 @@ export class ProceduralAsteroid {
                         this.mesh.userData.isAsteroid = true;
                         
                         scene.add(this.mesh);
-                        console.log(`Added asteroid ${asteroidType} to scene at position:`, this.mesh.position.toArray());
+                        this.log.debug(`Added asteroid ${asteroidType} to scene at position:`, this.mesh.position.toArray());
 
                         // Create physics body only after mesh is added and positioned
                         setTimeout(() => {
-                            // Create the physics body with calculated mass
-                            this.body = new CANNON.Body({
-                                mass: mass,
-                                position: new CANNON.Vec3(
-                                    this.mesh.position.x,
-                                    this.mesh.position.y,
-                                    this.mesh.position.z
-                                ),
-                                shape: physicsShape,
-                                material: new CANNON.Material({
-                                    friction: 0.3,
-                                    restitution: 0.1  // Lower restitution for less bouncy collisions
-                                }),
-                                type: CANNON.Body.DYNAMIC,
-                                allowSleep: true,
-                                fixedRotation: false,
-                                linearDamping: 0.2,  // Increased damping for more stability
-                                angularDamping: 0.2,
-                                collisionResponse: true
-                            });
-
-                            // Ensure body starts sleeping and stationary
-                            this.body.sleep();
-                            this.body.velocity.setZero();
-                            this.body.angularVelocity.setZero();
-                            this.body.force.setZero();
-                            this.body.torque.setZero();
-
-                            // Set collision filters
-                            this.body.collisionFilterGroup = 2;  // Asteroid group
-                            this.body.collisionFilterMask = -1;  // Collide with everything
-
-                            // Store reference to physics body
-                            this.mesh.userData.body = this.body;
-
-                            // Add body to world in sleeping state
-                            this.world.addBody(this.body);
-                            
-                            console.log('Created physics body for asteroid at position:', 
-                                this.body.position,
-                                'Mesh position:', this.mesh.position);
-
-                            // Wake up after a longer delay and with collision response temporarily disabled
-                            setTimeout(() => {
-                                if (this.body) {
-                                    // Temporarily disable collision response
-                                    this.body.collisionResponse = false;
-                                    this.body.wakeUp();
-                                    
-                                    // Enable collision response after physics stabilizes
-                                    setTimeout(() => {
-                                        if (this.body) {
-                                            this.body.collisionResponse = true;
-                                            console.log('Enabled collision response for asteroid');
-                                        }
-                                    }, 1000);
+                            try {
+                                const geom = scaledGeometry;
+                                const posAttr = geom.getAttribute('position');
+                                const vertices: number[] = [];
+                                for (let i = 0; i < posAttr.count; i++) {
+                                    vertices.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
                                 }
-                            }, 2000);
+                                let indices: number[] = [];
+                                const idx = geom.getIndex();
+                                if (idx) {
+                                    indices = Array.from(idx.array as any);
+                                } else {
+                                    for (let i = 0; i < posAttr.count; i++) indices.push(i);
+                                }
+
+                                if (this.physics) {
+                                    // Create fixed trimesh collider via physics engine (Rapier path)
+                                    this.rigid = this.physics.createTrimeshBody(vertices, indices, true, {
+                                        x: this.mesh.position.x,
+                                        y: this.mesh.position.y,
+                                        z: this.mesh.position.z,
+                                    });
+                                    this.log.debug('Created Rapier trimesh collider for asteroid');
+                                }
+                            } catch (e) {
+                                this.log.error('Error creating asteroid physics:', e);
+                            }
                         }, 1000);
                     });
                 }
@@ -367,9 +353,12 @@ export class ProceduralAsteroid {
     }
 
     public update(): void {
-        if (this.mesh && this.body) {
-            this.mesh.position.copy(this.body.position as unknown as THREE.Vector3);
-            this.mesh.quaternion.copy(this.body.quaternion as unknown as THREE.Quaternion);
+        if (!this.mesh) return;
+        if (this.rigid) {
+            const p = this.rigid.getPosition();
+            const q = this.rigid.getQuaternion();
+            this.mesh.position.set(p.x, p.y, p.z);
+            this.mesh.quaternion.set(q.x, q.y, q.z, q.w);
         }
     }
 
@@ -385,12 +374,9 @@ export class ProceduralAsteroid {
             }
             this.scene.remove(this.mesh);
         }
-        if (this.body) {
-            this.world.removeBody(this.body);
-        }
     }
 
-    public static createAsteroidField(scene: THREE.Scene, world: CANNON.World): ProceduralAsteroid[] {
+    public static createAsteroidField(scene: THREE.Scene, world: unknown): ProceduralAsteroid[] {
         const asteroids: ProceduralAsteroid[] = [];
         
         // Create 6 main asteroids
@@ -409,8 +395,5 @@ export class ProceduralAsteroid {
         return asteroids;
     }
 
-    // Add getter for physics body
-    public getBody(): CANNON.Body {
-        return this.body;
-    }
-} 
+    // No direct physics body exposure
+}

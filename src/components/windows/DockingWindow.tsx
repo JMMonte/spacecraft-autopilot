@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, ChangeEvent } from 'react';
 import * as THREE from 'three';
 import { Spacecraft } from '../../core/spacecraft';
 import { SpacecraftController } from '../../controllers/spacecraftController';
 import { DockingPhase } from '../../controllers/docking/DockingController';
+import { createLogger } from '../../utils/logger';
+import { BasicWorld } from '../../core/BasicWorld';
 
 interface DockingWindowProps {
     spacecraft: Spacecraft | null;
     controller: SpacecraftController | null;
+    world?: BasicWorld | null;
+    version?: number;
 }
 
 interface DockingInfo {
@@ -52,7 +56,8 @@ export interface AutopilotController {
     setTargetObject: (target: Spacecraft | null, targetPoint: 'center' | 'front' | 'back') => void;
 }
 
-export function DockingWindow({ spacecraft, controller }: DockingWindowProps): JSX.Element {
+export function DockingWindow({ spacecraft, controller, world, version }: DockingWindowProps): JSX.Element {
+    const log = createLogger('ui:DockingWindow');
     const [dockingInfo, setDockingInfo] = useState<DockingInfo>({
         phase: 'idle',
         range: 0,
@@ -66,29 +71,42 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
         target: 'back'
     });
 
-    // Get target spacecraft from autopilot if available
-    const targetSpacecraft = controller?.getAutopilot()?.getTargetObject();
+    // Manage independent target selection for docking
+    const [selectedTarget, setSelectedTarget] = useState<Spacecraft | null>(null);
+    const otherSpacecraft = useMemo(() => {
+        const w = world ?? spacecraft?.basicWorld ?? null;
+        return w?.getSpacecraftList()?.filter(s => s !== spacecraft) ?? [];
+    }, [world, spacecraft, version]);
+
+    // Keep selected target reference in sync if list refreshes
+    useEffect(() => {
+        if (!selectedTarget) return;
+        const stillExists = otherSpacecraft.find(s => s.name === selectedTarget.name) || null;
+        if (!stillExists) {
+            setSelectedTarget(null);
+        }
+    }, [otherSpacecraft, selectedTarget]);
 
     // Check if port is available
     const isPortAvailable = (craftId: 'our' | 'target', portId: 'front' | 'back'): boolean => {
         // Basic validation
-        if (!spacecraft || !targetSpacecraft || spacecraft === targetSpacecraft) {
+        if (!spacecraft || !selectedTarget || spacecraft === selectedTarget) {
             return false;
         }
         
         // Get the correct spacecraft
-        const craft = craftId === 'our' ? spacecraft : targetSpacecraft;
+        const craft = craftId === 'our' ? spacecraft : selectedTarget;
         
         // Check if the port exists and is available
         if (!craft.dockingPorts || !craft.dockingPorts[portId]) {
-            console.warn(`Port ${portId} not found on ${craftId === 'our' ? 'our' : 'target'} spacecraft`);
+            log.warn(`Port ${portId} not found on ${craftId === 'our' ? 'our' : 'target'} spacecraft`);
             return false;
         }
         
         // Check if the port is occupied
         const isOccupied = craft.dockingPorts[portId].isOccupied;
         if (isOccupied) {
-            console.log(`Port ${portId} on ${craftId === 'our' ? 'our' : 'target'} spacecraft is occupied`);
+            log.info(`Port ${portId} on ${craftId === 'our' ? 'our' : 'target'} spacecraft is occupied`);
         }
         
         return !isOccupied;
@@ -106,7 +124,7 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
         }
 
         // For starting new docking, check all conditions
-        if (!targetSpacecraft) {
+        if (!selectedTarget) {
             return false;
         }
 
@@ -139,10 +157,7 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
         };
         setPortSettings(updatedSettings);
 
-        // If we have a target, update the autopilot target point
-        if (targetSpacecraft && controller) {
-            controller.getAutopilot().setTargetObject(targetSpacecraft, newPorts.target);
-        }
+        // Do not modify Autopilot's target from Docking UI
     };
 
     // Handle port selection
@@ -153,11 +168,6 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
         };
         setSelectedPorts(newPorts);
         saveSettings(newPorts);
-
-        // Update autopilot target point if we're changing target port
-        if (type === 'target' && controller && targetSpacecraft) {
-            controller.getAutopilot().setTargetObject(targetSpacecraft, port);
-        }
 
         // If we're already docking, update the ports
         if (spacecraft?.dockingController?.isDocking()) {
@@ -171,15 +181,15 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
         
         const dockingController = spacecraft.dockingController;
         if (!dockingController) {
-            console.warn('No docking controller found on spacecraft');
+            log.warn('No docking controller found on spacecraft');
             return;
         }
 
         if (dockingController.getDockingPhase() === 'docked') {
-            console.log('Undocking');
+            log.info('Undocking');
             dockingController.undock();
         } else if (dockingController.isDocking()) {
-            console.log('Canceling docking');
+            log.info('Canceling docking');
             dockingController.cancelDocking();
             // Force update the docking info to reflect the cancelled state
             setDockingInfo(prev => ({
@@ -190,14 +200,10 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
                 alignmentError: 0,
                 portAlignmentError: 0
             }));
-            // Update autopilot target to maintain target selection
-            if (targetSpacecraft && controller) {
-                controller.getAutopilot().setTargetObject(targetSpacecraft, selectedPorts.target);
-            }
-        } else if (targetSpacecraft) {
-            console.log('Starting docking with ports:', selectedPorts.our, selectedPorts.target);
+        } else if (selectedTarget) {
+            log.info('Starting docking with ports:', selectedPorts.our, selectedPorts.target);
             dockingController.startDocking(
-                targetSpacecraft as any,
+                selectedTarget as any,
                 selectedPorts.our,
                 selectedPorts.target
             );
@@ -207,7 +213,7 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
     // Update docking information
     useEffect(() => {
         const updateInterval = setInterval(() => {
-            if (!spacecraft || !targetSpacecraft) return;
+            if (!spacecraft || !selectedTarget) return;
 
             const dockingController = spacecraft.dockingController;
             if (!dockingController) return;
@@ -251,7 +257,7 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
         }, 100);
 
         return () => clearInterval(updateInterval);
-    }, [spacecraft, targetSpacecraft, selectedPorts]);
+    }, [spacecraft, selectedTarget, selectedPorts]);
 
     return (
         <div className="flex flex-col gap-0.5 p-1 font-mono text-[10px]">
@@ -319,21 +325,21 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
                     <div className="flex gap-1">
                         <button
                             className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.target === 'front' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
-                                !targetSpacecraft ? 'opacity-50' :
+                                !selectedTarget ? 'opacity-50' :
                                 isPortAvailable('target', 'front') ? '' : 'text-red-400'
                             }`}
                             onClick={() => handlePortSelect('target', 'front')}
-                            disabled={!targetSpacecraft}
+                            disabled={!selectedTarget}
                         >
                             Front
                         </button>
                         <button
                             className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.target === 'back' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
-                                !targetSpacecraft ? 'opacity-50' :
+                                !selectedTarget ? 'opacity-50' :
                                 isPortAvailable('target', 'back') ? '' : 'text-red-400'
                             }`}
                             onClick={() => handlePortSelect('target', 'back')}
-                            disabled={!targetSpacecraft}
+                            disabled={!selectedTarget}
                         >
                             Back
                         </button>
@@ -361,9 +367,34 @@ export function DockingWindow({ spacecraft, controller }: DockingWindowProps): J
                         : 'Start Docking'}
             </button>
 
-            {targetSpacecraft && (
+            {/* Target selection */}
+            <div className="mt-2 space-y-0.5">
+                <div className="text-white/50">Target Spacecraft:</div>
+                {otherSpacecraft.length > 0 ? (
+                    <select
+                        className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
+                        value={selectedTarget?.name || ''}
+                        onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                            const name = e.target.value;
+                            const target = otherSpacecraft.find(s => s.name === name) || null;
+                            setSelectedTarget(target);
+                        }}
+                    >
+                        <option value="">Select Spacecraft</option>
+                        {otherSpacecraft.map(s => (
+                            <option key={s.name} value={s.name}>{s.name}</option>
+                        ))}
+                    </select>
+                ) : (
+                    <div className="text-white/50 italic text-center bg-black/40 p-1 text-[10px] border border-white/10">
+                        No other spacecraft available
+                    </div>
+                )}
+            </div>
+
+            {selectedTarget && (
                 <div className="text-cyan-400 text-[10px] mt-1">
-                    Target: {targetSpacecraft.name}
+                    Target: {selectedTarget.name}
                 </div>
             )}
         </div>

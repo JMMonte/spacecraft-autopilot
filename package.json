@@ -7,24 +7,22 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "clean-start": "rm -rf node_modules .vite dist && npm install --legacy-peer-deps && npm run dev"
+    "clean-start": "rm -rf node_modules .vite dist && npm install --legacy-peer-deps && npm run dev",
+    "check:ts": "tsc --noEmit --pretty false",
+    "test:physics": "node tools/collision-check.mjs",
+    "list:unused": "node tools/list-unused.mjs"
   },
   "author": "Joao Montenegro",
   "license": "ISC",
   "dependencies": {
     "@andersonmancini/lens-flare": "^1.0.1",
-    "@dimforge/rapier3d": "^0.14.0",
-    "@dimforge/rapier3d-compat": "^0.14.0",
-    "@react-three/cannon": "^6.6.0",
+    "@dimforge/rapier3d-compat": "^0.19.0",
     "@react-three/drei": "^9.92.7",
     "@react-three/fiber": "^8.15.12",
-    "cannon-es": "^0.20.0",
-    "cannon-es-debugger": "^1.0.0",
     "lucide-react": "^0.469.0",
     "mathjs": "^12.4.1",
     "ml-matrix": "^6.12.0",
     "postprocessing": "^6.36.5",
-    "prop-types": "15.8.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-draggable": "^4.4.6",
@@ -33,7 +31,6 @@
     "three-subdivide": "^1.1.5"
   },
   "devDependencies": {
-    "@types/cannon": "^0.1.13",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.2.19",
@@ -42,6 +39,7 @@
     "autoprefixer": "^10.4.17",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
+    "typescript": "^5.6.3",
     "vite": "^5.1.0"
   }
 }

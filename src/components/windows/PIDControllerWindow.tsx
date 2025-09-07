@@ -155,7 +155,7 @@ export const PIDControllerWindow: React.FC<PIDControllerWindowProps> = ({
     };
 
     return (
-        <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur w-[160px]">
+        <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur w-full">
             {controller && (
                 <div className="space-y-0.5">
                     <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Angular Momentum</h3>

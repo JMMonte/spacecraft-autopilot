@@ -4,7 +4,7 @@ A Three.js-based space simulator with realistic physics and an autopilot system.
 
 ## Features
 
-- Realistic spacecraft physics simulation using CANNON.js
+- Realistic spacecraft physics simulation using Rapier (WASM)
 - Advanced autopilot system with multiple control modes
 - Realistic RCS thruster visualization
 - Beautiful space environment with HDR background

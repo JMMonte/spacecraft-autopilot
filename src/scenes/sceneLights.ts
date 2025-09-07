@@ -16,45 +16,38 @@ export class SceneLights {
     }
 
     private setupLights(): void {
-        // Sun light (directional light with lens flare)
-        this.sunLight = new THREE.DirectionalLight(0xffffff, 5.0);
-        
-        // Position sun at approximately 150 million km (1 AU)
-        const SUN_DISTANCE = 1.496e11; // meters
+        // Scene-scale distances for lighting
         const direction = new THREE.Vector3(-1, 0.5, 1).normalize();
-        this.sunLight.position.copy(direction.multiplyScalar(10000));
-        
-        // Setup shadows with high resolution
+        const SUN_DISTANCE = this.shadowDistance * 6; // ~600 units by default
+        const shadowSize = this.shadowDistance;
+
+        // Sun light (directional with lens flare)
+        this.sunLight = new THREE.DirectionalLight(0xffffff, 3.0);
+        this.sunLight.position.copy(direction.clone().multiplyScalar(SUN_DISTANCE));
+
+        // Balanced shadow settings
         this.sunLight.castShadow = true;
-        this.sunLight.shadow.mapSize.width = 4096;
-        this.sunLight.shadow.mapSize.height = 4096;
+        this.sunLight.shadow.mapSize.width = 2048;
+        this.sunLight.shadow.mapSize.height = 2048;
         this.sunLight.shadow.camera.near = 1;
         this.sunLight.shadow.camera.far = this.shadowDistance * 8;
-        
-        const shadowSize = this.shadowDistance;
         this.sunLight.shadow.camera.left = -shadowSize;
         this.sunLight.shadow.camera.right = shadowSize;
         this.sunLight.shadow.camera.top = shadowSize;
         this.sunLight.shadow.camera.bottom = -shadowSize;
-        
-        // Improve shadow quality
         this.sunLight.shadow.bias = -0.0001;
         this.sunLight.shadow.normalBias = 0.01;
-        this.sunLight.shadow.radius = 1.0;
-        this.sunLight.intensity = 3.0;
-        
+        this.sunLight.shadow.radius = 0.8;
+
         this.scene.add(this.sunLight);
         this.lights.push(this.sunLight);
 
-        // Add secondary blue light on the opposite side
-        const secondaryLight = new THREE.DirectionalLight(0x4466ff, 0.3);  // Dim blue light
-        const oppositeDirection = direction.clone().multiplyScalar(-1);
-        secondaryLight.position.copy(oppositeDirection.multiplyScalar(SUN_DISTANCE));
-        
-        // Setup shadows for secondary light
+        // Secondary fill light (dim, lighter shadows)
+        const secondaryLight = new THREE.DirectionalLight(0x4466ff, 0.25);
+        secondaryLight.position.copy(direction.clone().multiplyScalar(-SUN_DISTANCE));
         secondaryLight.castShadow = true;
-        secondaryLight.shadow.mapSize.width = 4096;
-        secondaryLight.shadow.mapSize.height = 4096;
+        secondaryLight.shadow.mapSize.width = 1024;
+        secondaryLight.shadow.mapSize.height = 1024;
         secondaryLight.shadow.camera.near = 1;
         secondaryLight.shadow.camera.far = this.shadowDistance * 4;
         secondaryLight.shadow.camera.left = -shadowSize;
@@ -63,10 +56,15 @@ export class SceneLights {
         secondaryLight.shadow.camera.bottom = -shadowSize;
         secondaryLight.shadow.bias = -0.00001;
         secondaryLight.shadow.normalBias = 0.02;
-        secondaryLight.shadow.radius = 1.5;
-        
+        secondaryLight.shadow.radius = 0.8;
+
         this.scene.add(secondaryLight);
         this.lights.push(secondaryLight);
+
+        // Add subtle ambient fill to replace BasicWorld's ambient
+        const ambient = new THREE.AmbientLight(0x404040, 0.6);
+        this.scene.add(ambient);
+        this.lights.push(ambient);
 
         // Create lens flare
         const textureLoader = new THREE.TextureLoader();
@@ -102,32 +100,20 @@ export class SceneLights {
         });
     }
 
-    public getLight(): THREE.Light {
+    public getLight(): THREE.DirectionalLight {
         return this.sunLight;
     }
 
     public update(): void {
-        if (this.mainCamera && this.sunLight) {
-            const cameraPos = this.mainCamera.position;
-            const sunDirection = new THREE.Vector3(-1, 0.5, 1).normalize();
-            
-            // Keep sun at realistic distance
-            const SUN_DISTANCE = 1.496e11;
-            this.sunLight.position.copy(sunDirection.clone().multiplyScalar(SUN_DISTANCE));
-            this.sunLight.target.position.copy(cameraPos);
+        if (!this.mainCamera || !this.sunLight) return;
+        const sunDirection = new THREE.Vector3(-1, 0.5, 1).normalize();
+        const SUN_DISTANCE = this.shadowDistance * 6;
 
-            // Position shadow camera closer for better shadow precision
-            const shadowCameraDistance = this.shadowDistance * 4;
-            this.sunLight.shadow.camera.position.copy(
-                cameraPos.clone().add(sunDirection.clone().multiplyScalar(shadowCameraDistance))
-            );
-            this.sunLight.shadow.camera.lookAt(cameraPos);
-            
-            this.sunLight.updateMatrixWorld(true);
-            this.sunLight.target.updateMatrixWorld(true);
-            this.sunLight.shadow.camera.updateMatrixWorld(true);
-            this.sunLight.shadow.camera.updateProjectionMatrix();
-        }
+        // Maintain sun position in scene scale and look towards camera for pleasing speculars
+        this.sunLight.position.copy(sunDirection.clone().multiplyScalar(SUN_DISTANCE));
+        this.sunLight.target.position.copy(this.mainCamera.position);
+        this.sunLight.updateMatrixWorld(false);
+        this.sunLight.target.updateMatrixWorld(false);
     }
 
     public cleanup(): void {

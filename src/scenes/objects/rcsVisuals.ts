@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import { SpacecraftModel } from './spacecraftModel';
+import type { RigidBody } from '../../physics/types';
 
 interface ThrusterData {
     position: [number, number, number];
@@ -12,29 +12,32 @@ interface ThrusterData {
 
 class Thruster {
     public cone: THREE.Group;
-    private spacecraftBody: CANNON.Body;
-    private relativePosition: CANNON.Vec3;
+    private rigid: RigidBody;
+    private relativePosition: THREE.Vector3;
 
-    constructor(cone: THREE.Group, spacecraftBody: CANNON.Body, positionRelativeToParent: [number, number, number]) {
+    constructor(cone: THREE.Group, rigid: RigidBody, positionRelativeToParent: [number, number, number]) {
         this.cone = cone;
-        this.spacecraftBody = spacecraftBody;
-        this.relativePosition = new CANNON.Vec3(...positionRelativeToParent);
+        this.rigid = rigid;
+        this.relativePosition = new THREE.Vector3(...positionRelativeToParent);
     }
 
-    public applyForce(magnitude: number): void {
-        // Get the thruster's direction in local space
-        const localDirection = new THREE.Vector3(0, 1, 0);
-        localDirection.applyQuaternion(this.cone.quaternion);
-        
-        // Convert to CANNON.Vec3 and scale by magnitude
-        const localForce = new CANNON.Vec3(
-            -localDirection.x * magnitude,
-            -localDirection.y * magnitude,
-            -localDirection.z * magnitude
-        );
-
-        // Apply force at thruster position in local space
-        this.spacecraftBody.applyLocalForce(localForce, this.relativePosition);
+    public applyForce(magnitude: number, dt: number = 0): void {
+        // Compute force direction in body-local space using the thruster group rotation
+        const localDir = new THREE.Vector3(0, 1, 0).applyQuaternion(this.cone.quaternion);
+        // Body world orientation
+        const q = this.rigid.getQuaternion();
+        const bodyQuat = new THREE.Quaternion(q.x, q.y, q.z, q.w);
+        // World-space force vector (negative of nozzle direction)
+        const worldForce = localDir.clone().applyQuaternion(bodyQuat).multiplyScalar(-magnitude);
+        // World-space application point = bodyPos + bodyRot * localPos
+        const p = this.rigid.getPosition();
+        const bodyPos = new THREE.Vector3(p.x, p.y, p.z);
+        const worldPoint = this.relativePosition.clone().applyQuaternion(bodyQuat).add(bodyPos);
+        // Apply as impulse to avoid persistent-force accumulation on Rapier
+        if (dt > 0) {
+            const impulse = worldForce.clone().multiplyScalar(dt);
+            this.rigid.applyImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, { x: worldPoint.x, y: worldPoint.y, z: worldPoint.z });
+        }
     }
 }
 
@@ -101,7 +104,7 @@ export class RCSVisuals {
     private boxWidth: number;
     private boxHeight: number;
     private boxDepth: number;
-    private spacecraftBody: CANNON.Body;
+    private rigid: RigidBody;
     private coneRadius: number;
     private coneHeight: number;
     private cones: Thruster[];
@@ -111,11 +114,11 @@ export class RCSVisuals {
     private thrusterGeometry: ThrusterGeometry;
     private thrusterMaterials: ThrusterMaterials;
 
-    constructor(objects: SceneObjects, body: CANNON.Body, _world: CANNON.World) {
+    constructor(objects: SceneObjects, rigid: RigidBody) {
         this.boxWidth = objects.boxWidth;
         this.boxHeight = objects.boxHeight;
         this.boxDepth = objects.boxDepth;
-        this.spacecraftBody = body;
+        this.rigid = rigid;
         this.coneRadius = 0.1;
         this.coneHeight = 0.5;
         
@@ -144,10 +147,10 @@ export class RCSVisuals {
         return this.coneMeshes;
     }
 
-    public applyForce(index: number, magnitude: number): void {
+    public applyForce(index: number, magnitude: number, dt: number = 0): void {
         if (this.cones[index]) {
             // Apply force and update visuals
-            this.cones[index].applyForce(magnitude);
+            this.cones[index].applyForce(magnitude, dt);
             
             // Update visual effects
             const maxHeight = 1.5;
@@ -206,7 +209,7 @@ export class RCSVisuals {
         objects.box.add(thrusterGroup);
     
         // Create thruster controller with the correct position
-        const thruster = new Thruster(thrusterGroup, this.spacecraftBody, position);
+        const thruster = new Thruster(thrusterGroup, this.rigid, position);
         
         // Store references
         this.cones[index] = thruster;

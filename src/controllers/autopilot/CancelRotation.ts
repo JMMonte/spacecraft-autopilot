@@ -2,23 +2,19 @@ import { AutopilotMode } from './AutopilotMode';
 
 export class CancelRotation extends AutopilotMode {
     calculateForces(dt: number): number[] {
-        const body = this.spacecraft.objects.boxBody;
-        const currentQuaternion = body.quaternion;
-        const currentAngularMomentum = body.angularVelocity;
+        const q = this.spacecraft.getWorldOrientation();
+        const qInv = q.clone().invert();
+        const worldAngularVel = this.spacecraft.getWorldAngularVelocity();
 
-        // Convert global angular momentum to local space
-        const localAngularMomentum = currentQuaternion.inverse().vmult(currentAngularMomentum);
+        // Convert global angular velocity to local space
+        const localAngularVel = worldAngularVel.clone().applyQuaternion(qInv);
 
-        // Calculate error in local space
+        // Calculate error in local space (drive to zero)
         const dampingFactor = 10.0;
-        const angularMomentumError = localAngularMomentum.clone().negate().scale(dampingFactor);
+        const angularVelError = localAngularVel.clone().multiplyScalar(-dampingFactor);
 
         // PID controller works in local space
-        const pidOut = this.pidController.update(
-            angularMomentumError,
-            dt
-        );
-        const pidVector = this.toThreeVector(pidOut);
+        const pidVector = this.pidController.update(angularVelError, dt);
 
         // Apply additional scaling to overcome inertia
         const inertiaCompensation = 5.0;

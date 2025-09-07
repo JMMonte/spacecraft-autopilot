@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import { Trajectory } from '../trajectory';
 
 export interface SafetyBox {
@@ -162,7 +161,7 @@ export class TrajectoryPlanner {
      */
     public static calculateSafetyBox(
         targetPos: THREE.Vector3, 
-        targetSize: CANNON.Vec3,
+        targetSize: THREE.Vector3,
         isTarget: boolean = false
     ): SafetyBox {
         // Use same safety margin for all spacecraft to ensure consistent avoidance
@@ -273,7 +272,7 @@ export class TrajectoryPlanner {
         goal: THREE.Vector3,
         otherObjects: Array<{
             position: THREE.Vector3;
-            size: CANNON.Vec3;
+            size: THREE.Vector3;
             isTarget: boolean;
         }>
     ): THREE.Vector3[] {
@@ -330,7 +329,7 @@ export class TrajectoryPlanner {
     private static calculateGridBounds(
         start: THREE.Vector3,
         goal: THREE.Vector3,
-        objects: Array<{ position: THREE.Vector3; size: CANNON.Vec3 }>
+        objects: Array<{ position: THREE.Vector3; size: THREE.Vector3 }>
     ): { min: THREE.Vector3; max: THREE.Vector3 } {
         const points = [start, goal, ...objects.map(obj => obj.position)];
         const min = new THREE.Vector3(Infinity, Infinity, Infinity);

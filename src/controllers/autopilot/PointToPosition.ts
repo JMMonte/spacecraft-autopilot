@@ -2,7 +2,6 @@ import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
 import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 
 export class PointToPosition extends AutopilotMode {
     private targetPosition: THREE.Vector3;
@@ -24,41 +23,43 @@ export class PointToPosition extends AutopilotMode {
     }
 
     calculateForces(dt: number): number[] {
-        const body = this.spacecraft.objects.boxBody;
-        const currentQuaternion = body.quaternion;
-        const currentAngularMomentum = body.angularVelocity;
+        const q = this.spacecraft.getWorldOrientation();
+        const currentAngularVelocity = this.spacecraft.getWorldAngularVelocity();
+        const qInv = q.clone().invert();
 
-        // Calculate desired orientation
-        const targetVec = this.toCannonVec(this.targetPosition);
-        const currentPosition = body.position.clone();
-        const direction = targetVec.vsub(currentPosition);
-        direction.normalize();
+        // Compute world-space direction to target
+        const currentPosition = this.spacecraft.getWorldPosition();
+        const dirWorld = this.targetPosition.clone().sub(currentPosition);
+        if (dirWorld.lengthSq() < 1e-12) {
+            // Already at target position; no pointing needed
+            return Array(24).fill(0);
+        }
+        dirWorld.normalize();
 
-        // Create quaternion that points spacecraft's forward direction at target
-        const forward = new CANNON.Vec3(1, 0, 0); // Forward is along x-axis
-        const errorQuaternion = new CANNON.Quaternion();
-        errorQuaternion.setFromVectors(forward, direction);
+        // Convert target direction into the spacecraft's local frame
+        const dirLocal = dirWorld.clone().applyQuaternion(qInv).normalize();
 
-        // Convert to local space
-        const localAngularMomentum = currentQuaternion.inverse().vmult(currentAngularMomentum);
+        // Local forward axis is +Z for this spacecraft
+        const forwardLocal = new THREE.Vector3(0, 0, 1);
+
+        // Error quaternion expressed in local frame: rotate forward to desired local direction
+        const errorQuaternion = new THREE.Quaternion().setFromUnitVectors(forwardLocal, dirLocal);
+
+        // Convert angular velocity to local space
+        const localAngularVelocity = currentAngularVelocity.clone().applyQuaternion(qInv);
 
         // Calculate control signal based on orientation error
-        const threeErrorQuat = this.toThreeQuaternion(errorQuaternion);
-        const controlSignal = this.calculateControlSignal(threeErrorQuat);
-        const desiredAngVel = this.quaternionToAngularVelocity(threeErrorQuat);
+        const controlSignal = this.calculateControlSignal(errorQuaternion);
+        const desiredAngVel = this.quaternionToAngularVelocity(errorQuaternion);
         desiredAngVel.multiplyScalar(controlSignal);
 
         // Calculate angular momentum error
         const momentOfInertia = this.calculateMomentOfInertia();
         const desiredAngularMomentum = desiredAngVel.multiplyScalar(momentOfInertia);
-        const angularMomentumError = this.toCannonVec(desiredAngularMomentum).vsub(localAngularMomentum);
+        const angularMomentumError = desiredAngularMomentum.sub(localAngularVelocity);
 
         // Apply PID control
-        const pidOut = this.pidController.update(
-            angularMomentumError,
-            dt
-        );
-        const pidVector = this.toThreeVector(pidOut);
+        const pidVector = this.pidController.update(angularMomentumError, dt);
 
         // Apply additional scaling to overcome inertia
         const inertiaCompensation = 5.0;
@@ -66,4 +67,4 @@ export class PointToPosition extends AutopilotMode {
 
         return this.applyPIDOutputToThrusters(pidVector);
     }
-} 
+}

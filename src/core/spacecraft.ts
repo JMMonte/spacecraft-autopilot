@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import { RCSVisuals } from '../scenes/objects/rcsVisuals';
 import { SpacecraftModel } from '../scenes/objects/spacecraftModel';
 import { SceneHelpers } from '../scenes/sceneHelpers';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { DockingController } from '../controllers/docking/DockingController';
 import { BasicWorld } from './BasicWorld';
+import type { PhysicsEngine } from '../physics';
 
 interface DockingPortInfo {
     position: THREE.Vector3;
@@ -23,9 +23,8 @@ interface DockingPorts {
 }
 
 export class Spacecraft {
-    public world: CANNON.World;
     public basicWorld: BasicWorld;
-    public initialPosition: CANNON.Vec3;
+    public initialPosition: THREE.Vector3 | { x: number; y: number; z: number };
     public objects: SpacecraftModel;
     public rcsVisuals: RCSVisuals;
     public helpers: SceneHelpers;
@@ -37,26 +36,54 @@ export class Spacecraft {
     public name: string;
     public uuid: string;
     private debugObjects: THREE.Object3D[] = [];
+    private physics?: import('../physics').PhysicsEngine;
+    private dockingHandle?: unknown;
 
     constructor(
-        world: CANNON.World,
+        world: any,
         scene: THREE.Scene & { userData: { camera: THREE.Camera; light: THREE.Light } },
-        initialPosition: CANNON.Vec3 = new CANNON.Vec3(0, 0, 2),
+        initialPosition: THREE.Vector3 | { x: number; y: number; z: number } = new THREE.Vector3(0, 0, 2),
         width: number = 1,
         height: number = 1,
         depth: number = 2,
-        basicWorld?: BasicWorld
+        basicWorld?: BasicWorld,
+        physics?: PhysicsEngine
     ) {
         this.uuid = THREE.MathUtils.generateUUID();
-        this.world = world;
         this.basicWorld = basicWorld as BasicWorld;
+        this.physics = physics;
         this.initialPosition = initialPosition;
 
-        this.objects = new SpacecraftModel(scene, world, width, height, depth);
-        this.rcsVisuals = new RCSVisuals(this.objects, this.objects.boxBody, world);
+        this.objects = new SpacecraftModel(scene, world, width, height, depth, undefined, physics);
+        if (this.objects.rigid) {
+            this.rcsVisuals = new RCSVisuals(this.objects, this.objects.rigid);
+        } else {
+            this.rcsVisuals = new RCSVisuals(this.objects, {
+                setPosition: (x: number, y: number, z: number) => { this.objects.boxBody.position.set(x, y, z); },
+                setQuaternion: (x: number, y: number, z: number, w: number) => { this.objects.boxBody.quaternion.set(x, y, z, w); },
+                getPosition: () => this.objects.boxBody.position as unknown as { x: number; y: number; z: number },
+                getQuaternion: () => this.objects.boxBody.quaternion as unknown as { x: number; y: number; z: number; w: number },
+                setMass: (m: number) => { this.objects.boxBody.mass = m; },
+                getMass: () => this.objects.boxBody.mass,
+                setDamping: () => {},
+                applyForce: () => {},
+                getLinearVelocity: () => this.objects.boxBody.velocity as unknown as { x: number; y: number; z: number },
+                setLinearVelocity: (v: { x: number; y: number; z: number }) => { this.objects.boxBody.velocity.set(v.x, v.y, v.z); },
+                getAngularVelocity: () => this.objects.boxBody.angularVelocity as unknown as { x: number; y: number; z: number },
+                setAngularVelocity: (v: { x: number; y: number; z: number }) => { this.objects.boxBody.angularVelocity.set(v.x, v.y, v.z); },
+                getNative: <T>() => this.objects.boxBody as unknown as T,
+            } as any);
+        }
         this.objects.rcsVisuals = this.rcsVisuals;
 
-        this.objects.boxBody.position.copy(initialPosition);
+        // Set initial position through model (supports engine abstraction)
+        if (this.objects.rigid) {
+            const p = initialPosition as any;
+            this.objects.rigid.setPosition(p.x, p.y, p.z);
+        } else {
+            const p = initialPosition as any;
+            this.objects.boxBody.position.set(p.x, p.y, p.z);
+        }
 
         // Get the camera from the scene
         const camera = scene.userData.camera;
@@ -96,7 +123,6 @@ export class Spacecraft {
 
     public update(): void {
         this.objects.update();
-        this.spacecraftController.applyForces();
         this.dockingController.update();
     }
 
@@ -107,43 +133,17 @@ export class Spacecraft {
         this.spacecraftController.cleanup?.();
     }
 
-    /**
-     * Convert a CANNON.Vec3 to THREE.Vector3
-     */
-    public static toThreeVec3(cannonVec: CANNON.Vec3): THREE.Vector3 {
-        return new THREE.Vector3(cannonVec.x, cannonVec.y, cannonVec.z);
-    }
-
-    /**
-     * Convert a THREE.Vector3 to CANNON.Vec3
-     */
-    public static toCannonVec3(threeVec: THREE.Vector3): CANNON.Vec3 {
-        return new CANNON.Vec3(threeVec.x, threeVec.y, threeVec.z);
-    }
-
-    /**
-     * Convert a CANNON.Quaternion to THREE.Quaternion
-     */
-    public static toThreeQuat(cannonQuat: CANNON.Quaternion): THREE.Quaternion {
-        return new THREE.Quaternion(cannonQuat.x, cannonQuat.y, cannonQuat.z, cannonQuat.w);
-    }
-
-    /**
-     * Convert a THREE.Quaternion to CANNON.Quaternion
-     */
-    public static toCannonQuat(threeQuat: THREE.Quaternion): CANNON.Quaternion {
-        return new CANNON.Quaternion(threeQuat.x, threeQuat.y, threeQuat.z, threeQuat.w);
-    }
+    // Conversion helpers removed; all math uses THREE types
 
     /**
      * Get the world position of the spacecraft's center
      */
     public getWorldPosition(): THREE.Vector3 {
-        return new THREE.Vector3(
-            this.objects.boxBody.position.x,
-            this.objects.boxBody.position.y,
-            this.objects.boxBody.position.z
-        );
+        if (this.objects.rigid) {
+            const p = this.objects.rigid.getPosition();
+            return new THREE.Vector3(p.x, p.y, p.z);
+        }
+        return new THREE.Vector3(this.objects.boxBody.position.x, this.objects.boxBody.position.y, this.objects.boxBody.position.z);
     }
 
     /**
@@ -161,8 +161,8 @@ export class Spacecraft {
         if (!port) return null;
 
         const worldPos = port.position.clone();
-        worldPos.applyQuaternion(Spacecraft.toThreeQuat(this.objects.boxBody.quaternion));
-        worldPos.add(Spacecraft.toThreeVec3(this.objects.boxBody.position));
+        worldPos.applyQuaternion(this.getWorldOrientation());
+        worldPos.add(this.getWorldPosition());
         return worldPos;
     }
 
@@ -174,7 +174,7 @@ export class Spacecraft {
         if (!port) return null;
 
         const worldDir = port.direction.clone();
-        worldDir.applyQuaternion(Spacecraft.toThreeQuat(this.objects.boxBody.quaternion));
+        worldDir.applyQuaternion(this.getWorldOrientation());
         return worldDir;
     }
 
@@ -207,25 +207,24 @@ export class Spacecraft {
         theirPort.dockedTo = { spacecraft: this, port: ourPortId };
 
         // Create a physical constraint between the spacecraft
-        const constraint = new CANNON.LockConstraint(
-            this.objects.boxBody,
-            otherSpacecraft.objects.boxBody
-        );
-
-        // Add the constraint to both spacecraft's worlds
-        if (this.world) {
-            this.world.addConstraint(constraint);
+        // Create a fixed joint via physics engine if available (works with Rapier)
+        if (this.physics && this.objects.rigid && otherSpacecraft.objects.rigid) {
+            this.dockingHandle = this.physics.createFixedConstraint(this.objects.rigid, otherSpacecraft.objects.rigid);
             
             // Zero out relative velocities
-            const relativeVelocity = new CANNON.Vec3().copy(this.objects.boxBody.velocity).vsub(otherSpacecraft.objects.boxBody.velocity);
-            const relativeAngularVelocity = new CANNON.Vec3().copy(this.objects.boxBody.angularVelocity).vsub(otherSpacecraft.objects.boxBody.angularVelocity);
-            
-            // Apply impulses to cancel out relative motion
-            this.objects.boxBody.velocity.vsub(relativeVelocity.scale(0.5), this.objects.boxBody.velocity);
-            otherSpacecraft.objects.boxBody.velocity.vadd(relativeVelocity.scale(0.5), otherSpacecraft.objects.boxBody.velocity);
-            
-            this.objects.boxBody.angularVelocity.vsub(relativeAngularVelocity.scale(0.5), this.objects.boxBody.angularVelocity);
-            otherSpacecraft.objects.boxBody.angularVelocity.vadd(relativeAngularVelocity.scale(0.5), otherSpacecraft.objects.boxBody.angularVelocity);
+            const vA = this.objects.rigid.getLinearVelocity();
+            const vB = otherSpacecraft.objects.rigid.getLinearVelocity();
+            const relV = { x: (vA.x - vB.x) * 0.5, y: (vA.y - vB.y) * 0.5, z: (vA.z - vB.z) * 0.5 };
+            this.objects.rigid.setLinearVelocity({ x: vA.x - relV.x, y: vA.y - relV.y, z: vA.z - relV.z });
+            otherSpacecraft.objects.rigid.setLinearVelocity({ x: vB.x + relV.x, y: vB.y + relV.y, z: vB.z + relV.z });
+
+            const wA = this.objects.rigid.getAngularVelocity();
+            const wB = otherSpacecraft.objects.rigid.getAngularVelocity();
+            const relW = { x: (wA.x - wB.x) * 0.5, y: (wA.y - wB.y) * 0.5, z: (wA.z - wB.z) * 0.5 };
+            this.objects.rigid.setAngularVelocity({ x: wA.x - relW.x, y: wA.y - relW.y, z: wA.z - relW.z });
+            otherSpacecraft.objects.rigid.setAngularVelocity({ x: wB.x + relW.x, y: wB.y + relW.y, z: wB.z + relW.z });
+        } else {
+            console.warn('Docking: constraints not supported in current physics engine. Visual docking only.');
         }
 
         return true;
@@ -248,16 +247,9 @@ export class Spacecraft {
         otherSpacecraft.dockingPorts[otherPort].dockedTo = null;
 
         // Remove the physical constraint if it exists
-        if (this.world) {
-            // Find and remove the constraint between the two bodies
-            const constraints = this.world.constraints;
-            for (let i = constraints.length - 1; i >= 0; i--) {
-                const constraint = constraints[i];
-                if ((constraint.bodyA === this.objects.boxBody && constraint.bodyB === otherSpacecraft.objects.boxBody) ||
-                    (constraint.bodyA === otherSpacecraft.objects.boxBody && constraint.bodyB === this.objects.boxBody)) {
-                    this.world.removeConstraint(constraint);
-                }
-            }
+        if (this.physics && this.dockingHandle) {
+            this.physics.removeConstraint(this.dockingHandle);
+            this.dockingHandle = undefined;
         }
 
         return true;
@@ -286,15 +278,15 @@ export class Spacecraft {
     }
 
     public getVelocity(): THREE.Vector3 {
-        return Spacecraft.toThreeVec3(this.objects.boxBody.velocity);
+        return this.getWorldVelocity();
     }
 
     public getAngularVelocity(): THREE.Vector3 {
-        return Spacecraft.toThreeVec3(this.objects.boxBody.angularVelocity);
+        return this.getWorldAngularVelocity();
     }
 
     public getOrientation(): THREE.Quaternion {
-        return Spacecraft.toThreeQuat(this.objects.boxBody.quaternion);
+        return this.getWorldOrientation();
     }
 
     public getMass(): number {
@@ -317,26 +309,27 @@ export class Spacecraft {
         });
     }
 
-    public getMainBodyDimensions(): CANNON.Vec3 {
-        const shape = this.objects.boxBody.shapes[0] as CANNON.Box;
-        return shape.halfExtents;
+    public getMainBodyDimensions(): THREE.Vector3 {
+        const shape: any = this.objects.boxBody.shapes[0];
+        const he = shape?.halfExtents || { x: 0.5, y: 0.5, z: 1 };
+        return new THREE.Vector3(he.x, he.y, he.z);
     }
 
-    public getFullDimensions(): CANNON.Vec3 {
+    public getFullDimensions(): THREE.Vector3 {
         const mainBody = this.getMainBodyDimensions();
         const portDepth = this.objects.dockingPortDepth || 0.3;
         const portLength = this.objects.dockingPortLength || 0.1;
         const extraDepth = portDepth + portLength;
 
-        return new CANNON.Vec3(
+        return new THREE.Vector3(
             mainBody.x,
             mainBody.y,
             mainBody.z + extraDepth // Add docking port depth to each end
         );
     }
 
-    public getPortDimensions(): CANNON.Vec3 {
-        return new CANNON.Vec3(
+    public getPortDimensions(): THREE.Vector3 {
+        return new THREE.Vector3(
             this.objects.dockingPortRadius || 0.3,
             this.objects.dockingPortRadius || 0.3,
             this.objects.dockingPortLength || 0.1
@@ -352,29 +345,37 @@ export class Spacecraft {
             -boxDepth / 2 - dockingPortDepth;
     }
 
+    public getDockingPortCamera(portId: keyof DockingPorts): THREE.PerspectiveCamera | undefined {
+        if (portId !== 'front' && portId !== 'back') return undefined as any;
+        return this.objects.getDockingPortCamera(portId as 'front' | 'back');
+    }
+
+    public getDockingPortCameras(): Partial<Record<'front' | 'back', THREE.PerspectiveCamera>> {
+        return this.objects.getDockingPortCameras();
+    }
+
     public getWorldOrientation(): THREE.Quaternion {
-        return new THREE.Quaternion(
-            this.objects.boxBody.quaternion.x,
-            this.objects.boxBody.quaternion.y,
-            this.objects.boxBody.quaternion.z,
-            this.objects.boxBody.quaternion.w
-        );
+        if (this.objects.rigid) {
+            const q = this.objects.rigid.getQuaternion();
+            return new THREE.Quaternion(q.x, q.y, q.z, q.w);
+        }
+        return new THREE.Quaternion(this.objects.boxBody.quaternion.x, this.objects.boxBody.quaternion.y, this.objects.boxBody.quaternion.z, this.objects.boxBody.quaternion.w);
     }
 
     public getWorldVelocity(): THREE.Vector3 {
-        return new THREE.Vector3(
-            this.objects.boxBody.velocity.x,
-            this.objects.boxBody.velocity.y,
-            this.objects.boxBody.velocity.z
-        );
+        if (this.objects.rigid) {
+            const v = this.objects.rigid.getLinearVelocity();
+            return new THREE.Vector3(v.x, v.y, v.z);
+        }
+        return new THREE.Vector3(this.objects.boxBody.velocity.x, this.objects.boxBody.velocity.y, this.objects.boxBody.velocity.z);
     }
 
     public getWorldAngularVelocity(): THREE.Vector3 {
-        return new THREE.Vector3(
-            this.objects.boxBody.angularVelocity.x,
-            this.objects.boxBody.angularVelocity.y,
-            this.objects.boxBody.angularVelocity.z
-        );
+        if (this.objects.rigid) {
+            const w = this.objects.rigid.getAngularVelocity();
+            return new THREE.Vector3(w.x, w.y, w.z);
+        }
+        return new THREE.Vector3(this.objects.boxBody.angularVelocity.x, this.objects.boxBody.angularVelocity.y, this.objects.boxBody.angularVelocity.z);
     }
 
     public visualizeDebugObjects(scene: THREE.Scene): void {
@@ -435,27 +436,4 @@ export class Spacecraft {
     }
 }
 
-interface InitializeSpacecraftParams {
-    physicsWorld: CANNON.World;
-    scene: THREE.Scene & { userData: { camera: THREE.Camera; light: THREE.Light } };
-}
-
-export async function initializeSpacecraft({ physicsWorld, scene }: InitializeSpacecraftParams): Promise<{
-    spacecraft: Spacecraft;
-    controller: SpacecraftController;
-}> {
-    // Create default spacecraft
-    const spacecraft = new Spacecraft(
-        physicsWorld,
-        scene,
-        new CANNON.Vec3(0, 0, 2),
-        1, // width
-        1, // height
-        2  // depth
-    );
-
-    return {
-        spacecraft,
-        controller: spacecraft.spacecraftController
-    };
-} 
+// initializeSpacecraft helper removed (engine-driven creation now lives in BasicWorld)

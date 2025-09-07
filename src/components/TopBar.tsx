@@ -8,7 +8,8 @@ import {
   Settings, 
   Cpu,
   Plus,
-  List
+  List,
+  Camera
 } from 'lucide-react';
 import { WINDOWS } from '../constants';
 
@@ -26,7 +27,8 @@ const WINDOW_ICONS = {
   arrows: ArrowRight,
   pid: Settings,
   autopilot: Cpu,
-  spacecraftList: List
+  spacecraftList: List,
+  dockingCameras: Camera
 };
 
 export const TopBar: React.FC<TopBarProps> = ({ visibleWindows, onToggleWindow, onCreateNewSpacecraft }) => {

@@ -10,12 +10,10 @@ export class SceneCamera {
 
     constructor(renderer: THREE.WebGLRenderer, _world: BasicWorld) {
         this.scene = new THREE.Scene();
-        this.camera = new THREE.PerspectiveCamera(
-            75,
-            window.innerWidth / window.innerHeight,
-            0.1,
-            1000000000000
-        );
+        const size = new THREE.Vector2();
+        renderer.getSize(size);
+        const aspect = size.y > 0 ? size.x / size.y : 1;
+        this.camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000000000000);
         
         // Store relative camera position
         this.relativePosition = new THREE.Vector3(0, 5, 10);

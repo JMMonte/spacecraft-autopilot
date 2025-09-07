@@ -40,15 +40,14 @@ export class OrientationMatchAutopilot extends AutopilotMode {
     }
 
     calculateForces(dt: number): number[] {
-        const body = this.spacecraft.objects.boxBody;
-        const currentQuaternion = body.quaternion;
-        const currentAngularMomentum = body.angularVelocity;
+        // Current orientation and angular velocity in world space
+        const q = this.spacecraft.getWorldOrientation();
+        const worldAngularVel = this.spacecraft.getWorldAngularVelocity();
+        const qInv = q.clone().invert();
 
         // Update target orientation if following a target spacecraft
         if (this.targetSpacecraft) {
-            const targetQuat = this.targetSpacecraft.objects.boxBody.quaternion;
-            this.targetOrientation = this.toThreeQuaternion(targetQuat);
-            
+            this.targetOrientation = this.targetSpacecraft.getWorldOrientation();
             if (this.reverseAlign) {
                 // Rotate 180 degrees around the Y axis for reverse alignment
                 const reverseRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
@@ -56,32 +55,25 @@ export class OrientationMatchAutopilot extends AutopilotMode {
             }
         }
 
-        // Calculate error quaternion in global space
-        const targetQuat = this.toCannonQuaternion(this.targetOrientation);
-        const errorQuaternion = currentQuaternion.inverse().mult(targetQuat);
+        // Error quaternion expressed in the spacecraft's local frame
+        // qErrorLocal = inverse(current) * target
+        const errorQuaternion = qInv.clone().multiply(this.targetOrientation.clone());
 
-        // Convert to local space
-        const localAngularMomentum = currentQuaternion.inverse().vmult(currentAngularMomentum);
+        // Convert world angular velocity to local space
+        const localAngularVel = worldAngularVel.clone().applyQuaternion(qInv);
 
-        // Calculate orientation error axis and angle
-        const threeErrorQuat = this.toThreeQuaternion(errorQuaternion);
-        const angle = 2 * Math.acos(Math.abs(threeErrorQuat.w));
-        const axis = new THREE.Vector3(threeErrorQuat.x, threeErrorQuat.y, threeErrorQuat.z);
-        if (axis.lengthSq() > 0.001) {
-            axis.normalize();
-            axis.multiplyScalar(angle);
-        }
+        // Calculate control signal based on orientation error
+        const controlSignal = this.calculateControlSignal(errorQuaternion);
+        const desiredAngVel = this.quaternionToAngularVelocity(errorQuaternion);
+        desiredAngVel.multiplyScalar(controlSignal);
 
-        // Calculate desired angular momentum change
-        const dampingFactor = this.config.damping.factor;
-        const angularMomentumError = this.toCannonVec(axis).vsub(localAngularMomentum.scale(dampingFactor));
+        // Calculate angular momentum error (approx using scalar inertia)
+        const momentOfInertia = this.calculateMomentOfInertia();
+        const desiredAngularMomentum = desiredAngVel.multiplyScalar(momentOfInertia);
+        const angularMomentumError = desiredAngularMomentum.sub(localAngularVel);
 
         // Apply PID control in local space
-        const pidOut = this.pidController.update(
-            angularMomentumError,
-            dt
-        );
-        const pidVector = this.toThreeVector(pidOut);
+        const pidVector = this.pidController.update(angularMomentumError, dt);
 
         // Apply additional scaling to overcome inertia
         const inertiaCompensation = 5.0;
@@ -90,4 +82,4 @@ export class OrientationMatchAutopilot extends AutopilotMode {
         // Apply directly to thrusters since we're already in local space
         return this.applyPIDOutputToThrusters(pidVector);
     }
-} 
+}

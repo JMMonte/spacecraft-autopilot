@@ -12,12 +12,10 @@ export default defineConfig({
             '@styles': path.resolve(__dirname, './src/styles'),
             '@scenes': path.resolve(__dirname, './src/scenes'),
             '@controllers': path.resolve(__dirname, './src/controllers'),
-            '@ui': path.resolve(__dirname, './src/ui'),
             '@helpers': path.resolve(__dirname, './src/helpers'),
             '@core': path.resolve(__dirname, './src/core'),
             '@utils': path.resolve(__dirname, './src/utils'),
             '@config': path.resolve(__dirname, './src/config'),
-            '@js': path.resolve(__dirname, './src/js'),
             'three/examples/jsm/objects/Lensflare': 'three/examples/jsm/objects/Lensflare.js'
         },
         extensions: ['.ts', '.tsx', '.js', '.jsx']
@@ -34,7 +32,7 @@ export default defineConfig({
         rollupOptions: {
             output: {
                 manualChunks: {
-                    'vendor': ['three', 'cannon-es'],
+                    'vendor': ['three'],
                     'loaders': ['three/examples/jsm/loaders/TIFFLoader', 'three/examples/jsm/loaders/EXRLoader'],
                     'scenes': [
                         './src/scenes/sceneCamera.ts',
@@ -44,7 +42,7 @@ export default defineConfig({
                         './src/scenes/sceneObjConfig.ts'
                     ],
                     'controllers': [
-                        './src/controllers/dockingController.ts',
+                        './src/controllers/docking/DockingController.ts',
                         './src/controllers/autopilot/Autopilot.ts',
                         './src/controllers/pidController.ts',
                         './src/controllers/spacecraftController.ts',
@@ -56,7 +54,7 @@ export default defineConfig({
     },
     assetsInclude: ['**/*.exr', '**/*.tiff', '**/*.tif', '**/*.png', '**/*.jpg', '**/*.jpeg'],
     optimizeDeps: {
-        exclude: ['cannon-es'],
+        exclude: [],
         include: [
             'three',
             'three/examples/jsm/objects/Lensflare',

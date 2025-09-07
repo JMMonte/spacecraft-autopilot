@@ -1,20 +1,26 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { BasicWorld } from './core/BasicWorld';
+import appConfig from './config/config.json';
 import { Spacecraft } from './core/spacecraft';
 import { Cockpit } from './components/Cockpit';
+import { useElementSize } from './hooks/useElementSize';
+import { createLogger } from './utils/logger';
 
 export function App() {
+    const log = createLogger('ui:App');
     const [world, setWorld] = useState<BasicWorld | null>(null);
     const [activeSpacecraft, setActiveSpacecraft] = useState<Spacecraft | null>(null);
     const [loadingProgress, setLoadingProgress] = useState<number>(0);
     const [loadingStatus, setLoadingStatus] = useState<string>('Initializing...');
     const [spacecraftListVersion, setSpacecraftListVersion] = useState<number>(0);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const worldRef = useRef<BasicWorld | null>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
 
     const createNewSpacecraft = useCallback(() => {
         if (!world) return;
         const newSpacecraft = world.createNewSpacecraft();
-        console.log('App: Creating new spacecraft');
+        log.debug('Creating new spacecraft');
         world.setActiveSpacecraft(newSpacecraft);
         return newSpacecraft;
     }, [world]);
@@ -24,19 +30,15 @@ export function App() {
             try {
                 if (!canvasRef.current) return;
 
-                // Initialize world with the canvas
-                const worldInstance = new BasicWorld({}, canvasRef.current);
+                // Initialize world with the canvas and app config
+                const worldInstance = new BasicWorld(appConfig as any, canvasRef.current);
+                worldRef.current = worldInstance;
 
                 // Set loading callbacks
                 worldInstance.setLoadingCallbacks(
                     (progress: number) => setLoadingProgress(Math.round(progress)),
                     (status: string) => setLoadingStatus(status)
                 );
-
-                // Set spacecraft list change callback
-                worldInstance.setSpacecraftListChangeCallback((version: number) => {
-                    setSpacecraftListVersion(version);
-                });
 
                 // Wait for world initialization
                 await worldInstance.initializeWorld();
@@ -61,32 +63,70 @@ export function App() {
         initializeWorld();
 
         return () => {
-            if (world) {
-                world.cleanup();
+            if (worldRef.current) {
+                worldRef.current.cleanup();
+                worldRef.current = null;
             }
         };
     }, []);
 
     useEffect(() => {
-        if (world) {
-            const onActiveSpacecraftChange = (spacecraft: Spacecraft) => {
-                setActiveSpacecraft(spacecraft);
-            };
-            world.setActiveSpacecraftChangeCallback(onActiveSpacecraftChange);
-        }
+        if (!world) return;
+
+        const onActiveSpacecraftChange = (spacecraft: Spacecraft) => {
+            setActiveSpacecraft(spacecraft);
+        };
+
+        const onSpacecraftListChange = (version: number) => {
+            setSpacecraftListVersion(version);
+        };
+
+        world.setActiveSpacecraftChangeCallback(onActiveSpacecraftChange);
+        world.setSpacecraftListChangeCallback(onSpacecraftListChange);
+
+        return () => {
+            // Replace with no-ops to avoid stale closures if world persists
+            world.setActiveSpacecraftChangeCallback((_s: Spacecraft) => {});
+            world.setSpacecraftListChangeCallback((_v: number) => {});
+        };
     }, [world]);
 
+    // Reactful resize: observe canvas size and trigger world resize
+    const { width: canvasWidth, height: canvasHeight } = useElementSize(canvasRef.current);
     useEffect(() => {
-        if (world) {
-            const onSpacecraftListChange = (version: number) => {
-                setSpacecraftListVersion(version);
-            };
-            world.setSpacecraftListChangeCallback(onSpacecraftListChange);
+        if (!worldRef.current) return;
+        if (canvasWidth > 0 && canvasHeight > 0) {
+            worldRef.current.resize();
+        }
+    }, [canvasWidth, canvasHeight]);
+
+    // Ensure our container can receive key events when the world is ready
+    useEffect(() => {
+        if (world && containerRef.current) {
+            containerRef.current.focus();
         }
     }, [world]);
 
     return (
-        <>
+        <div
+            ref={containerRef}
+            tabIndex={-1}
+            onKeyDown={(e) => {
+                // Ignore typing in inputs/textareas/selects or contenteditable elements
+                const target = e.target as HTMLElement | null;
+                const tag = target?.tagName;
+                const isEditable = !!target && (target.getAttribute?.('contenteditable') === 'true');
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable) return;
+                worldRef.current?.onKeyDown(e.nativeEvent);
+            }}
+            onKeyUp={(e) => {
+                const target = e.target as HTMLElement | null;
+                const tag = target?.tagName;
+                const isEditable = !!target && (target.getAttribute?.('contenteditable') === 'true');
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable) return;
+                worldRef.current?.onKeyUp(e.nativeEvent);
+            }}
+        >
             {/* Loading Overlay */}
             <div
                 className="fixed inset-0 bg-black z-50 flex items-center justify-center"
@@ -114,6 +154,11 @@ export function App() {
                 ref={canvasRef}
                 className="fixed inset-0 w-full h-full"
                 style={{ zIndex: 0 }}
+                onDoubleClick={(e) => {
+                    if (worldRef.current) {
+                        worldRef.current.onDoubleClick(e.nativeEvent);
+                    }
+                }}
             />
 
             {/* Cockpit UI */}
@@ -127,6 +172,6 @@ export function App() {
                     spacecraftListVersion={spacecraftListVersion}
                 />
             )}
-        </>
+        </div>
     );
-} 
+}

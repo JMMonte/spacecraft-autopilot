@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { setAutopilotState } from '../../state/store';
 import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import { AutopilotConfig } from './AutopilotMode';
@@ -7,6 +8,7 @@ import { CancelLinearMotion } from './CancelLinearMotion';
 import { PointToPosition } from './PointToPosition';
 import { OrientationMatchAutopilot } from './OrientationMatchAutopilot';
 import { GoToPosition } from './GoToPosition';
+import { createLogger } from '../../utils/logger';
 
 interface AutopilotModes {
     orientationMatch: boolean;
@@ -17,6 +19,7 @@ interface AutopilotModes {
 }
 
 export class Autopilot {
+    private log = createLogger('controllers:Autopilot');
     private spacecraft: Spacecraft;
     private config: AutopilotConfig;
     private thrusterGroups: any;
@@ -39,6 +42,7 @@ export class Autopilot {
     private orientationPidController: PIDController;
     private linearPidController: PIDController;
     private momentumPidController: PIDController;
+    private onStateChange?: (state: { enabled: boolean; activeAutopilots: AutopilotModes }) => void;
 
     constructor(
         spacecraft: Spacecraft,
@@ -209,7 +213,7 @@ export class Autopilot {
 
     public setEnabled(enabled: boolean): void {
         this.isEnabled = enabled;
-        console.log('Autopilot enabled:', this.isEnabled);
+        this.log.debug('Autopilot enabled:', this.isEnabled);
     }
 
     public getAutopilotEnabled(): boolean {
@@ -271,7 +275,7 @@ export class Autopilot {
     }
 
     public setMode(mode: keyof AutopilotModes, enabled: boolean = true): void {
-        console.log('setMode called:', mode, enabled);
+        this.log.debug('setMode called:', mode, enabled);
         const rotationModes = ['orientationMatch', 'cancelRotation', 'pointToPosition'];
         const translationModes = ['cancelLinearMotion', 'goToPosition'];
 
@@ -295,15 +299,22 @@ export class Autopilot {
 
     private updateAutopilotState(): void {
         this.isEnabled = Object.values(this.activeAutopilots).some(v => v);
-        console.log('Autopilot enabled:', this.isEnabled);
-        document.dispatchEvent(
-            new CustomEvent('autopilotStateChanged', {
-                detail: {
-                    enabled: this.isEnabled,
-                    activeAutopilots: this.activeAutopilots,
-                },
-            })
-        );
+        this.log.debug('Autopilot enabled:', this.isEnabled);
+        // React-friendly callback for consumers (preferred over DOM events)
+        if (this.onStateChange) {
+            try {
+                this.onStateChange({ enabled: this.isEnabled, activeAutopilots: { ...this.activeAutopilots } });
+            } catch (err) {
+                this.log.warn('Autopilot onStateChange callback error:', err);
+            }
+        }
+        // Push to global store for UI subscriptions
+        try {
+            setAutopilotState(this.isEnabled, { ...this.activeAutopilots });
+        } catch (err) {
+            this.log.warn('Autopilot store update error:', err);
+        }
+        // Legacy DOM event removed; React store handles subscriptions
     }
 
     public getTargetOrientation(): THREE.Quaternion {
@@ -367,4 +378,8 @@ export class Autopilot {
             this.setMode(mode as keyof AutopilotModes, false);
         });
     }
-} 
+
+    public setOnStateChange(cb: (state: { enabled: boolean; activeAutopilots: AutopilotModes }) => void): void {
+        this.onStateChange = cb;
+    }
+}

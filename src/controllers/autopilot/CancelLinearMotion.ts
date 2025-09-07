@@ -1,7 +1,7 @@
 import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
 import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
-import * as CANNON from 'cannon-es';
+import * as THREE from 'three';
 
 export class CancelLinearMotion extends AutopilotMode {
     constructor(
@@ -15,33 +15,27 @@ export class CancelLinearMotion extends AutopilotMode {
     }
 
     calculateForces(dt: number): number[] {
-        const body = this.spacecraft.objects.boxBody;
-        const currentQuaternion = body.quaternion;
-        const currentVelocity = body.velocity;
+        const q = this.spacecraft.getWorldOrientation();
+        const currentVelocity = this.spacecraft.getWorldVelocity();
+        const qInv = q.clone().invert();
 
         // Convert global velocity to local space
-        const localVelocity = currentQuaternion.inverse().vmult(currentVelocity);
+        const localVelocity = currentVelocity.clone().applyQuaternion(qInv);
 
         // Calculate error in local space (we want zero velocity)
         const dampingFactor = this.config.damping.factor;
-        const velocityError = localVelocity.clone().negate().scale(dampingFactor);
+        const velocityError = localVelocity.clone().multiplyScalar(-dampingFactor);
 
         // PID controller works in local space
-        const pidOut = this.pidController.update(
-            velocityError,
-            dt
-        );
+        const pidOut = this.pidController.update(velocityError, dt);
 
         // Calculate force in local space (F = ma)
-        const localForce = new CANNON.Vec3(
-            pidOut.x * body.mass,
-            pidOut.y * body.mass,
-            pidOut.z * body.mass
-        );
+        const mass = this.spacecraft.getMass();
+        const localForce = new THREE.Vector3(pidOut.x * mass, pidOut.y * mass, pidOut.z * mass);
 
         // Limit maximum force
         if (localForce.length() > this.config.limits.maxForce) {
-            localForce.scale(this.config.limits.maxForce / localForce.length());
+            localForce.multiplyScalar(this.config.limits.maxForce / localForce.length());
         }
 
         // Apply translational forces to thruster groups
