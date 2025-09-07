@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import type { PhysicsEngine } from '../physics';
-import { createLogger } from '../utils/logger';
 import { AsteroidModel, AsteroidModelId } from './AsteroidModel';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -30,7 +29,6 @@ export interface AsteroidSystemConfig {
 }
 
 export class AsteroidSystem {
-  private log = createLogger('objects:AsteroidSystem');
   private scene: THREE.Scene;
   private physics?: PhysicsEngine;
   private config: AsteroidSystemConfig;
