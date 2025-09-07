@@ -33,9 +33,12 @@ export class CancelLinearMotion extends AutopilotMode {
         const mass = this.spacecraft.getMass();
         const localForce = new THREE.Vector3(pidOut.x * mass, pidOut.y * mass, pidOut.z * mass);
 
-        // Limit maximum force
-        if (localForce.length() > this.config.limits.maxForce) {
-            localForce.multiplyScalar(this.config.limits.maxForce / localForce.length());
+        // Limit by configured max force and by momentum budget per step (|F|*dt <= maxLinearMomentum)
+        const maxByForce = this.config.limits.maxForce;
+        const maxByMomentum = this.config.limits.maxLinearMomentum / Math.max(dt, 1e-3);
+        const maxAllowable = Math.min(maxByForce, maxByMomentum);
+        if (localForce.length() > maxAllowable) {
+            localForce.multiplyScalar(maxAllowable / localForce.length());
         }
 
         // Apply translational forces to thruster groups

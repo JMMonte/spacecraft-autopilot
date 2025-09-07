@@ -30,6 +30,7 @@ export class Autopilot {
     public targetOrientation: THREE.Quaternion;
     private targetObject: Spacecraft | null = null;
     private targetPoint: THREE.Vector3 = new THREE.Vector3();
+    private autoTuneEnabled: boolean = false;
 
     // Mode instances
     private cancelRotationMode!: CancelRotation;
@@ -56,6 +57,9 @@ export class Autopilot {
             };
             maxForce?: number;
             dampingFactor?: number;
+            maxAngularMomentum?: number;
+            maxLinearMomentum?: number;
+            autoTune?: boolean;
         } = {}
     ) {
         this.spacecraft = spacecraft;
@@ -63,6 +67,7 @@ export class Autopilot {
         this.thrust = thrust;
         this.targetPosition = new THREE.Vector3();
         this.targetOrientation = new THREE.Quaternion();
+        this.autoTuneEnabled = options.autoTune ?? false;
 
         // Initialize config with default values
         const defaultPidGains = {
@@ -80,6 +85,12 @@ export class Autopilot {
             limits: {
                 maxForce: options.maxForce ?? 1000,         // Reduced max force
                 epsilon: 0.01,
+                maxAngularMomentum: options.maxAngularMomentum ?? 2.0,
+                maxLinearMomentum: options.maxLinearMomentum ?? 10.0,
+                maxAngularVelocity:  options.pidGains?.orientation ? 1.0 : 1.2,
+                maxAngularAcceleration: 3.0,
+                maxLinearVelocity: options.maxLinearMomentum ? (options.maxLinearMomentum / Math.max(this.spacecraft.getMass(), 1e-3)) * 4 : 8.0,
+                maxLinearAcceleration: 2.5,
             },
             damping: {
                 factor: options.dampingFactor ?? 8.0,       // Much higher damping
@@ -251,6 +262,20 @@ export class Autopilot {
 
         let forces = Array(24).fill(0);
 
+        // Publish live target orientation when pointing to a position (for UI arrows)
+        if (this.activeAutopilots.pointToPosition) {
+            const q = this.spacecraft.getWorldOrientation();
+            const pos = this.spacecraft.getWorldPosition();
+            const dirWorld = this.targetPosition.clone().sub(pos);
+            if (dirWorld.lengthSq() > 1e-10) {
+                dirWorld.normalize();
+                const forwardWorld = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+                const delta = new THREE.Quaternion().setFromUnitVectors(forwardWorld, dirWorld);
+                const qTargetWorld = delta.multiply(q);
+                this.setTargetOrientation(qTargetWorld);
+            }
+        }
+
         if (this.activeAutopilots.cancelRotation) {
             forces = this.mergeForces(forces, this.cancelRotationMode.calculateForces(dt));
         }
@@ -290,6 +315,18 @@ export class Autopilot {
                 translationModes.forEach((m) => {
                     if (m !== mode) this.activeAutopilots[m as keyof AutopilotModes] = false;
                 });
+            }
+
+            // Auto-tune relevant controllers when enabling a mode
+            if (this.autoTuneEnabled) {
+                if (rotationModes.includes(mode)) {
+                    this.orientationPidController.autoCalibrate().catch(() => {});
+                }
+                if (translationModes.includes(mode)) {
+                    // Both linear position and momentum controllers are used across translation modes
+                    this.linearPidController.autoCalibrate().catch(() => {});
+                    this.momentumPidController.autoCalibrate().catch(() => {});
+                }
             }
         }
 
@@ -358,6 +395,10 @@ export class Autopilot {
         return this.momentumPidController;
     }
 
+    public setAutoTune(enabled: boolean): void {
+        this.autoTuneEnabled = enabled;
+    }
+
     public setTargetPosition(position: THREE.Vector3): void {
         this.targetPosition.copy(position);
         // Clear any target object when setting a direct position
@@ -381,5 +422,16 @@ export class Autopilot {
 
     public setOnStateChange(cb: (state: { enabled: boolean; activeAutopilots: AutopilotModes }) => void): void {
         this.onStateChange = cb;
+    }
+
+    // Telemetry accessors for UI
+    public getPointToPositionTelemetry(): any {
+        return (this.pointToPositionMode as any)?.getTelemetry?.();
+    }
+    public getOrientationMatchTelemetry(): any {
+        return (this.orientationMatchMode as any)?.getTelemetry?.();
+    }
+    public getGoToPositionTelemetry(): any {
+        return (this.goToPositionMode as any)?.getTelemetry?.();
     }
 }

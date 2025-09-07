@@ -1,4 +1,5 @@
 import { AutopilotMode } from './AutopilotMode';
+import * as THREE from 'three';
 
 export class CancelRotation extends AutopilotMode {
     calculateForces(dt: number): number[] {
@@ -9,12 +10,22 @@ export class CancelRotation extends AutopilotMode {
         // Convert global angular velocity to local space
         const localAngularVel = worldAngularVel.clone().applyQuaternion(qInv);
 
-        // Calculate error in local space (drive to zero)
-        const dampingFactor = 10.0;
-        const angularVelError = localAngularVel.clone().multiplyScalar(-dampingFactor);
+        // Work in angular momentum domain; target L = 0 (use axis-specific inertias)
+        const Iax = this.calculateMomentOfInertiaByAxis();
+        const currentL = new THREE.Vector3(
+            localAngularVel.x * Iax.x,
+            localAngularVel.y * Iax.y,
+            localAngularVel.z * Iax.z
+        );
+        // Limit corrective momentum to configured maximum
+        const maxL = this.config.limits.maxAngularMomentum;
+        let momentumError = currentL.clone().multiplyScalar(-1);
+        if (momentumError.length() > maxL) {
+            momentumError.multiplyScalar(maxL / momentumError.length());
+        }
 
-        // PID controller works in local space
-        const pidVector = this.pidController.update(angularVelError, dt);
+        // PID controller works in local space using momentum error
+        const pidVector = this.pidController.update(momentumError, dt);
 
         // Apply additional scaling to overcome inertia
         const inertiaCompensation = 5.0;
@@ -23,4 +34,4 @@ export class CancelRotation extends AutopilotMode {
         // Apply directly to thrusters since we're already in local space
         return this.applyPIDOutputToThrusters(pidVector);
     }
-} 
+}

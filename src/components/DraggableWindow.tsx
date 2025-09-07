@@ -22,6 +22,9 @@ interface DraggableWindowProps {
   minHeight?: number;
   defaultSize?: { width?: number; height?: number };
   onSizeChange?: (size: { width?: number; height?: number }) => void;
+  // Z-order and focus
+  zIndex?: number;
+  onFocus?: () => void;
 }
 
 export const DraggableWindow: React.FC<DraggableWindowProps> = ({ 
@@ -37,7 +40,9 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
   minWidth = 200,
   minHeight = 120,
   defaultSize,
-  onSizeChange
+  onSizeChange,
+  zIndex,
+  onFocus
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(initiallyCollapsed);
   const nodeRef = useRef<HTMLDivElement>(null);
@@ -84,6 +89,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
     // Only apply height when expanded; collapsed uses natural header height
     height: isCollapsed ? undefined : height,
     minWidth,
+    zIndex,
   };
 
   type ResizeDir =
@@ -180,6 +186,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
       <div 
         ref={nodeRef} 
         className={`absolute bg-black/60 backdrop-blur-sm border border-white/20 rounded shadow-lg pointer-events-auto ${isResizing ? 'select-none' : ''}`}
+        onMouseDownCapture={() => onFocus?.()}
         style={mergedStyle}
       >
         <div ref={headerRef} className="window-handle flex justify-between items-center px-2 py-1 bg-black/60 border-b border-white/20 cursor-move">

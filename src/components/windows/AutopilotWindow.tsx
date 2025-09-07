@@ -39,6 +39,7 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
     const [otherSpacecraft, setOtherSpacecraft] = useState<Spacecraft[]>([]);
 
     const autopilot = controller?.getAutopilot();
+    const [apTelemetry, setApTelemetry] = useState<any | null>(null);
 
     // Update spacecraft list when version changes
     useEffect(() => {
@@ -73,6 +74,22 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
             }
         }
     }, [spacecraft?.name, world, autopilot, version]);
+
+    // Poll autopilot telemetry periodically for display
+    useEffect(() => {
+        if (!autopilot) return;
+        const id = setInterval(() => {
+            try {
+                setApTelemetry({
+                    modes: autopilot.getActiveAutopilots?.(),
+                    point: autopilot.getPointToPositionTelemetry?.(),
+                    orient: autopilot.getOrientationMatchTelemetry?.(),
+                    goto: autopilot.getGoToPositionTelemetry?.(),
+                });
+            } catch {}
+        }, 100);
+        return () => clearInterval(id);
+    }, [autopilot]);
 
     const saveSettings = (updates: Partial<TargetSettings> = {}) => {
         if (!spacecraft?.name) return;
@@ -247,6 +264,42 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                     </div>
                 )}
             </div>
+
+            {/* Autopilot Telemetry */}
+            <div className="space-y-0.5">
+                <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Telemetry</h3>
+                {apTelemetry?.modes?.pointToPosition && apTelemetry?.point && (
+                    <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
+                        <div className="text-cyan-300/90">Point To Position</div>
+                        <div>angle: {apTelemetry.point.angleDeg?.toFixed?.(1)} deg</div>
+                        <div>ω_des: {apTelemetry.point.wDesMag?.toFixed?.(2)} rad/s</div>
+                        <div>I_eff: {apTelemetry.point.Ieff?.toFixed?.(2)}</div>
+                        <div>L_err: {apTelemetry.point.LErr?.toFixed?.(2)}</div>
+                        <div>α_max: {apTelemetry.point.alphaMax?.toFixed?.(2)}</div>
+                    </div>
+                )}
+                {apTelemetry?.modes?.orientationMatch && apTelemetry?.orient && (
+                    <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
+                        <div className="text-cyan-300/90">Orientation Match</div>
+                        <div>angle: {apTelemetry.orient.angleDeg?.toFixed?.(1)} deg</div>
+                        <div>ω_des: {apTelemetry.orient.wDesMag?.toFixed?.(2)} rad/s</div>
+                        <div>I_eff: {apTelemetry.orient.Ieff?.toFixed?.(2)}</div>
+                        <div>L_err: {apTelemetry.orient.LErr?.toFixed?.(2)}</div>
+                        <div>α_max: {apTelemetry.orient.alphaMax?.toFixed?.(2)}</div>
+                    </div>
+                )}
+                {apTelemetry?.modes?.goToPosition && apTelemetry?.goto && (
+                    <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
+                        <div className="text-cyan-300/90">Go To Position</div>
+                        <div>dist: {apTelemetry.goto.distance?.toFixed?.(2)} m</div>
+                        <div>v∥: {apTelemetry.goto.vAlong?.toFixed?.(2)} m/s</div>
+                        <div>v_des: {apTelemetry.goto.vDes?.toFixed?.(2)} m/s</div>
+                        <div>d_stop: {apTelemetry.goto.dStop?.toFixed?.(2)} m</div>
+                        <div>align: {apTelemetry.goto.alignAngleDeg?.toFixed?.(1)}° gate: {String(apTelemetry.goto.alignGate)}</div>
+                        <div>a_max: {apTelemetry.goto.aMax?.toFixed?.(2)} v_max: {apTelemetry.goto.vMax?.toFixed?.(2)}</div>
+                    </div>
+                )}
+            </div>
         </div>
     );
-}; 
+};

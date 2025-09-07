@@ -22,11 +22,11 @@ export class SceneCamera {
 
     private initializeControls(renderer: THREE.WebGLRenderer): void {
         this.controls = new OrbitControls(this.camera, renderer.domElement);
-        this.controls.enableDamping = true;
+        this.controls.enableDamping = false;
         this.controls.dampingFactor = 0.05;
         this.controls.screenSpacePanning = false;
         this.controls.minDistance = 5;
-        this.controls.maxDistance = 50;
+        this.controls.maxDistance = 50000;
         this.controls.maxPolarAngle = Math.PI;
         
         // Enable smooth rotation

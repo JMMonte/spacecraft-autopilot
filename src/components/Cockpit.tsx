@@ -17,6 +17,7 @@ import { AutopilotWindow } from './windows/AutopilotWindow';
 import { SpacecraftListWindow } from './windows/SpacecraftListWindow';
 import { DockingWindow } from './windows/DockingWindow';
 import { DockingCamerasWindow } from './windows/DockingCamerasWindow';
+import { DockingCameraView, PortId as DockingPortId } from './windows/DockingCameraView';
 import { Spacecraft } from '../core/spacecraft';
 import { useElementSize } from '../hooks/useElementSize';
 import { SpacecraftController } from '../controllers/spacecraftController';
@@ -61,6 +62,16 @@ interface TelemetryValues {
 interface AutopilotState {
     pointToPosition: boolean;
     goToPosition: boolean;
+}
+
+type CameraKey = string; // `${spacecraftUuid}:${DockingPortId}`
+interface CameraWindowState {
+    key: CameraKey;
+    spacecraftUuid: string;
+    portId: DockingPortId;
+    open: boolean;
+    position: WindowPosition;
+    size: { width?: number; height?: number };
 }
 
 const calculateInitialPositions = (viewportWidth: number): WindowPositions => {
@@ -125,6 +136,35 @@ export const Cockpit: React.FC<CockpitProps> = ({
     });
     const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
 
+    // Z-order management for draggable windows
+    const initialZ = 100;
+    const [zCounter, setZCounter] = useState<number>(initialZ + 10);
+    const [windowZ, setWindowZ] = useState<Record<WindowKey, number>>({
+        spacecraftList: initialZ + 1,
+        telemetry:      initialZ + 2,
+        horizon:        initialZ + 3,
+        dimensions:     initialZ + 4,
+        rcs:            initialZ + 5,
+        arrows:         initialZ + 6,
+        pid:            initialZ + 7,
+        autopilot:      initialZ + 8,
+        docking:        initialZ + 9,
+        dockingCameras: initialZ + 10,
+    });
+
+    const bringWindowToFront = (key: WindowKey) => {
+        setWindowZ(prev => ({ ...prev, [key]: zCounter + 1 }));
+        setZCounter(prev => prev + 1);
+    };
+
+    // Per-camera draggable windows + z-order
+    const [cameraWindows, setCameraWindows] = useState<Record<CameraKey, CameraWindowState>>({});
+    const [cameraWindowZ, setCameraWindowZ] = useState<Record<CameraKey, number>>({});
+    const bringCameraWindowToFront = (key: CameraKey) => {
+        setCameraWindowZ(prev => ({ ...prev, [key]: zCounter + 1 }));
+        setZCounter(prev => prev + 1);
+    };
+
     // Refs
     const horizonRef = useRef<HTMLCanvasElement>(null);
     const targetMarkerRef = useRef<THREE.LineSegments | null>(null);
@@ -141,20 +181,58 @@ export const Cockpit: React.FC<CockpitProps> = ({
         if (uiWidth > 0) setWindowPositions(calculateInitialPositions(uiWidth));
     }, [uiWidth]);
 
+    const toggleCameraWindow = useCallback((spacecraftUuid: string, portId: DockingPortId) => {
+        setCameraWindows(prev => {
+            const key: CameraKey = `${spacecraftUuid}:${portId}`;
+            const existing = prev[key];
+            if (existing) {
+                return { ...prev, [key]: { ...existing, open: !existing.open } };
+            }
+            // New window: position it near the docking cameras window by default
+            const basePos = windowPositions.dockingCameras || { x: 20, y: 20 };
+            const openCount = Object.values(prev).filter(w => w.open).length;
+            const offset = openCount * 30;
+            const newWin: CameraWindowState = {
+                key,
+                spacecraftUuid,
+                portId,
+                open: true,
+                position: { x: basePos.x + 280 + offset, y: basePos.y + offset },
+                size: { width: 320, height: 200 },
+            };
+            return { ...prev, [key]: newWin };
+        });
+        setCameraWindowZ(prev => {
+            const key: CameraKey = `${spacecraftUuid}:${portId}`;
+            if (prev[key] != null) return prev;
+            return { ...prev, [key]: zCounter + 1 };
+        });
+        setZCounter(prev => prev + 1);
+    }, [windowPositions.dockingCameras, zCounter]);
+
+    const setCameraWindowPosition = useCallback((key: CameraKey, pos: WindowPosition) => {
+        setCameraWindows(prev => prev[key] ? { ...prev, [key]: { ...prev[key], position: pos } } : prev);
+    }, []);
+
+    const setCameraWindowSize = useCallback((key: CameraKey, size: { width?: number; height?: number }) => {
+        setCameraWindows(prev => prev[key] ? { ...prev, [key]: { ...prev[key], size: { ...prev[key].size, ...size } } } : prev);
+    }, []);
+
     const updateTelemetry = useCallback(() => {
         if (spacecraft?.objects?.box) {
-            // Read from abstractions (supports Rapier)
-            const v = spacecraft.getWorldVelocity();
-            const av = spacecraft.getWorldAngularVelocity();
+            // Avoid calling into Rapier from this separate RAF. Read the cached
+            // values synchronized by SpacecraftModel.update() after the physics step.
+            const v = spacecraft.objects?.boxBody?.velocity ?? new THREE.Vector3();
+            const av = spacecraft.objects?.boxBody?.angularVelocity ?? new THREE.Vector3();
             const quaternion = spacecraft.objects.box?.quaternion ?? { x: 0, y: 0, z: 0, w: 1 };
 
             // Update telemetry values for display
             setTelemetryValues({
                 position: spacecraft.objects.box.position,
                 velocity: new THREE.Vector3(
-                    Number(v.x?.toFixed(2)) ?? 0,
-                    Number(v.y?.toFixed(2)) ?? 0,
-                    Number(v.z?.toFixed(2)) ?? 0
+                    Number((v.x ?? 0).toFixed?.(2) ?? v.x ?? 0),
+                    Number((v.y ?? 0).toFixed?.(2) ?? v.y ?? 0),
+                    Number((v.z ?? 0).toFixed?.(2) ?? v.z ?? 0)
                 ),
                 orientation: new THREE.Quaternion(
                     quaternion.x ?? 0,
@@ -163,9 +241,9 @@ export const Cockpit: React.FC<CockpitProps> = ({
                     quaternion.w ?? 1
                 ),
                 angularVelocity: new THREE.Vector3(
-                    Number(av.x?.toFixed(2)) ?? 0,
-                    Number(av.y?.toFixed(2)) ?? 0,
-                    Number(av.z?.toFixed(2)) ?? 0
+                    Number((av.x ?? 0).toFixed?.(2) ?? av.x ?? 0),
+                    Number((av.y ?? 0).toFixed?.(2) ?? av.y ?? 0),
+                    Number((av.z ?? 0).toFixed?.(2) ?? av.z ?? 0)
                 ),
                 mass: spacecraft.getMass() ?? 0,
                 thrusterStatus: spacecraft.getThrusterStatus() ?? []
@@ -429,10 +507,12 @@ export const Cockpit: React.FC<CockpitProps> = ({
     }, []);
 
     const toggleWindow = (windowName: string) => {
-        setVisibleWindows(prev => ({
-            ...prev,
-            [windowName]: !prev[windowName as WindowKey]
-        }));
+        setVisibleWindows(prev => {
+            const key = windowName as WindowKey;
+            const next = !prev[key];
+            if (next) bringWindowToFront(key);
+            return { ...prev, [windowName]: next } as WindowStates;
+        });
     };
 
     const updateWindowPosition = (key: string, position: WindowPosition) => {
@@ -477,6 +557,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             onPositionChange={(pos: WindowPosition) => updateWindowPosition('spacecraftList', pos)}
                             initiallyCollapsed={false}
                             isVisible={visibleWindows.spacecraftList}
+                            zIndex={windowZ.spacecraftList}
+                            onFocus={() => bringWindowToFront('spacecraftList')}
                         >
                             <SpacecraftListWindow
                                 world={world}
@@ -496,6 +578,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             onPositionChange={(pos: WindowPosition) => updateWindowPosition('telemetry', pos)}
                             initiallyCollapsed={false}
                             isVisible={visibleWindows.telemetry}
+                            zIndex={windowZ.telemetry}
+                            onFocus={() => bringWindowToFront('telemetry')}
                         >
                             <TelemetryWindow telemetry={telemetryValues} />
                         </DraggableWindow>
@@ -508,6 +592,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             onPositionChange={(pos: WindowPosition) => updateWindowPosition('horizon', pos)}
                             initiallyCollapsed={false}
                             isVisible={visibleWindows.horizon}
+                            zIndex={windowZ.horizon}
+                            onFocus={() => bringWindowToFront('horizon')}
                         >
                             <ArtificialHorizonWindow horizonRef={horizonRef} />
                         </DraggableWindow>
@@ -519,6 +605,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             defaultPosition={windowPositions.dimensions}
                             onPositionChange={(pos: WindowPosition) => updateWindowPosition('dimensions', pos)}
                             isVisible={visibleWindows.dimensions}
+                            zIndex={windowZ.dimensions}
+                            onFocus={() => bringWindowToFront('dimensions')}
                         >
                             <DimensionsWindow spacecraft={spacecraft} />
                         </DraggableWindow>
@@ -530,6 +618,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             defaultPosition={windowPositions.rcs}
                             onPositionChange={(pos: WindowPosition) => updateWindowPosition('rcs', pos)}
                             isVisible={visibleWindows.rcs}
+                            zIndex={windowZ.rcs}
+                            onFocus={() => bringWindowToFront('rcs')}
                         >
                             <RCSControlsWindow spacecraft={spacecraft} />
                         </DraggableWindow>
@@ -541,6 +631,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             defaultPosition={windowPositions.arrows}
                             onPositionChange={(pos: WindowPosition) => updateWindowPosition('arrows', pos)}
                             isVisible={visibleWindows.arrows}
+                            zIndex={windowZ.arrows}
+                            onFocus={() => bringWindowToFront('arrows')}
                         >
                             <HelperArrowsWindow spacecraft={spacecraft} />
                         </DraggableWindow>
@@ -552,6 +644,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             defaultPosition={windowPositions.pid}
                             onPositionChange={(pos: WindowPosition) => updateWindowPosition('pid', pos)}
                             isVisible={visibleWindows.pid}
+                            zIndex={windowZ.pid}
+                            onFocus={() => bringWindowToFront('pid')}
                         >
                             <PIDControllerWindow 
                                 controller={controller?.getAutopilot()?.getOrientationPidController() ?? null}
@@ -568,6 +662,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             onPositionChange={(pos: WindowPosition) => updateWindowPosition('autopilot', pos)}
                             initiallyCollapsed={false}
                             isVisible={visibleWindows.autopilot}
+                            zIndex={windowZ.autopilot}
+                            onFocus={() => bringWindowToFront('autopilot')}
                         >
                             <AutopilotWindow
                                 spacecraft={spacecraft}
@@ -584,6 +680,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             defaultPosition={windowPositions.docking}
                             onPositionChange={(pos) => updateWindowPosition('docking', pos)}
                             onClose={() => toggleWindow('docking')}
+                            zIndex={windowZ.docking}
+                            onFocus={() => bringWindowToFront('docking')}
                         >
                         <DockingWindow
                             spacecraft={spacecraft}
@@ -600,10 +698,45 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             defaultPosition={windowPositions.dockingCameras}
                             onPositionChange={(pos) => updateWindowPosition('dockingCameras', pos)}
                             onClose={() => toggleWindow('dockingCameras')}
+                            zIndex={windowZ.dockingCameras}
+                            onFocus={() => bringWindowToFront('dockingCameras')}
                         >
-                            <DockingCamerasWindow world={world} version={spacecraftListVersion} />
+                            <DockingCamerasWindow 
+                                world={world} 
+                                version={spacecraftListVersion}
+                                onToggleCamera={toggleCameraWindow}
+                                openCameraKeys={Object.values(cameraWindows).filter(w => w.open).map(w => w.key)}
+                            />
                         </DraggableWindow>
                     )}
+                    {Object.values(cameraWindows).filter(w => w.open).map(w => {
+                        const sc = world?.getSpacecraftList?.().find(s => s.uuid === w.spacecraftUuid) ?? null;
+                        const title = `Camera: ${sc?.name ?? 'Unknown'} ${w.portId === 'front' ? 'Front' : 'Back'}`;
+                        return (
+                            <DraggableWindow
+                                key={w.key}
+                                title={title}
+                                defaultPosition={w.position}
+                                onPositionChange={(pos) => setCameraWindowPosition(w.key, pos)}
+                                initiallyCollapsed={false}
+                                isVisible={true}
+                                resizable={true}
+                                defaultSize={w.size}
+                                onSizeChange={(size) => setCameraWindowSize(w.key, size)}
+                                onClose={() => toggleCameraWindow(w.spacecraftUuid, w.portId)}
+                                zIndex={cameraWindowZ[w.key]}
+                                onFocus={() => bringCameraWindowToFront(w.key)}
+                            >
+                                <div className="w-full h-full">
+                                    <DockingCameraView 
+                                        world={world ?? null}
+                                        spacecraft={sc}
+                                        portId={w.portId}
+                                    />
+                                </div>
+                            </DraggableWindow>
+                        );
+                    })}
                 </div>
 
                 <button

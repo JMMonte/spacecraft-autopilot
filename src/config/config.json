@@ -1,4 +1,5 @@
 {
+    "debug": true,
     "physicsEngine": "rapier",
     "initialSpacecraft": [
         {
@@ -11,12 +12,41 @@
         },
         {
             "name": "Bravo",
-            "position": { "x": 2, "y": 2, "z": 2 },
+            "position": { "x": -2, "y": 2, "z": -3 },
             "width": 1,
             "height": 1,
             "depth": 1,
             "initialConeVisibility": false
         }
     ],
-    "initialFocus": 0
+    "initialFocus": 0,
+    "asteroidSystem": {
+        "origin": { "x": 0, "y": 0, "z": -600 },
+        "inclinationDeg": 17,
+        "raanDeg": 45,
+        "argPeriapsisDeg": 0,
+        "primary": {
+            "name": "(87) Sylvia",
+            "diameter": 286,
+            "model": "2b"
+        },
+        "moons": [
+            {
+                "name": "Romulus",
+                "diameter": 58,
+                "semiMajorAxis": 356,
+                "period": 315360,
+                "meanAnomalyDeg": 0,
+                "model": "1a"
+            },
+            {
+                "name": "Remus",
+                "diameter": 27,
+                "semiMajorAxis": 706,
+                "period": 119232,
+                "meanAnomalyDeg": 180,
+                "model": "1e"
+            }
+        ]
+    }
 }

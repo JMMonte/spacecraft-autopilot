@@ -26,33 +26,43 @@ export function App() {
     }, [world]);
 
     useEffect(() => {
+        // Guard against React 18 StrictMode double-invoking effects in dev
+        // by tracking the latest init run and aborting stale ones.
+        let cancelled = false;
+        const runToken = Symbol('initRun');
+        // Store the latest token so async code can check if it's stale
+        (worldRef as any)._latestRun = runToken;
+
         async function initializeWorld() {
             try {
                 if (!canvasRef.current) return;
 
-                // Initialize world with the canvas and app config
                 const worldInstance = new BasicWorld(appConfig as any, canvasRef.current);
+
+                // Set early so events (keydown/keyup) will target the most recent instance
                 worldRef.current = worldInstance;
 
-                // Set loading callbacks
                 worldInstance.setLoadingCallbacks(
                     (progress: number) => setLoadingProgress(Math.round(progress)),
                     (status: string) => setLoadingStatus(status)
                 );
 
-                // Wait for world initialization
                 await worldInstance.initializeWorld();
+
+                // Abort if a newer init has started or we unmounted
+                if (cancelled || (worldRef as any)._latestRun !== runToken) {
+                    try { worldInstance.cleanup(); } catch {}
+                    return;
+                }
 
                 setWorld(worldInstance);
                 setSpacecraftListVersion(prev => prev + 1);
 
-                // Set active spacecraft
                 const initialSpacecraft = worldInstance.getActiveSpacecraft();
                 if (initialSpacecraft) {
                     setActiveSpacecraft(initialSpacecraft);
                 }
 
-                // Start render loop
                 worldInstance.startRenderLoop();
             } catch (error) {
                 console.error('Error initializing world:', error);
@@ -63,8 +73,11 @@ export function App() {
         initializeWorld();
 
         return () => {
+            cancelled = true;
+            // Invalidate any in-flight initializeWorld calls
+            (worldRef as any)._latestRun = Symbol('cancelledInitRun');
             if (worldRef.current) {
-                worldRef.current.cleanup();
+                try { worldRef.current.cleanup(); } catch {}
                 worldRef.current = null;
             }
         };

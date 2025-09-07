@@ -21,6 +21,8 @@ export class SceneHelpers {
             1,
             0xff0000
         );
+        // HUD-like: do not occlude lens flares
+        (this.autopilotArrow as any).userData = { ...(this.autopilotArrow as any).userData, lensflare: 'no-occlusion' };
         this.scene.add(this.autopilotArrow);
 
         // Initialize autopilot torque arrow (blue)
@@ -30,6 +32,7 @@ export class SceneHelpers {
             1,
             0x0000ff
         );
+        (this.autopilotTorqueArrow as any).userData = { ...(this.autopilotTorqueArrow as any).userData, lensflare: 'no-occlusion' };
         this.scene.add(this.autopilotTorqueArrow);
 
         // Initialize rotation axis arrow (green)
@@ -39,6 +42,7 @@ export class SceneHelpers {
             1,
             0x00ff00
         );
+        (this.rotationAxisArrow as any).userData = { ...(this.rotationAxisArrow as any).userData, lensflare: 'no-occlusion' };
         this.scene.add(this.rotationAxisArrow);
 
         // Initialize orientation arrow (yellow)
@@ -48,6 +52,7 @@ export class SceneHelpers {
             1,
             0xffff00
         );
+        (this.orientationArrow as any).userData = { ...(this.orientationArrow as any).userData, lensflare: 'no-occlusion' };
         this.scene.add(this.orientationArrow);
 
         // Initialize velocity arrow (cyan)
@@ -57,6 +62,7 @@ export class SceneHelpers {
             1,
             0x00ffff
         );
+        (this.velocityArrow as any).userData = { ...(this.velocityArrow as any).userData, lensflare: 'no-occlusion' };
         this.scene.add(this.velocityArrow);
 
         // Initially hide all helpers

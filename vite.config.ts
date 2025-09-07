@@ -54,10 +54,11 @@ export default defineConfig({
     },
     assetsInclude: ['**/*.exr', '**/*.tiff', '**/*.tif', '**/*.png', '**/*.jpg', '**/*.jpeg'],
     optimizeDeps: {
-        exclude: [],
+        exclude: ['stats.js'],
         include: [
             'three',
             'three/examples/jsm/objects/Lensflare',
+            'three/examples/jsm/libs/stats.module.js',
             'three/examples/jsm/loaders/TIFFLoader',
             'three/examples/jsm/loaders/EXRLoader'
         ]

@@ -57,7 +57,6 @@ function namespaceAllowed(ns: string): boolean {
 
 export function createLogger(namespace: string) {
   const level = () => getGlobalLevel();
-  const can = (lvl: LogLevel) => LEVEL_ORDER[lvl] >= LEVEL_ORDER.debug && LEVEL_ORDER[lvl] >= 0;
 
   const shouldLog = (lvl: LogLevel) => LEVEL_ORDER[level()] <= LEVEL_ORDER[lvl] && namespaceAllowed(namespace);
 
@@ -91,4 +90,3 @@ export function createLogger(namespace: string) {
 }
 
 export type Logger = ReturnType<typeof createLogger>;
-

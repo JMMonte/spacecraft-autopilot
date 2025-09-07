@@ -8,13 +8,19 @@ import { WorldRenderer } from './worldRenderer';
 import { Spacecraft } from './spacecraft';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { BackgroundLoader } from '../helpers/backgroundLoader';
-import { ProceduralAsteroid } from '../objects/ProceduralAsteroid';
+import { AsteroidModel, AsteroidModelId } from '../objects/AsteroidModel';
 import { AsteroidSystem, AsteroidSystemConfig } from '../objects/AsteroidSystem';
 import { createLogger } from '../utils/logger';
 
 interface WorldConfig {
     debug?: boolean;
     physicsEngine?: 'rapier';
+    asteroids?: Array<{
+        position: { x: number; y: number; z: number };
+        diameter: number; // required: visual diameter (world units)
+        model: AsteroidModelId; // required: which FBX to load
+    }>;
+    asteroidSystem?: AsteroidSystemConfig;
     initialSpacecraft?: Array<{
         position: { x: number; y: number; z: number };
         width: number;
@@ -24,11 +30,6 @@ interface WorldConfig {
         name: string;
     }>;
     initialFocus?: number;
-    asteroids?: Array<{
-        position: { x: number; y: number; z: number };
-        size?: number;
-    }>;
-    asteroidSystem?: AsteroidSystemConfig;
 }
 
 interface LoadingQueueItem {
@@ -60,8 +61,7 @@ export class BasicWorld {
     private loadingQueue: Map<string, LoadingQueueItem>;
     private currentFile: string;
     private backgroundLoader!: BackgroundLoader;
-    private asteroid: ProceduralAsteroid | null = null;
-    private asteroids: ProceduralAsteroid[] = [];
+    private asteroids: AsteroidModel[] = [];
     private asteroidSystem: AsteroidSystem | null = null;
 
     // Three.js components
@@ -204,40 +204,26 @@ export class BasicWorld {
         (gridHelper as any).userData = { ...(gridHelper as any).userData, lensflare: 'no-occlusion' };
         this.camera.scene.add(gridHelper);
 
-        // Prefer realistic asteroid system when configured
+        // Prefer asteroid system if provided; else spawn standalone asteroids
         if (this.config.asteroidSystem) {
             this.asteroidSystem = new AsteroidSystem(this.camera.scene, this.physics, this.config.asteroidSystem);
         } else {
-            // Add asteroids from config if provided; otherwise create a default one
             const asteroidConfigs = this.config.asteroids || [];
             if (asteroidConfigs.length > 0) {
-                asteroidConfigs.forEach((cfg, idx) => {
+                asteroidConfigs.forEach((cfg) => {
+                    // Defensive runtime validation even though types require these
+                    if (typeof cfg.diameter !== 'number') {
+                        this.log.error('Asteroid entry missing diameter:', cfg);
+                        return;
+                    }
+                    if (!cfg.model) {
+                        this.log.error('Asteroid entry missing model id:', cfg);
+                        return;
+                    }
                     const pos = new THREE.Vector3(cfg.position.x, cfg.position.y, cfg.position.z);
-                    const size = cfg.size ?? 200;
-                    const asteroid = new ProceduralAsteroid(
-                        this.camera.scene,
-                        {} as any,
-                        pos,
-                        size,
-                        false,
-                        idx % 6,
-                        this.physics,
-                        true // use explicit position/size
-                    );
+                    const asteroid = new AsteroidModel(this.camera.scene, { position: pos, diameter: cfg.diameter, model: cfg.model, physics: this.physics });
                     this.asteroids.push(asteroid);
                 });
-            } else {
-                // Backwards-compatible single asteroid
-                this.asteroid = new ProceduralAsteroid(
-                    this.camera.scene,
-                    {} as any,
-                    new THREE.Vector3(0, 0, 0),
-                    200,
-                    false,
-                    0,
-                    this.physics,
-                    false
-                );
             }
         }
 
@@ -494,13 +480,12 @@ export class BasicWorld {
             const deltaTime = this.dt;
             this.physics.step(deltaTime);
 
-            // Update asteroids
-            if (this.asteroid) this.asteroid.update();
-            this.asteroids.forEach(a => a.update());
+            // Update asteroids / asteroid system
             if (this.asteroidSystem) {
-                // Keep an internal elapsed time in seconds for orbital updates
                 (this as any)._t = ((this as any)._t ?? 0) + deltaTime;
                 this.asteroidSystem.update((this as any)._t);
+            } else {
+                this.asteroids.forEach(a => a.update());
             }
 
             // Update lights
@@ -554,16 +539,12 @@ export class BasicWorld {
             spacecraft.cleanup();
         });
 
-        if (this.asteroid) {
-            this.asteroid.dispose();
-            this.asteroid = null;
-        }
-        this.asteroids.forEach(a => a.dispose());
-        this.asteroids = [];
         if (this.asteroidSystem) {
             this.asteroidSystem.dispose();
             this.asteroidSystem = null;
         }
+        this.asteroids.forEach(a => a.dispose());
+        this.asteroids = [];
 
         // Remove stats overlay
         if (this.stats) {
@@ -571,5 +552,12 @@ export class BasicWorld {
             if (dom && dom.parentNode) dom.parentNode.removeChild(dom);
             this.stats = null;
         }
+    }
+
+    // Programmatic API to add an asteroid (no config/system)
+    public addAsteroid(position: THREE.Vector3, diameter: number, model: AsteroidModelId = '2b'): AsteroidModel {
+        const asteroid = new AsteroidModel(this.camera.scene, { position, diameter, model, physics: this.physics });
+        this.asteroids.push(asteroid);
+        return asteroid;
     }
 } 

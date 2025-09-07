@@ -3,7 +3,7 @@ import * as THREE from 'three';
 
 async function main() {
   const R = await import('@dimforge/rapier3d-compat');
-  await R.init();
+  await R.init({});
   const world = new R.World({ x: 0, y: -9.82, z: 0 });
 
   // Build a sphere-like trimesh ground

@@ -7,6 +7,26 @@ export class GoToPosition extends AutopilotMode {
     private targetPosition: THREE.Vector3;
     private threshold: number = 0.2; // Default threshold
     private isApproachPhase: boolean = false;
+    // Refinements state
+    private alignGateActive: boolean = true;
+    private brakingActive: boolean = false;
+    private alignGateOnDeg: number = 15; // engage gate when misalignment >= 15 deg
+    private alignGateOffDeg: number = 8;  // disengage when <= 8 deg
+    private brakeMarginOn: number = 0.08; // m
+    private brakeMarginOff: number = 0.12; // m
+    private telemetry: {
+        distance: number;
+        vAlong: number;
+        vDes: number;
+        dStop: number;
+        braking: boolean;
+        alignAngleDeg: number;
+        alignGate: boolean;
+        aMax: number;
+        vMax: number;
+        tGo?: number;
+        aCmdLocal?: { x: number; y: number; z: number };
+    } | null = null;
 
     constructor(
         spacecraft: Spacecraft,
@@ -50,36 +70,126 @@ export class GoToPosition extends AutopilotMode {
         const q = this.spacecraft.getWorldOrientation();
         const qInv = q.clone().invert();
 
-        // Calculate position error in world space
-        const positionError = this.targetPosition.clone().sub(currentPosition);
+        // Position error in world
+        const posErrWorld = this.targetPosition.clone().sub(currentPosition);
+        const dist = posErrWorld.length();
+        const dirWorld = posErrWorld.clone().multiplyScalar(1 / Math.max(dist, 1e-9));
 
-        // Convert position error to local space for PID control
-        const localPositionError = positionError.clone().applyQuaternion(qInv);
+        // Local frame quantities
+        const dirLocal = dirWorld.clone().applyQuaternion(qInv);
+        const velLocal = currentVelocity.clone().applyQuaternion(qInv);
+        const posErrLocal = posErrWorld.clone().applyQuaternion(qInv);
 
-        // Convert velocity to local space for damping
-        const localVelocity = currentVelocity.clone().applyQuaternion(qInv);
+        // Guidance: estimate dynamic accel caps
+        // Dynamic acceleration capability projected along desired direction
+        const aMaxDir = Math.max(1e-3, this.getDynamicLinearAccelAlong(dirLocal));
+        const caps = this.getDynamicCaps();
 
-        // Apply PID control in local space
-        const pidOut = this.pidController.update(localPositionError.clone().multiplyScalar(this.config.damping.factor), dt);
+        // Scale by pointing alignment so we don't thrust hard when misaligned
+        const forwardWorld = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+        const alignDot = Math.max(-1, Math.min(1, forwardWorld.dot(dirWorld)));
+        const alignAngle = Math.acos(alignDot) * 180 / Math.PI; // degrees
+        // Update alignment gate with hysteresis (used for scaling, not hard block)
+        if (this.alignGateActive) {
+            if (alignAngle <= this.alignGateOffDeg) this.alignGateActive = false;
+        } else {
+            if (alignAngle >= this.alignGateOnDeg) this.alignGateActive = true;
+        }
+        const align = Math.max(0, alignDot); // use only forward alignment component
+        // Never zero-out translation; just reduce authority when misaligned
+        const alignScale = this.alignGateActive ? 0.3 : Math.max(0.2, Math.pow(align, 2));
+        const aMax = aMaxDir * alignScale;
+        // Distance-derived speed cap from stopping distance formula (no fixed vMax)
+        const vStopCap = Math.sqrt(2 * aMax * Math.max(dist, 0));
 
-        // Calculate force in local space
-        const mass = this.spacecraft.getMass();
-        const localForce = new THREE.Vector3(
-            pidOut.x * mass,
-            pidOut.y * mass,
-            pidOut.z * mass
+        const vAlong = currentVelocity.dot(dirWorld);
+        const dStop = (vAlong * vAlong) / (2 * Math.max(aMax, 1e-6));
+        const nearLinearKV = 2.0; // m/s per m in close range
+
+        // Update braking state with hysteresis relative to stopping distance
+        // Only brake when already moving toward the target (vAlong > 0)
+        if (vAlong > 0) {
+            if (this.brakingActive) {
+                if (dist > dStop + this.brakeMarginOff) this.brakingActive = false;
+            } else {
+                if (dist <= dStop + this.brakeMarginOn) this.brakingActive = true;
+            }
+        } else {
+            this.brakingActive = false;
+        }
+
+        // New: time-to-go (ZEM/ZEV) terminal guidance for far approaches
+        // Choose a conservative time-to-go from triangular profile with accel aMax
+        const tMin = 0.35;     // lower bound to avoid impulse-like commands
+        const tMax = 60.0;     // avoid excessive horizon at very long distances
+        const tTri = aMax > 1e-6 ? 2.0 * Math.sqrt(Math.max(dist, 0) / aMax) : 2.0;
+        // Blend in current speed influence to handle large closing speeds
+        const vMag = currentVelocity.length();
+        const tVel = aMax > 1e-6 ? vMag / aMax : 0.0;
+        const tGo = Math.max(tMin, Math.min(tMax, 0.8 * tTri + 0.2 * tVel));
+
+        // Zero-Effort Miss/Velocity guidance (target velocity = 0)
+        // ZEM = posErr - v * tGo, ZEV = -v
+        const ZEM = posErrWorld.clone().sub(currentVelocity.clone().multiplyScalar(tGo));
+        const ZEV = currentVelocity.clone().multiplyScalar(-1);
+        const kR = 6.0 / (tGo * tGo);
+        const kV = 4.0 / Math.max(tGo, 1e-6);
+        const aCmdWorld = ZEM.multiplyScalar(kR).add(ZEV.multiplyScalar(kV));
+        // Transform to local for axis-wise saturation
+        let aCmdLocal = aCmdWorld.clone().applyQuaternion(qInv);
+        // Axis caps in local frame with alignment scaling
+        const axCap = Math.min(this.config.limits.maxLinearAcceleration ?? Infinity, caps.linAccel.x * alignScale);
+        const ayCap = Math.min(this.config.limits.maxLinearAcceleration ?? Infinity, caps.linAccel.y * alignScale);
+        const azCap = Math.min(this.config.limits.maxLinearAcceleration ?? Infinity, caps.linAccel.z * alignScale);
+        aCmdLocal.set(
+            THREE.MathUtils.clamp(aCmdLocal.x, -axCap, axCap),
+            THREE.MathUtils.clamp(aCmdLocal.y, -ayCap, ayCap),
+            THREE.MathUtils.clamp(aCmdLocal.z, -azCap, azCap),
         );
 
-        // Apply damping to local velocity
-        const dampingForce = localVelocity.clone().multiplyScalar(-this.config.damping.factor * mass);
-        localForce.add(dampingForce);
+        // Telemetry snapshot
+        this.telemetry = {
+            distance: dist,
+            vAlong,
+            vDes: this.brakingActive ? 0 : Math.min(vStopCap, nearLinearKV * dist),
+            dStop,
+            braking: this.brakingActive,
+            alignAngleDeg: alignAngle,
+            alignGate: this.alignGateActive,
+            aMax,
+            vMax: vStopCap,
+            tGo,
+            aCmdLocal: { x: aCmdLocal.x, y: aCmdLocal.y, z: aCmdLocal.z },
+        };
 
-        // Limit maximum force
-        if (localForce.length() > this.config.limits.maxForce) {
-            localForce.multiplyScalar(this.config.limits.maxForce / localForce.length());
+        if (dist <= this.threshold) {
+            // Near-target hold: damp velocity and gently pull toward the setpoint
+            const kPos = 1.4; // m/s^2 per m
+            const kVel = this.config.damping.factor; // m/s^2 per (m/s)
+            aCmdLocal = posErrLocal.clone().multiplyScalar(kPos)
+                .add(velLocal.clone().multiplyScalar(-kVel));
+        } else {
+            // Use ZEM/ZEV acceleration command computed above
+            // (already saturated to axis caps)
+        }
+
+        // Force command
+        const mass = this.spacecraft.getMass();
+        const localForce = aCmdLocal.clone().multiplyScalar(mass);
+
+        // Clamp by force and step momentum budget
+        const maxByForce = this.config.limits.maxForce;
+        const maxByMomentum = this.config.limits.maxLinearMomentum / Math.max(dt, 1e-3);
+        const maxAllowable = Math.min(maxByForce, maxByMomentum);
+        if (localForce.length() > maxAllowable) {
+            localForce.multiplyScalar(maxAllowable / localForce.length());
         }
 
         return this.applyTranslationalForcesToThrusterGroups(localForce);
+    }
+
+    public getTelemetry() {
+        return this.telemetry;
     }
 
     protected applyTranslationalForcesToThrusterGroups(localForce: THREE.Vector3): number[] {

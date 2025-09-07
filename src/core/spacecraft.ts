@@ -139,11 +139,8 @@ export class Spacecraft {
      * Get the world position of the spacecraft's center
      */
     public getWorldPosition(): THREE.Vector3 {
-        if (this.objects.rigid) {
-            const p = this.objects.rigid.getPosition();
-            return new THREE.Vector3(p.x, p.y, p.z);
-        }
-        return new THREE.Vector3(this.objects.boxBody.position.x, this.objects.boxBody.position.y, this.objects.boxBody.position.z);
+        // Read from the rendered transform to avoid querying Rapier during stepping
+        return this.objects.box.position.clone();
     }
 
     /**
@@ -355,27 +352,18 @@ export class Spacecraft {
     }
 
     public getWorldOrientation(): THREE.Quaternion {
-        if (this.objects.rigid) {
-            const q = this.objects.rigid.getQuaternion();
-            return new THREE.Quaternion(q.x, q.y, q.z, q.w);
-        }
-        return new THREE.Quaternion(this.objects.boxBody.quaternion.x, this.objects.boxBody.quaternion.y, this.objects.boxBody.quaternion.z, this.objects.boxBody.quaternion.w);
+        // Read from the rendered transform to avoid querying Rapier during stepping
+        return this.objects.box.quaternion.clone();
     }
 
     public getWorldVelocity(): THREE.Vector3 {
-        if (this.objects.rigid) {
-            const v = this.objects.rigid.getLinearVelocity();
-            return new THREE.Vector3(v.x, v.y, v.z);
-        }
-        return new THREE.Vector3(this.objects.boxBody.velocity.x, this.objects.boxBody.velocity.y, this.objects.boxBody.velocity.z);
+        // Synced in SpacecraftModel.update()
+        return this.objects.boxBody.velocity.clone();
     }
 
     public getWorldAngularVelocity(): THREE.Vector3 {
-        if (this.objects.rigid) {
-            const w = this.objects.rigid.getAngularVelocity();
-            return new THREE.Vector3(w.x, w.y, w.z);
-        }
-        return new THREE.Vector3(this.objects.boxBody.angularVelocity.x, this.objects.boxBody.angularVelocity.y, this.objects.boxBody.angularVelocity.z);
+        // Synced in SpacecraftModel.update()
+        return this.objects.boxBody.angularVelocity.clone();
     }
 
     public visualizeDebugObjects(scene: THREE.Scene): void {

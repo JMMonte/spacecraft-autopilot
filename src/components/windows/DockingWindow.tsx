@@ -56,7 +56,7 @@ export interface AutopilotController {
     setTargetObject: (target: Spacecraft | null, targetPoint: 'center' | 'front' | 'back') => void;
 }
 
-export function DockingWindow({ spacecraft, controller, world, version }: DockingWindowProps): JSX.Element {
+export function DockingWindow({ spacecraft, world, version }: DockingWindowProps): JSX.Element {
     const log = createLogger('ui:DockingWindow');
     const [dockingInfo, setDockingInfo] = useState<DockingInfo>({
         phase: 'idle',

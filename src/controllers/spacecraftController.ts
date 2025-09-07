@@ -22,6 +22,13 @@ export class SpacecraftController {
     private mass!: number;
     private thrust!: number;
     public autopilot!: Autopilot;
+    // Thruster pulse-width modulation state (to reduce flicker)
+    private thrusterOnLatch: boolean[] = new Array(24).fill(false);
+    private thrusterLatchTimer: number[] = new Array(24).fill(0);
+    private thrusterLatchedForce: number[] = new Array(24).fill(0);
+    private minPulseOn: number = 0.05;  // seconds
+    private minPulseOff: number = 0.05; // seconds
+    private activationThresholdFactor: number = 0.02; // as fraction of per-thruster thrust
 
     constructor(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers) {
         this.log.debug('SpacecraftController constructor called');
@@ -204,7 +211,10 @@ export class SpacecraftController {
         // 4) Apply
         const coneVisibility = this.applyForcesToThrusters(combined, dt);
 
-        // 5) Debug helpers
+        // 5) Update RCS particle system
+        this.spacecraft.rcsVisuals.update(dt);
+
+        // 6) Debug helpers
         this.updateHelpers(combined);
 
         return coneVisibility;
@@ -242,23 +252,52 @@ export class SpacecraftController {
     }
 
     private applyForcesToThrusters(forces: number[], dt: number): boolean[] {
-        // Show/hide thruster cones
-        const coneVisibility = forces.map(f => f > 0);
+        const activationThreshold = this.thrust * this.activationThresholdFactor;
+        const visibility = new Array(24).fill(false);
 
-        forces.forEach((force, index) => {
-            // clamp
-            const clamped = Math.min(Math.max(force, 0), this.thrust);
-            if (clamped > 0) {
-                this.spacecraft.rcsVisuals.applyForce(index, clamped, dt);
+        for (let i = 0; i < 24; i++) {
+            // clamp desired force
+            const desired = Math.min(Math.max(forces[i] || 0, 0), this.thrust);
+            const desiredOn = desired >= activationThreshold;
+
+            // advance timer
+            this.thrusterLatchTimer[i] += dt;
+
+            // state transition with min pulse width hysteresis
+            const stateOn = this.thrusterOnLatch[i];
+            if (desiredOn !== stateOn) {
+                const minTime = stateOn ? this.minPulseOn : this.minPulseOff;
+                if (this.thrusterLatchTimer[i] >= minTime) {
+                    // toggle
+                    this.thrusterOnLatch[i] = desiredOn;
+                    this.thrusterLatchTimer[i] = 0;
+                    if (desiredOn) {
+                        this.thrusterLatchedForce[i] = desired; // start with desired
+                    } else {
+                        this.thrusterLatchedForce[i] = 0;
+                    }
+                }
             }
-        });
 
-        // Also set cone mesh visibility
+            // Smooth latched force when on
+            if (this.thrusterOnLatch[i]) {
+                // update toward desired
+                const alpha = 0.8; // heavier smoothing
+                this.thrusterLatchedForce[i] = this.thrusterLatchedForce[i] * alpha + desired * (1 - alpha);
+                const f = Math.max(this.thrusterLatchedForce[i], activationThreshold);
+                this.spacecraft.rcsVisuals.applyForce(i, f, dt);
+                visibility[i] = true;
+            } else {
+                visibility[i] = false;
+            }
+        }
+
+        // Update cone mesh visibility
         this.spacecraft.rcsVisuals.getConeMeshes().forEach((coneMesh, index) => {
-            coneMesh.visible = coneVisibility[index];
+            coneMesh.visible = visibility[index];
         });
 
-        return coneVisibility;
+        return visibility;
     }
 
     private rotationKeys(): string[] {
