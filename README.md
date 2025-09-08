@@ -1,84 +1,106 @@
-# Space Simulator
+# Spacecraft Autopilot Simulator
 
-A Three.js-based space simulator with realistic physics and an autopilot system.
+A Three.js + React cockpit simulator with a physics-backed spacecraft and modular autopilot modes.
 
 ## Features
 
-- Realistic spacecraft physics simulation using Rapier (WASM)
-- Advanced autopilot system with multiple control modes
-- Realistic RCS thruster visualization
-- Beautiful space environment with HDR background
-- Intuitive cockpit UI with React and Tailwind CSS
+- Realistic rigid‑body dynamics via Rapier (WASM)
+- Modular autopilot: orientation match, cancel rotation/linear motion, point‑to‑position, go‑to‑position
+- RCS thruster visualization and helper arrows
+- Docking ports with cameras and optional lights
+- React UI windows for telemetry, PID tuning, docking, cameras, etc.
 
-## Getting Started
+## Requirements
 
-### Prerequisites
-
-- Node.js 22.x (LTS)
+- Node.js 22.12.0 (recommended). Vite supports 20.19+ or 22.12+.
 - npm 10+ (bundled with Node 22)
 
-### Installation
+Use `nvm use` to match `.nvmrc`.
 
-1. Clone the repository:
+## Setup
 
-    ```bash
-    git clone https://github.com/yourusername/space-simulator.git
-    cd space-simulator
-    ```
+1) Install dependencies
 
-2. Install dependencies:
+```bash
+npm install
+```
 
-    ```bash
-    npm install
-    ```
+2) Start dev server
 
-3. Start the development server:
+```bash
+npm run dev
+```
 
-    ```bash
-    npm run dev
-    ```
+3) Production build
+
+```bash
+npm run build
+```
+
+Useful scripts
+- `npm run check:ts` – TypeScript check
+- `npm run test:physics` – Rapier collision sanity test
 
 ## Controls
 
-### Manual Control
+Manual translation (local axes)
+- U/O: +Z forward / −Z backward
+- J/L: −X left / +X right
+- K/I: +Y up / −Y down
 
-- W/S: Forward/Backward thrust
-- A/D: Left/Right thrust
-- Q/E: Up/Down thrust
-- Arrow keys: Pitch and Yaw
-- Z/X: Roll left/right
-- Shift: Increase thrust
-- Space: Emergency stop
+Manual rotation
+- W/S: +pitch / −pitch
+- A/D: +yaw / −yaw
+- Q/E: +roll / −roll
 
-### Autopilot Modes
+Autopilot toggles
+- T: Orientation Match
+- Y: Point To Position
+- R: Cancel Rotation
+- G: Cancel Linear Motion
+- B: Go To Position
 
-- Cancel & Align: Stops rotation and aligns with the current orientation
-- Cancel Rotation: Stops all rotational movement
-- Point to Position: Points the spacecraft towards a target position
-- Cancel Linear Motion: Stops all linear movement
-- Go to Position: Moves the spacecraft to a target position
+Open the Autopilot window to set a custom position target or follow another spacecraft.
 
-## Project Structure
+## Notes
 
-```plaintext
-space-simulator/
-├── public/
-│   ├── images/
-│   │   ├── effects/     # Lens flare and visual effects
-│   │   ├── panoramas/   # Space background panoramas
-│   │   └── textures/    # General textures
-│   └── config.json      # Application configuration
-├── src/
-│   ├── components/      # React components
-│   ├── controllers/     # Spacecraft control logic
-│   ├── helpers/         # Utility functions
-│   ├── js/             # Core simulation code
-│   ├── scenes/         # Three.js scene setup
-│   ├── styles/         # CSS and Tailwind styles
-│   └── ui/             # UI-related code
-└── package.json
+- Large WASM/vendor chunks are expected (Rapier). Build warnings are suppressed via `chunkSizeWarningLimit`.
+- If you see Node version warnings, upgrade to Node 22.12.0 (`nvm use`).
+
+## Project Structure (high level)
+
+```text
+src/
+  components/           # React cockpit windows & UI
+  controllers/          # Autopilot modes, docking, visualization
+  core/                 # World, renderer, spacecraft shell
+  objects/              # Scene objects (asteroids, systems)
+  physics/              # Engine abstraction + Rapier wrapper
+  scenes/               # Scene setup, helpers, objects
+  styles/               # Global styles
+  workers/              # Autopilot compute worker
 ```
 
 ## License
 
-This project is licensed under the ISC License.
+ISC
+
+## Deployment
+
+Vercel (recommended)
+- Connect this GitHub repository to Vercel (New Project → Import Git Repository).
+- Framework Preset: Vite (auto-detected).
+- Build Command: `npm run build` (auto-detected).
+- Output Directory: `dist` (auto-detected).
+- Node.js Version: 22.x. Vercel respects the `engines.node` field in `package.json` and you can also set it in Project Settings → General → Node.js Version.
+
+Environment
+- No runtime env vars are required by default.
+- If you add any, configure them in Vercel Project Settings → Environment Variables.
+
+Production flow
+- Pushing to `main` triggers a production deployment.
+- Pull requests create preview deployments per-branch.
+
+Status badge (optional)
+- In Vercel Project → Settings → Git → Badges, enable and copy the Markdown to add a live status badge at the top of this README.
