@@ -7,6 +7,7 @@ export class OrientationMatchAutopilot extends AutopilotMode {
     private targetOrientation: THREE.Quaternion;
     private targetSpacecraft: Spacecraft | null;
     private reverseAlign: boolean;
+    private readonly reverse180Y: THREE.Quaternion;
     private angleDeadbandEngaged: boolean = false;
     private angleDeadbandOnFactor: number = 1.0;  // engage when < epsilon * onFactor
     private angleDeadbandOffFactor: number = 1.5; // disengage when > epsilon * offFactor
@@ -28,16 +29,22 @@ export class OrientationMatchAutopilot extends AutopilotMode {
         pidController: PIDController,
         targetOrientation?: THREE.Quaternion,
         targetSpacecraft?: Spacecraft,
-        reverseAlign: boolean = false
+        reverseAlign: boolean = false,
+        thrusterMax?: number[]
     ) {
-        super(spacecraft, config, thrusterGroups, thrust, pidController);
+        super(spacecraft, config, thrusterGroups, thrust, pidController, thrusterMax);
         this.targetOrientation = targetOrientation || new THREE.Quaternion();
         this.targetSpacecraft = targetSpacecraft || null;
         this.reverseAlign = reverseAlign;
+        // Precompute a 180° rotation about world Y for reverse docking alignment
+        this.reverse180Y = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+        // Crisper rotation for attitude tracking
+        this.rotSmoothAlpha = 0.25;
     }
 
     setTargetOrientation(orientation: THREE.Quaternion): void {
-        this.targetOrientation = orientation;
+        // Store a normalized copy to ensure stable angle/axis extraction later
+        this.targetOrientation.copy(orientation).normalize();
     }
 
     setTargetSpacecraft(spacecraft: Spacecraft | null, reverseAlign?: boolean): void {
@@ -57,33 +64,41 @@ export class OrientationMatchAutopilot extends AutopilotMode {
         const worldAngularVel = this.spacecraft.getWorldAngularVelocityRef();
         const qInv = this.tmpQuatA.copy(q).invert();
 
-        // Update target orientation if following a target spacecraft
-        if (this.targetSpacecraft) {
-            this.targetOrientation = this.targetSpacecraft.getWorldOrientation();
-            if (this.reverseAlign) {
-                // Rotate 180 degrees around the Y axis for reverse alignment
-                const reverseRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
-                this.targetOrientation.multiply(reverseRotation);
-            }
+        // Resolve target orientation without mutating stored state
+        // If following a target, use its current world orientation (optionally reversed)
+        // Otherwise, use the last set targetOrientation.
+        const targetQ = this.targetSpacecraft
+            ? this.tmpQuatB.copy(this.targetSpacecraft.getWorldOrientation())
+            : this.tmpQuatB.copy(this.targetOrientation);
+        if (this.targetSpacecraft && this.reverseAlign) {
+            targetQ.multiply(this.reverse180Y);
         }
 
-        // Error quaternion expressed in the spacecraft's local frame
-        // qErrorLocal = inverse(current) * target
-        const errorQuaternion = this.tmpQuatB.copy(qInv).multiply(this.targetOrientation);
-
-        // Convert world angular velocity to local space
+        // Convert world angular velocity to local space (use qInv before mutating any scratch)
         const localAngularVel = this.tmpVecA.copy(worldAngularVel).applyQuaternion(qInv);
 
-        // Extract minimal angle-axis from error quaternion in local frame
+        // Error quaternion expressed in the spacecraft's local frame
+        // qErrorLocal = inverse(current) * target (write into tmpQuatB; we no longer need targetQ)
+        const errorQuaternion = this.tmpQuatB.multiplyQuaternions(qInv, targetQ);
+
+        // Shortest-arc: flip sign if needed so w >= 0
+        if (errorQuaternion.w < 0) {
+            errorQuaternion.set(
+                -errorQuaternion.x,
+                -errorQuaternion.y,
+                -errorQuaternion.z,
+                -errorQuaternion.w
+            );
+        }
+        // Robust axis-angle from quaternion
         const wClamped = Math.min(1, Math.max(-1, errorQuaternion.w));
         let angle = 2 * Math.acos(wClamped);
-        let sinHalf = Math.sqrt(1 - wClamped * wClamped);
+        let sinHalf = Math.sqrt(Math.max(0, 1 - wClamped * wClamped));
         const axis = sinHalf > 1e-6
-            ? this.tmpVecB.set(errorQuaternion.x, errorQuaternion.y, errorQuaternion.z).multiplyScalar(1 / sinHalf).normalize()
-            : this.tmpVecB.set(0, 0, 0);
-        if (angle > Math.PI) { angle = 2 * Math.PI - angle; axis.negate(); }
+            ? this.tmpVecB.set(errorQuaternion.x / sinHalf, errorQuaternion.y / sinHalf, errorQuaternion.z / sinHalf).normalize()
+            : this.tmpVecB.set(1, 0, 0); // arbitrary axis when angle ~ 0
 
-        // Deadband with hysteresis to avoid micro-chatter
+        // Deadband with hysteresis on angle
         const eps = this.config.limits.epsilon;
         if (this.angleDeadbandEngaged) {
             if (angle > eps * this.angleDeadbandOffFactor) this.angleDeadbandEngaged = false;
@@ -92,33 +107,50 @@ export class OrientationMatchAutopilot extends AutopilotMode {
         }
         const withinDeadband = this.angleDeadbandEngaged;
 
-        // Time-optimal (bang–bang) style target angular speed profile along the error axis
-        // Dynamic angular capability estimate
-        const dyn = this.getDynamicAngularAccelCap();
-        const alphaMax = Math.max(1e-3, dyn.alphaMax);
-        const omegaMax = Math.max(1e-3, dyn.omegaMax);
-        const kW = 2.0; // rad/s per rad near-linear region
-        const wDesMag = withinDeadband ? 0 : Math.min(omegaMax, Math.sqrt(2 * alphaMax * angle), kW * angle);
+        // Axis-aware time-optimal profile per principal axis
+        // Project angle along body axes
+        const ax = axis.x * angle;
+        const ay = axis.y * angle;
+        const az = axis.z * angle;
+        const I = this.calculateMomentOfInertiaByAxis();
+        const caps = this.getDynamicCaps();
+        const alphaX = Math.max(1e-6, caps.angTorque.x) / Math.max(1e-6, I.x);
+        const alphaY = Math.max(1e-6, caps.angTorque.y) / Math.max(1e-6, I.y);
+        const alphaZ = Math.max(1e-6, caps.angTorque.z) / Math.max(1e-6, I.z);
+        const omegaCap = Math.max(0.2, Math.min(this.config.limits.maxAngularVelocity, this.getDynamicAngularAccelCap().omegaMax));
+        const kW = 1.6; // rad/s per rad
 
-        // Desired angular momentum only along the error axis
-        const Ieff = this.getEffectiveInertiaAlongAxis(axis);
-        const desiredL = this.tmpVecC.copy(axis).multiplyScalar(Ieff * wDesMag);
-        const wAlong = localAngularVel.dot(axis);
-        const currentLAlong = this.tmpVecD.copy(axis).multiplyScalar(Ieff * wAlong);
-        const angularMomentumError = desiredL.sub(currentLAlong);
+        const stopWX = Math.sqrt(2 * Math.max(1e-6, alphaX) * Math.abs(ax));
+        const stopWY = Math.sqrt(2 * Math.max(1e-6, alphaY) * Math.abs(ay));
+        const stopWZ = Math.sqrt(2 * Math.max(1e-6, alphaZ) * Math.abs(az));
+
+        const wDesX = Math.sign(ax) * Math.min(omegaCap, stopWX, kW * Math.abs(ax));
+        const wDesY = Math.sign(ay) * Math.min(omegaCap, stopWY, kW * Math.abs(ay));
+        const wDesZ = Math.sign(az) * Math.min(omegaCap, stopWZ, kW * Math.abs(az));
+
+        // L_err = I*(w_des - w_current)
+        const Lx = I.x * (wDesX - localAngularVel.x);
+        const Ly = I.y * (wDesY - localAngularVel.y);
+        const Lz = I.z * (wDesZ - localAngularVel.z);
+        const angularMomentumError = this.tmpVecC.set(Lx, Ly, Lz);
+        if (withinDeadband) angularMomentumError.set(0, 0, 0);
         // Clamp by configured max |L|
-        const maxL = this.config.limits.maxAngularMomentum;
-        if (angularMomentumError.length() > maxL) {
-            angularMomentumError.multiplyScalar(maxL / angularMomentumError.length());
-        }
+        const LcapX = I.x * omegaCap;
+        const LcapY = I.y * omegaCap;
+        const LcapZ = I.z * omegaCap;
+        angularMomentumError.set(
+            Math.max(-LcapX, Math.min(LcapX, angularMomentumError.x)),
+            Math.max(-LcapY, Math.min(LcapY, angularMomentumError.y)),
+            Math.max(-LcapZ, Math.min(LcapZ, angularMomentumError.z))
+        );
 
         // Update telemetry snapshot
         this.telemetry = {
             angleDeg: angle * 180 / Math.PI,
-            alphaMax,
-            omegaMax,
-            Ieff,
-            wDesMag,
+            alphaMax: Math.min(alphaX, alphaY, alphaZ),
+            omegaMax: omegaCap,
+            Ieff: this.getEffectiveInertiaAlongAxis(axis),
+            wDesMag: Math.sqrt(wDesX*wDesX + wDesY*wDesY + wDesZ*wDesZ),
             LErr: angularMomentumError.length(),
             deadband: withinDeadband,
         };

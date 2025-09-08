@@ -460,6 +460,18 @@ export class Spacecraft {
         return !!this.dockingLights[portId];
     }
 
+    public getDockingLightParams(): { intensity: number; angle: number; distance: number; decay: number; penumbra: number } | null {
+        return this.objects.getDockingLightParams();
+    }
+
+    /**
+     * Adjust docking flashlight parameters for both ports on this craft.
+     * angle is in radians (Three.js SpotLight half-angle).
+     */
+    public setDockingLightParams(params: Partial<{ intensity: number; angle: number; distance: number; decay: number; penumbra: number }>): void {
+        this.objects.setDockingLightParams(params);
+    }
+
     public getWorldOrientation(): THREE.Quaternion {
         // Read from the rendered transform to avoid querying Rapier during stepping
         return this.objects.box.quaternion.clone();

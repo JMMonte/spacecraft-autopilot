@@ -27,3 +27,101 @@
     @apply bg-white/20 rounded-full;
   }
 } 
+
+/* Theming: dynamic colors used across UI when a theme-* class
+   is present on a container (e.g., the cockpit root div). */
+:root {
+  --accent-rgb: 34, 211, 238; /* default cyan */
+  --panel-bg: rgba(0,0,0,0.60);
+  --panel-bg-2: rgba(0,0,0,0.50);
+  --panel-border: rgba(255,255,255,0.20);
+  --muted-bg: rgba(255,255,255,0.20);
+  --hover-bg: rgba(255,255,255,0.10);
+  --text: rgba(255,255,255,0.90);
+  --text-strong: rgba(255,255,255,1.0);
+  --text-muted: rgba(255,255,255,0.80);
+  --track-bg: rgba(255,255,255,0.20);
+}
+
+.theme-a {
+  --accent-rgb: 34, 211, 238; /* cyan */
+  --panel-bg: rgba(0,0,0,0.60);
+  --panel-bg-2: rgba(0,0,0,0.50);
+  --panel-border: rgba(255,255,255,0.20);
+  --muted-bg: rgba(255,255,255,0.20);
+  --hover-bg: rgba(255,255,255,0.10);
+  --text: rgba(255,255,255,0.90);
+  --text-strong: rgba(255,255,255,1.0);
+  --text-muted: rgba(255,255,255,0.80);
+  --track-bg: rgba(255,255,255,0.20);
+}
+.theme-b {
+  /* Airforce-like gray UI */
+  --accent-rgb: 148, 163, 184; /* slate-400 */
+  --panel-bg: rgba(55,65,81,0.92);   /* gray-700 */
+  --panel-bg-2: rgba(75,85,99,0.85); /* gray-600 */
+  --panel-border: rgba(156,163,175,0.35); /* gray-400 */
+  --muted-bg: rgba(156,163,175,0.20);
+  --hover-bg: rgba(156,163,175,0.15);
+  --text: rgba(229,231,235,0.92); /* gray-200 */
+  --text-strong: #e5e7eb; /* gray-200 */
+  --text-muted: rgba(209,213,219,0.80); /* gray-300 */
+  --track-bg: rgba(156,163,175,0.25);
+}
+.theme-c {
+  --accent-rgb: 125, 211, 252; /* sky-300 cool */
+  --panel-bg: rgba(17,24,39,0.92);  /* gray-900 */
+  --panel-bg-2: rgba(31,41,55,0.85); /* gray-800 */
+  --panel-border: rgba(148,163,184,0.30); /* slate-400 */
+  --muted-bg: rgba(148,163,184,0.20);
+  --hover-bg: rgba(148,163,184,0.15);
+  --text: rgba(226,232,240,0.92); /* slate-200 */
+  --text-strong: #e2e8f0; /* slate-200 */
+  --text-muted: rgba(203,213,225,0.80); /* slate-300 */
+  --track-bg: rgba(148,163,184,0.25);
+}
+
+/* Override common cyan-tailwind utilities when themed to follow accent vars */
+[class*='theme-'] .text-cyan-300\/90 { color: rgba(var(--accent-rgb), 0.90) !important; }
+[class*='theme-'] .text-cyan-400 { color: rgba(var(--accent-rgb), 0.95) !important; }
+[class*='theme-'] .bg-cyan-500\/30 { background-color: rgba(var(--accent-rgb), 0.30) !important; }
+[class*='theme-'] .hover\:bg-cyan-500\/50:hover { background-color: rgba(var(--accent-rgb), 0.50) !important; }
+[class*='theme-'] .border-cyan-500\/50 { border-color: rgba(var(--accent-rgb), 0.50) !important; }
+[class*='theme-'] .bg-cyan-300\/20 { background-color: rgba(var(--accent-rgb), 0.20) !important; }
+[class*='theme-'] .border-cyan-300\/40 { border-color: rgba(var(--accent-rgb), 0.40) !important; }
+[class*='theme-'] .focus\:border-cyan-500\/50:focus { border-color: rgba(var(--accent-rgb), 0.50) !important; }
+[class*='theme-'] .checked\:bg-cyan-300\/40:checked { background-color: rgba(var(--accent-rgb), 0.40) !important; }
+[class*='theme-'] .checked\:border-cyan-300\/60:checked { border-color: rgba(var(--accent-rgb), 0.60) !important; }
+[class*='theme-'] .bg-cyan-300\/30 { background-color: rgba(var(--accent-rgb), 0.30) !important; }
+[class*='theme-'] .border-cyan-400 { border-color: rgba(var(--accent-rgb), 0.80) !important; }
+[class*='theme-'] .ring-cyan-400\/40 { box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.40) !important; }
+
+/* Range input thumbs follow accent when themed */
+[class*='theme-'] input[type="range"]::-webkit-slider-thumb { background-color: rgba(var(--accent-rgb), 0.90) !important; }
+[class*='theme-'] input[type="range"]::-moz-range-thumb { background-color: rgba(var(--accent-rgb), 0.90) !important; }
+[class*='theme-'] input[type="range"]::-ms-thumb { background-color: rgba(var(--accent-rgb), 0.90) !important; }
+
+/* Optional utility helpers for JSX */
+.text-accent { color: rgba(var(--accent-rgb), 0.9); }
+.bg-accent-30 { background-color: rgba(var(--accent-rgb), 0.30); }
+.border-accent-50 { border-color: rgba(var(--accent-rgb), 0.50); }
+
+/* Map common dark-tailwind utilities to theme variables */
+[class*='theme-'] .bg-black\/60 { background-color: var(--panel-bg) !important; }
+[class*='theme-'] .bg-black\/50 { background-color: var(--panel-bg-2) !important; }
+[class*='theme-'] .bg-black\/40 { background-color: var(--panel-bg-2) !important; }
+[class*='theme-'] .border-white\/20 { border-color: var(--panel-border) !important; }
+[class*='theme-'] .border-white\/10 { border-color: color-mix(in oklab, var(--panel-border) 70%, transparent) !important; }
+[class*='theme-'] .text-white\/90 { color: var(--text) !important; }
+[class*='theme-'] .text-white\/80 { color: var(--text-muted) !important; }
+[class*='theme-'] .text-white { color: var(--text-strong) !important; }
+[class*='theme-'] .bg-white\/20 { background-color: var(--muted-bg) !important; }
+[class*='theme-'] .hover\:bg-white\/20:hover { background-color: var(--hover-bg) !important; }
+[class*='theme-'] .hover\:bg-white\/10:hover { background-color: var(--hover-bg) !important; }
+[class*='theme-'] .focus\:border-white\/20:focus { border-color: var(--panel-border) !important; }
+[class*='theme-'] .bg-white\/10 { background-color: var(--hover-bg) !important; }
+
+/* Themed range track */
+[class*='theme-'] input[type="range"]::-webkit-slider-runnable-track { background-color: var(--track-bg) !important; }
+[class*='theme-'] input[type="range"]::-moz-range-track { background-color: var(--track-bg) !important; }
+[class*='theme-'] input[type="range"]::-ms-track { background-color: var(--track-bg) !important; }

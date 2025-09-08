@@ -8,9 +8,10 @@ export class CancelLinearMotion extends AutopilotMode {
         config: AutopilotConfig,
         thrusterGroups: any,
         thrust: number,
-        momentumPidController: PIDController
+        momentumPidController: PIDController,
+        thrusterMax?: number[]
     ) {
-        super(spacecraft, config, thrusterGroups, thrust, momentumPidController);
+        super(spacecraft, config, thrusterGroups, thrust, momentumPidController, thrusterMax);
     }
 
     calculateForces(dt: number, out: number[] = Array(24).fill(0)): number[] {

@@ -125,10 +125,11 @@ export class DockingController {
     }
 
     private calculateApproachPosition(targetPort: THREE.Vector3, targetDir: THREE.Vector3, safeDistance: number, targetPortLength: number): THREE.Vector3 {
-        // Place the approach point safeDistance away from the TARGET PORT FACE
-        // Face is half the port length away from the port center along targetDir
+        // Place the approach point safeDistance in front of the TARGET PORT FACE (outward along the port axis)
+        // The port center is at targetPort; the outer face is at +length/2 along targetDir for a front-facing port.
+        // Using +offset keeps the approach point in front of the target, not behind it.
         const offsetFromCenter = safeDistance + (targetPortLength * 0.5);
-        return targetPort.clone().add(targetDir.clone().multiplyScalar(-offsetFromCenter));
+        return targetPort.clone().add(targetDir.clone().multiplyScalar(+offsetFromCenter));
     }
 
     private calculateFinalPosition(targetPort: THREE.Vector3, targetDir: THREE.Vector3): THREE.Vector3 {
@@ -144,7 +145,8 @@ export class DockingController {
         const targetDockingPortLength = this.targetSpacecraft.objects.dockingPortLength || 0.1;
 
         // Calculate docking point at the TARGET PORT FACE (center-of-face)
-        const dockingPoint = targetPort.clone().add(targetDir.clone().multiplyScalar(-targetDockingPortLength * 0.5));
+        // The face lies at +length/2 along the target port direction from the port center.
+        const dockingPoint = targetPort.clone().add(targetDir.clone().multiplyScalar(+targetDockingPortLength * 0.5));
 
         // Offset from docking point to OUR CENTER OF MASS so our FACE lands on dockingPoint
         const ourFaceToCOM = (ourBoxDepth / 2) + ourDockingPortDepth + (ourDockingPortLength * 0.5);

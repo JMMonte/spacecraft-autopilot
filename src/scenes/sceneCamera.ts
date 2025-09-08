@@ -7,6 +7,7 @@ export class SceneCamera {
     public camera: THREE.PerspectiveCamera;
     public controls!: OrbitControls;
     private relativePosition: THREE.Vector3;
+    private mode: 'follow' | 'free' = 'follow';
 
     constructor(renderer: THREE.WebGLRenderer, _world: BasicWorld) {
         this.scene = new THREE.Scene();
@@ -49,6 +50,7 @@ export class SceneCamera {
     }
 
     public updateOrbitTarget(target: THREE.Vector3): void {
+        if (this.mode !== 'follow') return;
         // Update the orbit controls target
         this.controls.target.set(target.x, target.y, target.z);
         
@@ -58,6 +60,36 @@ export class SceneCamera {
             target.y + this.relativePosition.y,
             target.z + this.relativePosition.z
         );
+    }
+
+    // Immediately align the orbit target to a position while
+    // preserving current camera world position (no jump).
+    public snapFollowTarget(target: THREE.Vector3): void {
+        // Set controls target to the desired point
+        this.controls.target.set(target.x, target.y, target.z);
+        // Recompute relative offset from camera to target
+        this.relativePosition.set(
+            this.camera.position.x - target.x,
+            this.camera.position.y - target.y,
+            this.camera.position.z - target.z
+        );
+    }
+
+    public setCameraMode(mode: 'follow' | 'free'): void {
+        this.mode = mode;
+        if (mode === 'free') {
+            // Allow unrestricted exploration
+            this.controls.screenSpacePanning = true;
+            this.controls.minDistance = 0.1;
+            this.controls.maxDistance = Infinity;
+            // Keep current target/position as-is; user can pan/orbit freely
+        } else {
+            // Restore sane follow constraints
+            this.controls.screenSpacePanning = false;
+            this.controls.minDistance = 5;
+            this.controls.maxDistance = 50000;
+            // Do not force-reset relativePosition to preserve user framing
+        }
     }
 
     public cleanup(): void {

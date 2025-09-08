@@ -3,6 +3,7 @@ import { Spacecraft } from '../core/spacecraft';
 import { SceneHelpers } from '../scenes/sceneHelpers';
 import { Autopilot } from './autopilot/Autopilot';
 import { createLogger } from '../utils/logger';
+import { getBasicThrusterGroups } from '../config/spacecraftConfig';
 
 interface KeyMap {
     [key: string]: boolean;
@@ -21,6 +22,7 @@ export class SpacecraftController {
     private keysPressed!: KeyMap;
     private mass!: number;
     private thrust!: number;
+    private thrusterMax: number[] = new Array(24).fill(0);
     public autopilot!: Autopilot;
     // Thruster pulse-width modulation state (to reduce flicker)
     private thrusterOnLatch: boolean[] = new Array(24).fill(false);
@@ -28,7 +30,7 @@ export class SpacecraftController {
     private thrusterLatchedForce: number[] = new Array(24).fill(0);
     private minPulseOn: number = 0.05;  // seconds
     private minPulseOff: number = 0.05; // seconds
-    private activationThresholdFactor: number = 0.02; // as fraction of per-thruster thrust
+    private activationThresholdFactor: number = 0.01; // as fraction of per-thruster thrust (ignite earlier)
     // Reusable buffers to avoid per-frame allocations
     private manualForcesBuffer: number[] = new Array(24).fill(0);
     private combinedForcesBuffer: number[] = new Array(24).fill(0);
@@ -69,6 +71,8 @@ export class SpacecraftController {
         this.mass = spacecraft.getMass();
         const thrustFactor = 5;
         this.thrust = (this.mass / 24) * thrustFactor;
+        // Default per-thruster capacities (N). Can be customized later via config.
+        this.thrusterMax = new Array(24).fill(this.thrust);
 
         // Create autopilot with correct parameters
         const thrusterGroups = this.getThrusterGroups();
@@ -78,6 +82,7 @@ export class SpacecraftController {
             this.spacecraft,
             thrusterGroups,
             this.thrust,
+            this.thrusterMax,
             {
                 pidGains: {
                     orientation: { kp: 0.05, ki: 0.0, kd: 0.02 },
@@ -86,7 +91,7 @@ export class SpacecraftController {
                 },
                 maxForce: this.thrust * 24,
                 dampingFactor: 1.5,
-                autoTune: true,
+                autoTune: false,
                 useWorker: true,
             }
         );
@@ -97,32 +102,7 @@ export class SpacecraftController {
     }
 
     private getThrusterGroups() {
-        return {
-            forward: [
-                [0, 1, 2, 3],     // Forward thrusters
-                [4, 5, 6, 7]      // Back thrusters
-            ],
-            up: [
-                [12, 13, 14, 15],  // Up thrusters (swapped)
-                [8, 9, 10, 11]     // Down thrusters (swapped)
-            ],
-            left: [
-                [16, 17, 18, 19], // Left thrusters
-                [20, 21, 22, 23]  // Right thrusters
-            ],
-            pitch: [
-                [0, 2, 5, 7, 8, 9, 14, 15],     // Pitch up
-                [1, 3, 4, 6, 10, 11, 12, 13]    // Pitch down
-            ],
-            yaw: [
-                [0, 1, 6, 7],     // Yaw left
-                [2, 3, 4, 5]      // Yaw right
-            ],
-            roll: [
-                [8, 11, 13, 14],  // Roll right
-                [9, 10, 12, 15]   // Roll left
-            ]
-        };
+        return getBasicThrusterGroups();
     }
 
     public handleKeyDown(event: KeyboardEvent): void {
@@ -334,12 +314,14 @@ export class SpacecraftController {
     }
 
     private applyForcesToThrusters(forces: number[], dt: number): boolean[] {
-        const activationThreshold = this.thrust * this.activationThresholdFactor;
+        const activationThresholdBase = this.activationThresholdFactor;
         const visibility = new Array(24).fill(false);
 
         for (let i = 0; i < 24; i++) {
             // clamp desired force
-            const desired = Math.min(Math.max(forces[i] || 0, 0), this.thrust);
+            const cap = this.thrusterMax[i] || this.thrust;
+            const desired = Math.min(Math.max(forces[i] || 0, 0), cap);
+            const activationThreshold = cap * activationThresholdBase;
             const desiredOn = desired >= activationThreshold;
 
             // advance timer
@@ -366,7 +348,7 @@ export class SpacecraftController {
                 // update toward desired
                 const alpha = 0.8; // heavier smoothing
                 this.thrusterLatchedForce[i] = this.thrusterLatchedForce[i] * alpha + desired * (1 - alpha);
-                const f = Math.max(this.thrusterLatchedForce[i], activationThreshold);
+                const f = Math.max(Math.min(this.thrusterLatchedForce[i], cap), activationThreshold);
                 this.spacecraft.rcsVisuals.applyForce(i, f, dt);
                 visibility[i] = true;
             } else {
@@ -391,19 +373,20 @@ export class SpacecraftController {
     }
 
     private keyToThrusters(): ThrusterMap {
+        const g = getBasicThrusterGroups();
         return {
-            'KeyU': [0, 1, 2, 3],         // Forward
-            'KeyO': [4, 5, 6, 7],         // Back
-            'KeyJ': [16, 17, 18, 19],     // Left
-            'KeyL': [20, 21, 22, 23],     // Right
-            'KeyK': [8, 9, 10, 11],       // Up
-            'KeyI': [12, 13, 14, 15],     // Down
-            'KeyW': [0, 2, 5, 7, 8, 9, 14, 15],         // Pitch up
-            'KeyS': [1, 3, 4, 6, 10, 11, 12, 13],       // Pitch down
-            'KeyQ': [8, 11, 13, 14],      // Roll right
-            'KeyE': [9, 10, 12, 15],      // Roll left
-            'KeyA': [0, 1, 6, 7],         // Yaw left
-            'KeyD': [2, 3, 4, 5]          // Yaw right
+            'KeyU': g.forward[0],                    // Forward
+            'KeyO': g.forward[1],                    // Back
+            'KeyJ': g.left[0],                       // Left
+            'KeyL': g.left[1],                       // Right
+            'KeyK': g.up[1],                         // Up (matches previous index set)
+            'KeyI': g.up[0],                         // Down (matches previous index set)
+            'KeyW': g.pitch[0],                      // Pitch up
+            'KeyS': g.pitch[1],                      // Pitch down
+            'KeyQ': g.roll[0],                       // Roll right
+            'KeyE': g.roll[1],                       // Roll left
+            'KeyA': g.yaw[0],                        // Yaw left
+            'KeyD': g.yaw[1],                        // Yaw right
         };
     }
 
@@ -446,6 +429,16 @@ export class SpacecraftController {
 
     public setThrust(value: number): void {
         this.thrust = value;
+    }
+
+    /**
+     * Set per-thruster maximum strengths (N). Array length must be 24.
+     * Updates local clamping and propagates to autopilot (main + worker).
+     */
+    public setThrusterStrengths(max: number[]): void {
+        if (!Array.isArray(max) || max.length !== 24) return;
+        this.thrusterMax = max.slice(0, 24);
+        try { this.autopilot?.setThrusterStrengths(this.thrusterMax); } catch {}
     }
 
     public getSpacecraft(): Spacecraft {

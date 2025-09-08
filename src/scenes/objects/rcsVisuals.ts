@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SpacecraftModel } from './spacecraftModel';
+import { buildBasicRcsThrusters } from '../../config/spacecraftConfig';
 import type { RigidBody } from '../../physics/types';
 
 interface ThrusterData {
@@ -117,6 +118,7 @@ export class RCSVisuals {
     private thrusterVisibility: boolean[];
     private thrusterGeometry: ThrusterGeometry;
     private thrusterMaterials: ThrusterMaterials;
+    private thrustersData: ThrusterData[] = [];
     // Particle system fields
     private scene: THREE.Scene | null = null;
     private particleTexture: THREE.Texture | null = null;
@@ -154,7 +156,11 @@ export class RCSVisuals {
         const maybeScene = (objects.box.parent as THREE.Scene) || null;
         this.scene = maybeScene;
 
-        // Create thrusters (this will also set their positions)
+        // Build thruster layout from centralized config and create groups
+        this.thrustersData = buildBasicRcsThrusters(
+            { width: this.boxWidth, height: this.boxHeight, depth: this.boxDepth },
+            this.coneHeight
+        );
         this.createThrusters(objects);
         
         // Ensure all thrusters start invisible
@@ -279,73 +285,13 @@ export class RCSVisuals {
     }
 
     private createThrusters(objects: SceneObjects): void {
-        const thrustersData = this.getThrustersData();
+        const thrustersData = this.thrustersData;
         thrustersData.forEach((thrusterData, index) => {
             this.createThrusterGroup(index, thrusterData.position, thrusterData.rotation, objects);
         });
     }
 
-    private getThrustersData(): ThrusterData[] {
-        const halfWidth = this.boxWidth / 2;
-        const halfHeight = this.boxHeight / 2;
-        const halfDepth = this.boxDepth / 2;
-        const halfCones = this.coneHeight / 2;
-        const xAxis = new THREE.Vector3(1, 0, 0);
-        const zAxis = new THREE.Vector3(0, 0, 1);
-        const halfPi = Math.PI / 2;
-    
-        const thrustersData: ThrusterData[] = [];
-    
-        // Front Face
-        thrustersData.push(
-            { position: [-halfWidth, -halfHeight, -halfDepth - halfCones], rotation: { axis: xAxis, angle: -halfPi } },
-            { position: [-halfWidth, halfHeight, -halfDepth - halfCones], rotation: { axis: xAxis, angle: -halfPi } },
-            { position: [halfWidth, -halfHeight, -halfDepth - halfCones], rotation: { axis: xAxis, angle: -halfPi } },
-            { position: [halfWidth, halfHeight, -halfDepth - halfCones], rotation: { axis: xAxis, angle: -halfPi } }
-        );
-    
-        // Back Face
-        thrustersData.push(
-            { position: [-halfWidth, -halfHeight, halfDepth + halfCones], rotation: { axis: xAxis, angle: halfPi } },
-            { position: [-halfWidth, halfHeight, halfDepth + halfCones], rotation: { axis: xAxis, angle: halfPi } },
-            { position: [halfWidth, -halfHeight, halfDepth + halfCones], rotation: { axis: xAxis, angle: halfPi } },
-            { position: [halfWidth, halfHeight, halfDepth + halfCones], rotation: { axis: xAxis, angle: halfPi } }
-        );
-    
-        // Top Face
-        thrustersData.push(
-            { position: [-halfWidth, halfHeight + halfCones, -halfDepth], rotation: { axis: zAxis, angle: 0 } },
-            { position: [halfWidth, halfHeight + halfCones, -halfDepth], rotation: { axis: zAxis, angle: 0 } },
-            { position: [halfWidth, halfHeight + halfCones, halfDepth], rotation: { axis: zAxis, angle: 0 } },
-            { position: [-halfWidth, halfHeight + halfCones, halfDepth], rotation: { axis: zAxis, angle: 0 } }
-        );
-    
-        // Bottom Face
-        thrustersData.push(
-            { position: [-halfWidth, -halfHeight - halfCones, -halfDepth], rotation: { axis: zAxis, angle: Math.PI } },
-            { position: [halfWidth, -halfHeight - halfCones, -halfDepth], rotation: { axis: zAxis, angle: Math.PI } },
-            { position: [halfWidth, -halfHeight - halfCones, halfDepth], rotation: { axis: zAxis, angle: Math.PI } },
-            { position: [-halfWidth, -halfHeight - halfCones, halfDepth], rotation: { axis: zAxis, angle: Math.PI } }
-        );
-    
-        // Left Face
-        thrustersData.push(
-            { position: [halfWidth + halfCones, halfHeight, -halfDepth], rotation: { axis: zAxis, angle: -halfPi } },
-            { position: [halfWidth + halfCones, -halfHeight, -halfDepth], rotation: { axis: zAxis, angle: -halfPi } },
-            { position: [halfWidth + halfCones, halfHeight, halfDepth], rotation: { axis: zAxis, angle: -halfPi } },
-            { position: [halfWidth + halfCones, -halfHeight, halfDepth], rotation: { axis: zAxis, angle: -halfPi } }
-        );
-    
-        // Right Face
-        thrustersData.push(
-            { position: [-halfWidth - halfCones, halfHeight, -halfDepth], rotation: { axis: zAxis, angle: halfPi } },
-            { position: [-halfWidth - halfCones, -halfHeight, -halfDepth], rotation: { axis: zAxis, angle: halfPi } },
-            { position: [-halfWidth - halfCones, halfHeight, halfDepth], rotation: { axis: zAxis, angle: halfPi } },
-            { position: [-halfWidth - halfCones, -halfHeight, halfDepth], rotation: { axis: zAxis, angle: halfPi } }
-        );
-    
-        return thrustersData;
-    }
+    // Removed local geometric layout builder; use centralized config instead
 
     public cleanup(): void {
         // Remove entire thruster groups from the scene
@@ -403,7 +349,7 @@ export class RCSVisuals {
     }
 
     public getThrusterData(): ThrusterData[] {
-        return this.getThrustersData();
+        return this.thrustersData;
     }
 
     // --- Particle system helpers ---

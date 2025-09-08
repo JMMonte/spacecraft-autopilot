@@ -15,6 +15,15 @@ export class DockingPortManager {
     private lightTargets: Partial<Record<'front' | 'back', THREE.Object3D>> = {};
     private lampMeshes: Partial<Record<'front' | 'back', THREE.Mesh>> = {};
     private lightsState: Partial<Record<'front' | 'back', boolean>> = { front: false, back: false };
+    private spotlightParams: { intensity: number; angle: number; distance: number; decay: number; penumbra: number } = {
+        // Stronger default flashlight power
+        intensity: 10.0,
+        // Default narrow beam (radians; Three.js uses half-angle)
+        angle: Math.PI / 8,
+        distance: 60,
+        decay: 1.0,
+        penumbra: 0.3,
+    };
 
     public addDockingPorts(
         box: THREE.Mesh,
@@ -118,7 +127,14 @@ export class DockingPortManager {
             this.lampMeshes[id] = lamp;
 
             // Create a SpotLight near the lamp, pointing outward along port direction
-            const spot = new THREE.SpotLight(0xffffff, 2.0, 20, Math.PI / 8, 0.3, 1.0);
+            const spot = new THREE.SpotLight(
+                0xffffff,
+                this.spotlightParams.intensity,
+                this.spotlightParams.distance,
+                this.spotlightParams.angle,
+                this.spotlightParams.penumbra,
+                this.spotlightParams.decay
+            );
             spot.name = `${name}SpotLight`;
             spot.castShadow = true;
             // Soften shadows a bit
@@ -211,5 +227,46 @@ export class DockingPortManager {
             mat.emissiveIntensity = enabled ? 2.0 : 0.0;
             mat.needsUpdate = true;
         }
+    }
+
+    /** Get current spotlight parameters (shared across ports). */
+    public getDockingLightParams(): { intensity: number; angle: number; distance: number; decay: number; penumbra: number } {
+        // Prefer reading from an existing spotlight to reflect runtime changes
+        const ref = this.spotlights.front || this.spotlights.back;
+        if (ref) {
+            return {
+                intensity: ref.intensity,
+                angle: ref.angle,
+                distance: ref.distance,
+                decay: ref.decay,
+                penumbra: ref.penumbra,
+            };
+        }
+        return { ...this.spotlightParams };
+    }
+
+    /**
+     * Set spotlight parameters for all docking port lights on this craft.
+     * Any omitted field is left unchanged.
+     */
+    public setDockingLightParams(params: Partial<{ intensity: number; angle: number; distance: number; decay: number; penumbra: number }>): void {
+        // Clamp and store defaults for future light creations
+        const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+        if (params.intensity !== undefined) this.spotlightParams.intensity = clamp(params.intensity, 0, 100);
+        if (params.angle !== undefined) this.spotlightParams.angle = clamp(params.angle, Math.PI / 180 * 1, Math.PI / 2);
+        if (params.distance !== undefined) this.spotlightParams.distance = clamp(params.distance, 0, 1e6);
+        if (params.decay !== undefined) this.spotlightParams.decay = clamp(params.decay, 0, 4);
+        if (params.penumbra !== undefined) this.spotlightParams.penumbra = clamp(params.penumbra, 0, 1);
+
+        // Apply to existing lights
+        (['front', 'back'] as const).forEach((id) => {
+            const light = this.spotlights[id];
+            if (!light) return;
+            if (params.intensity !== undefined) light.intensity = this.spotlightParams.intensity;
+            if (params.angle !== undefined) light.angle = this.spotlightParams.angle;
+            if (params.distance !== undefined) light.distance = this.spotlightParams.distance;
+            if (params.decay !== undefined) light.decay = this.spotlightParams.decay;
+            if (params.penumbra !== undefined) light.penumbra = this.spotlightParams.penumbra;
+        });
     }
 }

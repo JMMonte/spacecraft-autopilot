@@ -19,7 +19,8 @@ const SHORTCUTS: Shortcut[] = [
   { key: 'P', description: 'Toggle position hold' },
   { key: 'O', description: 'Toggle orientation hold' },
   { key: 'V', description: 'Toggle velocity arrow' },
-  { key: 'B', description: 'Toggle angular velocity arrow' }
+  { key: 'B', description: 'Toggle angular velocity arrow' },
+  { key: 'C', description: 'Toggle camera (Follow/Free)' }
 ];
 
 export const KeyboardShortcuts: React.FC<KeyboardShortcutsProps> = ({ isVisible, onClose }) => {

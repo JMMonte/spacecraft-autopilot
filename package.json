@@ -10,6 +10,7 @@
     "clean-start": "rm -rf node_modules .vite dist && npm install --legacy-peer-deps && npm run dev",
     "check:ts": "tsc --noEmit --pretty false",
     "test:physics": "node tools/collision-check.mjs",
+    "test:ap": "node --import tsx tools/tests/autopilot.test.ts",
     "list:unused": "node tools/list-unused.mjs"
   },
   "author": "Joao Montenegro",
@@ -43,6 +44,8 @@
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.13",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.20.5",
     "typescript": "^5.6.3",
     "vite": "^7.1.5"
   }

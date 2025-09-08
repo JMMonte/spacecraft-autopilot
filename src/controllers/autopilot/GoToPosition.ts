@@ -30,6 +30,11 @@ export class GoToPosition extends AutopilotMode {
         vTargetMag?: number;
         vTargetAlong?: number;
         vRelMag?: number;
+        // Predicted miss at tGo (for diagnostics)
+        missMag?: number;
+        missX?: number;
+        missY?: number;
+        missZ?: number;
     } | null = null;
 
     constructor(
@@ -38,9 +43,10 @@ export class GoToPosition extends AutopilotMode {
         thrusterGroups: any,
         thrust: number,
         pidController: PIDController,
-        targetPosition: THREE.Vector3
+        targetPosition: THREE.Vector3,
+        thrusterMax?: number[]
     ) {
-        super(spacecraft, config, thrusterGroups, thrust, pidController);
+        super(spacecraft, config, thrusterGroups, thrust, pidController, thrusterMax);
         this.targetPosition = targetPosition;
     }
 
@@ -154,6 +160,17 @@ export class GoToPosition extends AutopilotMode {
             THREE.MathUtils.clamp(aCmdLocal.z, -azCap, azCap),
         );
 
+        // Simple forward propagation for predicted miss visualization
+        const pSelf = currentPosition; // ref to world position
+        const vSelf = currentVelocity; // ref to world velocity
+        const refVelWorld = targetRefVel; // already 0 if null
+        const pGoal = this.targetPosition; // world target anchor (rebased by caller when needed)
+        const pGoalFuture = this.tmpVecA.copy(pGoal).add(refVelWorld.clone().multiplyScalar(tGo));
+        const pSelfFuture = this.tmpVecB.copy(pSelf)
+            .add(vSelf.clone().multiplyScalar(tGo))
+            .add(aCmdWorld.clone().multiplyScalar(0.5 * tGo * tGo));
+        const missVec = this.tmpVecD.copy(pGoalFuture).sub(pSelfFuture);
+
         // Telemetry snapshot
         this.telemetry = {
             distance: dist,
@@ -171,6 +188,11 @@ export class GoToPosition extends AutopilotMode {
             vTargetMag: targetRefVel.length(),
             vTargetAlong: targetRefVel.dot(dirWorld),
             vRelMag: relVelocityWorld.length(),
+            // Predicted intercept diagnostics
+            missMag: missVec.length(),
+            missX: missVec.x,
+            missY: missVec.y,
+            missZ: missVec.z,
         };
 
         if (dist <= this.threshold) {

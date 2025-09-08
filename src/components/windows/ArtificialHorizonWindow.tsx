@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface ArtificialHorizonWindowProps {
-  horizonRef: React.RefObject<HTMLCanvasElement>;
+  horizonRef: React.RefObject<HTMLCanvasElement | null>;
 }
 
 export const ArtificialHorizonWindow: React.FC<ArtificialHorizonWindowProps> = ({ horizonRef }) => {

@@ -24,6 +24,7 @@ export class Autopilot {
     private config: AutopilotConfig;
     private thrusterGroups: any;
     private thrust: number;
+    private thrusterMax: number[];
     private isEnabled: boolean = false;
     private activeAutopilots: AutopilotModes;
     public targetPosition: THREE.Vector3;
@@ -31,7 +32,7 @@ export class Autopilot {
     private targetObject: Spacecraft | null = null;
     private targetPoint: THREE.Vector3 = new THREE.Vector3();
     private referenceObject: Spacecraft | null = null;
-    private autoTuneEnabled: boolean = false;
+    // deprecated: auto-tune now only via PID window
     private useWorker: boolean = true;
     private worker?: Worker;
     private workerReady: boolean = false;
@@ -54,6 +55,7 @@ export class Autopilot {
 
     // PID Controllers
     private orientationPidController: PIDController;
+    private rotationCancelPidController: PIDController;
     private linearPidController: PIDController;
     private momentumPidController: PIDController;
     private onStateChange?: (state: { enabled: boolean; activeAutopilots: AutopilotModes }) => void;
@@ -62,6 +64,7 @@ export class Autopilot {
         spacecraft: Spacecraft,
         thrusterGroups: any,
         thrust: number,
+        thrusterMax: number[],
         options: {
             pidGains?: {
                 orientation?: { kp: number; ki: number; kd: number; };
@@ -79,9 +82,9 @@ export class Autopilot {
         this.spacecraft = spacecraft;
         this.thrusterGroups = thrusterGroups;
         this.thrust = thrust;
+        this.thrusterMax = (thrusterMax && thrusterMax.length === 24) ? thrusterMax.slice(0, 24) : new Array(24).fill(thrust);
         this.targetPosition = new THREE.Vector3();
         this.targetOrientation = new THREE.Quaternion();
-        this.autoTuneEnabled = options.autoTune ?? true;
         this.useWorker = options.useWorker ?? true;
 
         // Initialize config with default values
@@ -98,12 +101,12 @@ export class Autopilot {
                 momentum: { ...defaultPidGains.momentum, ...options.pidGains?.momentum },
             },
             limits: {
-                maxForce: options.maxForce ?? 1000,         // Reduced max force
+                maxForce: options.maxForce ?? 1000,
                 epsilon: 0.01,
-                maxAngularMomentum: options.maxAngularMomentum ?? 2.0,
+                maxAngularMomentum: options.maxAngularMomentum ?? 1.0,
                 maxLinearMomentum: options.maxLinearMomentum ?? 10.0,
                 maxAngularVelocity:  options.pidGains?.orientation ? 1.0 : 1.2,
-                maxAngularAcceleration: 3.0,
+                maxAngularAcceleration: 5.0,
                 maxLinearVelocity: options.maxLinearMomentum ? (options.maxLinearMomentum / Math.max(this.spacecraft.getMass(), 1e-3)) * 4 : 8.0,
                 maxLinearAcceleration: 2.5,
             },
@@ -114,6 +117,12 @@ export class Autopilot {
 
         // Initialize PID controllers
         this.orientationPidController = new PIDController(
+            this.config.pid.orientation.kp,
+            this.config.pid.orientation.ki,
+            this.config.pid.orientation.kd,
+            'angularMomentum'
+        );
+        this.rotationCancelPidController = new PIDController(
             this.config.pid.orientation.kp,
             this.config.pid.orientation.ki,
             this.config.pid.orientation.kd,
@@ -161,7 +170,8 @@ export class Autopilot {
             this.config,
             this.thrusterGroups,
             this.thrust,
-            this.orientationPidController
+            this.rotationCancelPidController,
+            this.thrusterMax
         );
 
         this.cancelLinearMotionMode = new CancelLinearMotion(
@@ -169,7 +179,8 @@ export class Autopilot {
             this.config,
             this.thrusterGroups,
             this.thrust,
-            this.momentumPidController
+            this.momentumPidController,
+            this.thrusterMax
         );
 
         this.pointToPositionMode = new PointToPosition(
@@ -178,7 +189,8 @@ export class Autopilot {
             this.thrusterGroups,
             this.thrust,
             this.orientationPidController,
-            this.targetPosition
+            this.targetPosition,
+            this.thrusterMax
         );
 
         this.orientationMatchMode = new OrientationMatchAutopilot(
@@ -187,7 +199,10 @@ export class Autopilot {
             this.thrusterGroups,
             this.thrust,
             this.orientationPidController,
-            this.targetOrientation
+            this.targetOrientation,
+            undefined,
+            false,
+            this.thrusterMax
         );
 
         this.goToPositionMode = new GoToPosition(
@@ -196,8 +211,227 @@ export class Autopilot {
             this.thrusterGroups,
             this.thrust,
             this.linearPidController,
-            this.targetPosition
+            this.targetPosition,
+            this.thrusterMax
         );
+    }
+
+    // --- Auto-tune helpers -------------------------------------------------
+    private computeAxisInertia(): { x: number; y: number; z: number } {
+        const mass = this.spacecraft.getMass();
+        const size = this.spacecraft.getMainBodyDimensions();
+        const w = size.x, h = size.y, d = size.z;
+        const Ix = (1 / 12) * mass * (h * h + d * d);
+        const Iy = (1 / 12) * mass * (w * w + d * d);
+        const Iz = (1 / 12) * mass * (w * w + h * h);
+        return { x: Ix, y: Iy, z: Iz };
+    }
+
+    private fitTau(samples: Array<{ t: number; e: number }>): number {
+        const pts = samples.filter(s => s.e > 1e-6);
+        if (pts.length < 3) return 1.0; // fallback
+        let sumT = 0, sumY = 0, sumTT = 0, sumTY = 0;
+        for (const s of pts) {
+            const y = Math.log(s.e);
+            sumT += s.t; sumY += y; sumTT += s.t * s.t; sumTY += s.t * y;
+        }
+        const n = pts.length;
+        const denom = n * sumTT - sumT * sumT;
+        if (Math.abs(denom) < 1e-9) return 1.0;
+        const slope = (n * sumTY - sumT * sumY) / denom; // ln e = c + slope * t
+        const tau = slope < -1e-6 ? -1 / slope : 1.0;
+        return Math.max(0.05, Math.min(10.0, tau));
+    }
+
+    private clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+
+    /**
+     * Active auto-tune that excites the system and estimates gains from decay samples.
+     * Runs on the main thread while the autopilot (main or worker) computes thrust.
+     */
+    public async autoTune(type: 'attitude' | 'rotCancel' | 'position' | 'linMomentum', durationMs: number = 1200): Promise<void> {
+        // Snapshot autopilot and references
+        const prevEnabled = this.isEnabled;
+        const prevModes = this.getActiveAutopilots();
+        const prevRef = this.referenceObject;
+
+        // Ensure enabled for tuning
+        this.setEnabled(true);
+        this.setReferenceObject(null);
+
+        const start = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const samples: Array<{ t: number; e: number }> = [];
+        const sample = () => {
+            const tNow = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            const t = (tNow - start) / 1000;
+            let e = 0;
+            if (type === 'attitude') {
+                const q = this.spacecraft.getWorldOrientation();
+                const target = this.getTargetOrientation();
+                const qInv = q.clone().invert();
+                const errQ = qInv.multiply(target);
+                const wClamped = Math.max(-1, Math.min(1, errQ.w));
+                e = 2 * Math.acos(Math.abs(wClamped)); // radians
+            } else if (type === 'rotCancel') {
+                const w = this.spacecraft.getWorldAngularVelocity();
+                const I = this.computeAxisInertia();
+                const Lx = I.x * w.x, Ly = I.y * w.y, Lz = I.z * w.z;
+                e = Math.sqrt(Lx * Lx + Ly * Ly + Lz * Lz); // |L|
+            } else if (type === 'position') {
+                const p = this.spacecraft.getWorldPosition();
+                const tgt = this.getTargetPosition();
+                e = p.distanceTo(tgt);
+            } else if (type === 'linMomentum') {
+                const v = this.spacecraft.getWorldVelocity();
+                e = v.length();
+            }
+            samples.push({ t, e });
+        };
+
+        // Configure excitation and mode control
+        const q0 = this.spacecraft.getWorldOrientation();
+        const p0 = this.spacecraft.getWorldPosition();
+        try {
+            if (type === 'attitude') {
+                // Small deliberate angle step around world Y
+                const axis = new THREE.Vector3(0, 1, 0);
+                const angle = THREE.MathUtils.degToRad(12);
+                const dq = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+                const target = dq.multiply(q0.clone());
+                this.setTargetOrientation(target);
+                this.setMode('orientationMatch', true);
+            } else if (type === 'rotCancel') {
+                // Inject a small angular velocity then cancel
+                try {
+                    const rb: any = (this.spacecraft as any)?.objects?.rigid;
+                    if (rb) {
+                        const av = rb.getAngularVelocity?.() || { x: 0, y: 0, z: 0 };
+                        const nearZero = (Math.abs(av.y) + Math.abs(av.x) + Math.abs(av.z)) < 1e-3;
+                        if (nearZero && rb.setAngularVelocity) rb.setAngularVelocity({ x: 0, y: 0.4, z: 0 });
+                    }
+                } catch {}
+                this.setMode('cancelRotation', true);
+            } else if (type === 'position') {
+                // Position step in body-forward by ~0.8m
+                const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(q0);
+                const tgt = p0.clone().add(forward.multiplyScalar(0.8));
+                this.setTargetPosition(tgt);
+                this.setMode('goToPosition', true);
+            } else if (type === 'linMomentum') {
+                // Inject a small linear velocity then cancel
+                try {
+                    const rb: any = (this.spacecraft as any)?.objects?.rigid;
+                    if (rb) {
+                        const lv = rb.getLinearVelocity?.() || { x: 0, y: 0, z: 0 };
+                        const speed = Math.sqrt(lv.x * lv.x + lv.y * lv.y + lv.z * lv.z);
+                        if (speed < 0.1 && rb.setLinearVelocity) rb.setLinearVelocity({ x: 0.4, y: 0, z: 0 });
+                    }
+                } catch {}
+                this.setMode('cancelLinearMotion', true);
+            }
+
+            // Sample during the window
+            const end = start + durationMs;
+            await new Promise<void>((resolve) => {
+                const tick = () => {
+                    sample();
+                    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                    if (now >= end) return resolve();
+                    (typeof requestAnimationFrame !== 'undefined') ? requestAnimationFrame(tick) : setTimeout(tick, 16);
+                };
+                tick();
+            });
+
+            // Fit tau and set conservative gains
+            const tau = this.fitTau(samples);
+            if (type === 'attitude') {
+                const kp = this.clamp(0.15 / tau, 0.05, 0.6);
+                const kd = this.clamp(0.08 * tau, 0.02, 0.25);
+                const ki = 0.0;
+                this.orientationPidController.setGain('Kp', kp);
+                this.orientationPidController.setGain('Kd', kd);
+                this.orientationPidController.setGain('Ki', ki);
+            } else if (type === 'rotCancel') {
+                const kp = this.clamp(0.35 / tau, 0.05, 1.2);
+                const kd = this.clamp(0.12 * tau, 0.02, 0.35);
+                const ki = 0.0;
+                this.rotationCancelPidController?.setGain('Kp', kp);
+                this.rotationCancelPidController?.setGain('Kd', kd);
+                this.rotationCancelPidController?.setGain('Ki', ki);
+            } else if (type === 'position') {
+                const kp = this.clamp(0.8 / tau, 0.05, 4.0);
+                const kd = this.clamp(0.35 * tau, 0.02, 2.5);
+                const ki = 0.0005; // gentle integral
+                this.linearPidController.setGain('Kp', kp);
+                this.linearPidController.setGain('Kd', kd);
+                this.linearPidController.setGain('Ki', ki);
+            } else if (type === 'linMomentum') {
+                const kp = this.clamp(1.1 / tau, 0.3, 6.0);
+                const kd = this.clamp(0.22 * tau, 0.02, 2.0);
+                const ki = 0.0;
+                this.momentumPidController.setGain('Kp', kp);
+                this.momentumPidController.setGain('Kd', kd);
+                this.momentumPidController.setGain('Ki', ki);
+            }
+            // Push to worker
+            this.syncPidGainsToWorker();
+        } finally {
+            // Restore previous autopilot config
+            this.setMode('goToPosition', !!prevModes.goToPosition);
+            this.setMode('orientationMatch', !!prevModes.orientationMatch);
+            this.setMode('cancelLinearMotion', !!prevModes.cancelLinearMotion);
+            this.setMode('cancelRotation', !!prevModes.cancelRotation);
+            this.setMode('pointToPosition', !!prevModes.pointToPosition);
+            if (prevRef) this.setReferenceObject(prevRef); else this.setReferenceObject(null);
+            if (!prevEnabled) this.setEnabled(false);
+        }
+    }
+
+    // Push current PID gains to worker (if running)
+    public syncPidGainsToWorker(): void {
+        if (!(this.useWorker && this.worker && this.workerReady)) return;
+        try {
+            const gains = {
+                orientation: {
+                    kp: this.orientationPidController.getGain('Kp'),
+                    ki: this.orientationPidController.getGain('Ki'),
+                    kd: this.orientationPidController.getGain('Kd'),
+                },
+                rotationCancel: {
+                    kp: this.rotationCancelPidController.getGain('Kp'),
+                    ki: this.rotationCancelPidController.getGain('Ki'),
+                    kd: this.rotationCancelPidController.getGain('Kd'),
+                },
+                position: {
+                    kp: this.linearPidController.getGain('Kp'),
+                    ki: this.linearPidController.getGain('Ki'),
+                    kd: this.linearPidController.getGain('Kd'),
+                },
+                momentum: {
+                    kp: this.momentumPidController.getGain('Kp'),
+                    ki: this.momentumPidController.getGain('Ki'),
+                    kd: this.momentumPidController.getGain('Kd'),
+                }
+            };
+            this.worker!.postMessage({ type: 'setGains', gains });
+        } catch {}
+    }
+
+    // Worker calibration is no longer used; tuning happens via PID window-triggered autoTune
+
+    public setThrusterStrengths(max: number[]): void {
+        const arr = (Array.isArray(max) && max.length === 24) ? max.slice(0, 24) : new Array(24).fill(this.thrust);
+        this.thrusterMax = arr;
+        // Update all mode instances
+        this.cancelRotationMode?.setThrusterMax(arr);
+        this.cancelLinearMotionMode?.setThrusterMax(arr);
+        this.pointToPositionMode?.setThrusterMax(arr);
+        this.orientationMatchMode?.setThrusterMax(arr);
+        this.goToPositionMode?.setThrusterMax(arr);
+        // Inform worker
+        if (this.useWorker && this.worker && this.workerReady) {
+            try { this.worker.postMessage({ type: 'setThrusterStrengths', strengths: arr }); } catch {}
+        }
     }
 
     // Sets a moving reference for translation modes (relative motion)
@@ -258,7 +492,8 @@ export class Autopilot {
             mass: this.spacecraft.getMass(),
             dims: [dims.x, dims.y, dims.z] as [number, number, number],
             thrusterConfigs: thrusters,
-            autoCalibrate: true,
+            thrusterStrengths: this.thrusterMax,
+            autoCalibrate: false,
         });
 
         // Randomize update phase to avoid spikes when many autopilots run
@@ -445,18 +680,6 @@ export class Autopilot {
                     if (m !== mode) this.activeAutopilots[m as keyof AutopilotModes] = false;
                 });
             }
-
-            // Auto-tune relevant controllers when enabling a mode
-            if (this.autoTuneEnabled) {
-                if (rotationModes.includes(mode)) {
-                    this.orientationPidController.autoCalibrate().catch(() => {});
-                }
-                if (translationModes.includes(mode)) {
-                    // Both linear position and momentum controllers are used across translation modes
-                    this.linearPidController.autoCalibrate().catch(() => {});
-                    this.momentumPidController.autoCalibrate().catch(() => {});
-                }
-            }
         }
 
         this.activeAutopilots[mode] = enabled;
@@ -534,6 +757,10 @@ export class Autopilot {
         return this.orientationPidController;
     }
 
+    public getRotationCancelPidController(): PIDController {
+        return this.rotationCancelPidController;
+    }
+
     public getLinearPidController(): PIDController {
         return this.linearPidController;
     }
@@ -542,9 +769,7 @@ export class Autopilot {
         return this.momentumPidController;
     }
 
-    public setAutoTune(enabled: boolean): void {
-        this.autoTuneEnabled = enabled;
-    }
+    public setAutoTune(_enabled: boolean): void { /* deprecated */ }
 
     public setUpdateRateHz(hz: number): void {
         const clamped = Math.max(5, Math.min(120, hz));

@@ -11,6 +11,7 @@ interface RangeInputProps {
   defaultValue?: number | null;
   step?: number | null;
   className?: string;
+  showValueDisplay?: boolean;
 }
 
 export const RangeInput: React.FC<RangeInputProps> = ({ 
@@ -22,7 +23,8 @@ export const RangeInput: React.FC<RangeInputProps> = ({
   unit = "", 
   defaultValue = null,
   step = null,
-  className = ""
+  className = "",
+  showValueDisplay = true
 }) => {
   const displayValue: number | null = value ?? defaultValue;
   
@@ -40,10 +42,12 @@ export const RangeInput: React.FC<RangeInputProps> = ({
         onChange={onChange}
         className="w-full h-1 bg-white/20 rounded-full appearance-none cursor-pointer"
       />
-      <ValueDisplay 
-        label="Current" 
-        value={displayValue !== null ? displayValue.toFixed(1) : ''} 
-      />
+      {showValueDisplay && (
+        <ValueDisplay 
+          label="Current" 
+          value={displayValue !== null ? displayValue.toFixed(1) : ''} 
+        />
+      )}
     </div>
   );
-}; 
+};

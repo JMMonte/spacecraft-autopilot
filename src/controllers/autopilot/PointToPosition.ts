@@ -24,10 +24,13 @@ export class PointToPosition extends AutopilotMode {
         thrusterGroups: any,
         thrust: number,
         pidController: PIDController,
-        targetPosition: THREE.Vector3
+        targetPosition: THREE.Vector3,
+        thrusterMax?: number[]
     ) {
-        super(spacecraft, config, thrusterGroups, thrust, pidController);
+        super(spacecraft, config, thrusterGroups, thrust, pidController, thrusterMax);
         this.targetPosition = targetPosition;
+        // Crisper rotation when pointing to a position
+        this.rotSmoothAlpha = 0.25;
     }
 
     setTargetPosition(position: THREE.Vector3): void {
@@ -83,7 +86,7 @@ export class PointToPosition extends AutopilotMode {
         const dyn = this.getDynamicAngularAccelCap();
         const alphaMax = Math.max(1e-3, dyn.alphaMax);
         const omegaMax = Math.max(1e-3, dyn.omegaMax);
-        const kW = 2.0; // rad/s per rad near-linear region
+        const kW = 1.2; // rad/s per rad near-linear region (reduce overshoot)
         const wDesMag = withinDeadband ? 0 : Math.min(omegaMax, Math.sqrt(2 * alphaMax * angle), kW * angle);
 
         // Work in angular momentum domain along the axis to create accelerate-then-brake profile

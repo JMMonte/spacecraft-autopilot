@@ -78,6 +78,14 @@ export class SpacecraftModel {
         this.dockingPortManager?.setDockingLightEnabled(id, enabled);
     }
 
+    public getDockingLightParams(): { intensity: number; angle: number; distance: number; decay: number; penumbra: number } | null {
+        return this.dockingPortManager?.getDockingLightParams?.() ?? null;
+    }
+
+    public setDockingLightParams(params: Partial<{ intensity: number; angle: number; distance: number; decay: number; penumbra: number }>): void {
+        this.dockingPortManager?.setDockingLightParams?.(params);
+    }
+
     constructor(
         scene: THREE.Scene,
         _world: unknown,

@@ -299,19 +299,35 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
             {/* Autopilot Buttons */}
             <div className="space-y-0.5">
                 <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Commands</h3>
-                {autopilotButtons.map(({ key, label, description }) => (
-                    <button
-                        key={key}
-                        className={`w-full px-1 py-0.5 bg-black/60 hover:bg-white/20 text-white/90 
-                                  text-[10px] border border-white/20 font-mono disabled:opacity-50
-                                  ${apState.activeAutopilots?.[key]
-                                ? 'bg-cyan-300/20 border-cyan-300/40 text-white' : ''}`}
-                        onClick={() => autopilot?.[key]?.()}
-                        title={description}
-                    >
-                        {label}
-                    </button>
-                ))}
+                {autopilotButtons.map(({ key, label, description }) => {
+                    const isActive = !!apState.activeAutopilots?.[key];
+                    const base = 'w-full px-1 py-0.5 text-[10px] font-mono border disabled:opacity-50 transition-colors relative';
+                    const inactive = 'bg-black/60 text-white/80 border-white/20 hover:bg-white/20';
+                    const active = 'bg-cyan-500/15 text-white border-cyan-300/60 hover:bg-cyan-500/25 ring-1 ring-cyan-400/40 pl-1.5 border-l-4 border-l-cyan-400';
+                    return (
+                        <button
+                            key={key}
+                            className={[base, isActive ? active : inactive].join(' ')}
+                            onClick={() => autopilot?.[key]?.()}
+                            title={description}
+                        >
+                            <span className="flex items-center justify-between w-full">
+                                <span className="flex items-center gap-1">
+                                    {isActive && (
+                                        <span
+                                            aria-hidden
+                                            className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-300 shadow-[0_0_6px_rgba(34,211,238,0.9)]"
+                                        />
+                                    )}
+                                    {label}
+                                </span>
+                                {isActive && (
+                                    <span className="text-[9px] text-cyan-300/90 tracking-wide">ACTIVE</span>
+                                )}
+                            </span>
+                        </button>
+                    );
+                })}
             </div>
 
             {/* Target Selection */}
@@ -431,6 +447,8 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                         <div>d_stop: {apTelemetry.goto.dStop?.toFixed?.(2)} m</div>
                         <div>align: {apTelemetry.goto.alignAngleDeg?.toFixed?.(1)}° gate: {String(apTelemetry.goto.alignGate)}</div>
                         <div>a_max: {apTelemetry.goto.aMax?.toFixed?.(2)} v_max: {apTelemetry.goto.vMax?.toFixed?.(2)}</div>
+                        <div>t_go: {apTelemetry.goto.tGo?.toFixed?.(2)} s</div>
+                        <div>pred. miss: {apTelemetry.goto.missMag?.toFixed?.(3)} m</div>
                     </div>
                 )}
             </div>

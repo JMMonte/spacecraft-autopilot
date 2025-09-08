@@ -39,7 +39,7 @@
                 "name": "Romulus",
                 "diameter": 58,
                 "semiMajorAxis": 1356,
-                "period": 315360,
+                "eccentricity": 0.12,
                 "meanAnomalyDeg": 0,
                 "model": "1a"
             },
@@ -47,7 +47,7 @@
                 "name": "Remus",
                 "diameter": 27,
                 "semiMajorAxis": 2706,
-                "period": 119232,
+                "eccentricity": 0.18,
                 "meanAnomalyDeg": 180,
                 "model": "1e"
             }

@@ -13,7 +13,7 @@ import { AsteroidModel, AsteroidModelId } from '../objects/AsteroidModel';
 import { AsteroidSystem, AsteroidSystemConfig } from '../objects/AsteroidSystem';
 import { createLogger } from '../utils/logger';
 import { InfiniteGrid } from '../scenes/objects/InfiniteGrid';
-import { store } from '../state/store';
+import { store, toggleCameraMode } from '../state/store';
 
 interface WorldConfig {
     debug?: boolean;
@@ -31,6 +31,7 @@ interface WorldConfig {
         depth: number;
         initialConeVisibility: boolean;
         name: string;
+        thrusterStrengths?: number[]; // optional 24-entry per-thruster max (N)
     }>;
     initialFocus?: number;
 }
@@ -182,6 +183,30 @@ export class BasicWorld {
             this.log.debug('Stats overlay attached');
         }
 
+        // Initialize UI-driven camera/grid state and subscribe to changes
+        try {
+            const ui = store.getState().ui ?? { gridVisible: true, cameraMode: 'follow' } as any;
+            this.camera.setCameraMode(ui.cameraMode ?? 'follow');
+            (this as any)._prevCamMode = ui.cameraMode ?? 'follow';
+            const unsubUi = store.subscribe(() => {
+                const uiNow = store.getState().ui ?? {} as any;
+                const prevMode = (this as any)._prevCamMode;
+                if (this.camera && uiNow.cameraMode) {
+                    // On transition to follow, snap target to active spacecraft without jumping
+                    if (uiNow.cameraMode === 'follow' && prevMode !== 'follow') {
+                        const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.getIsActive());
+                        if (activeSpacecraft) {
+                            this.camera.snapFollowTarget(activeSpacecraft.objects.box.position);
+                        }
+                    }
+                    this.camera.setCameraMode(uiNow.cameraMode);
+                    (this as any)._prevCamMode = uiNow.cameraMode;
+                }
+            });
+            (this as any)._storeUnsubs = (this as any)._storeUnsubs || [];
+            (this as any)._storeUnsubs.push(unsubUi);
+        } catch {}
+
         // Initialize background
         this.backgroundLoader = new BackgroundLoader(this.camera.scene, this.camera.camera, () => {
             this.onLoadProgress(100);
@@ -263,7 +288,7 @@ export class BasicWorld {
                     spacecraftConfig.position.y,
                     spacecraftConfig.position.z
                 );
-                return this.addSpacecraft(
+                const sc = this.addSpacecraft(
                     initialPosition,
                     spacecraftConfig.width,
                     spacecraftConfig.height,
@@ -271,6 +296,11 @@ export class BasicWorld {
                     spacecraftConfig.initialConeVisibility,
                     spacecraftConfig.name
                 );
+                // Apply per-thruster strengths when provided
+                if (Array.isArray(spacecraftConfig.thrusterStrengths) && spacecraftConfig.thrusterStrengths.length === 24) {
+                    try { sc.spacecraftController?.setThrusterStrengths(spacecraftConfig.thrusterStrengths); } catch {}
+                }
+                return sc;
             }));
         } else {
             await this.addSpacecraft(new THREE.Vector3(0, 0, 2));
@@ -446,6 +476,10 @@ export class BasicWorld {
     // Public wrappers so React can forward events without global listeners
     public onKeyDown(event: KeyboardEvent): void {
         this.keysPressed[event.code] = true;
+        // Global hotkeys first
+        if (event.code === 'KeyC') {
+            try { toggleCameraMode(); } catch {}
+        }
         const activeController = this.spacecraftControllers.find(controller => controller.getIsActive());
         if (activeController) {
             activeController.handleKeyDown(event);
@@ -529,10 +563,13 @@ export class BasicWorld {
             // Passive auto-docking: no UI mode required
             this.performPassiveDocking();
 
-            // Update camera to follow active spacecraft
-            const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.getIsActive());
-            if (activeSpacecraft) {
-                this.camera.updateOrbitTarget(activeSpacecraft.objects.box.position);
+            // Update camera to follow active spacecraft when in 'follow' mode
+            const ui = (store.getState().ui ?? { cameraMode: 'follow' }) as any;
+            if (ui.cameraMode !== 'free') {
+                const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.getIsActive());
+                if (activeSpacecraft) {
+                    this.camera.updateOrbitTarget(activeSpacecraft.objects.box.position);
+                }
             }
 
             // Apply latest orbit controls before camera-dependent effects

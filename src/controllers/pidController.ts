@@ -59,7 +59,7 @@ export class PIDController {
         this.derivativeAlpha = alpha;
     }
 
-    public async autoCalibrate(): Promise<void> {
+    public async autoCalibrate(durationMs: number = 1200): Promise<void> {
         this.calibrationData.isCalibrating = true;
         this.calibrationData.samples = [];
         this.calibrationData.startTime = Date.now();
@@ -70,7 +70,7 @@ export class PIDController {
             this.lastError.set(0, 0, 0);
             this.lastDerivative.set(0, 0, 0);
 
-            // Set initial gains based on type
+            // Set baseline gains based on type
             switch (this.calibrationData.type) {
                 case 'linearMomentum':
                     this.kp = 0.5;  // Start conservative
@@ -97,13 +97,12 @@ export class PIDController {
                     break;
             }
 
-            // No long stabilization delay; avoid output gaps
+            // Collect samples for a short window while simulation runs updates
+            await new Promise<void>((resolve) => setTimeout(resolve, Math.max(200, durationMs)));
 
-            this.calibrationData.samples = [];
+            // Future: compute gains from samples here
+        } finally {
             this.calibrationData.isCalibrating = false;
-        } catch (error) {
-            this.calibrationData.isCalibrating = false;
-            throw error;
         }
     }
 
@@ -153,6 +152,10 @@ export class PIDController {
 
         return this.output;
     }
+
+    public isCalibrating(): boolean { return this.calibrationData.isCalibrating; }
+    public getCalibrationSamples(): { error: number; time: number }[] { return this.calibrationData.samples.slice(); }
+    public getCalibrationType(): 'linearMomentum' | 'position' | 'angularMomentum' { return this.calibrationData.type; }
 
     public getGain(key: 'Kp' | 'Ki' | 'Kd'): number {
         switch (key) {

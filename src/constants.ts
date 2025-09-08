@@ -7,15 +7,16 @@ interface Windows {
 }
 
 export const WINDOWS: Windows = {
-  telemetry: { label: 'Telemetry' },
-  horizon: { label: 'Horizon' },
-  dimensions: { label: 'Dimensions' },
-  rcs: { label: 'RCS' },
-  arrows: { label: 'Helpers' },
-  pid: { label: 'PID' },
-  autopilot: { label: 'Autopilot' },
-  spacecraftList: { label: 'Spacecraft' },
-  dockingCameras: { label: 'Dock Cameras' }
+  telemetry: { label: 'Flight Telemetry' },
+  horizon: { label: 'Attitude Indicator' },
+  dimensions: { label: 'Spacecraft Dimensions' },
+  rcs: { label: 'RCS Thrust' },
+  arrows: { label: 'Visualization Aids' },
+  pid: { label: 'PID Tuning' },
+  autopilot: { label: 'Autopilot & Targeting' },
+  spacecraftList: { label: 'Spacecraft Manager' },
+  dockingCameras: { label: 'Dock Cameras & Lights' },
+  settings: { label: 'Display Settings' },
 };
 
 export const INITIAL_WINDOW_STATE: { [key: string]: boolean } = Object.keys(WINDOWS).reduce((acc, key) => {

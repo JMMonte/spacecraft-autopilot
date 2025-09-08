@@ -13,6 +13,12 @@ type AutopilotModes = {
 
 type UiState = {
   gridVisible: boolean;
+  cameraMode: 'follow' | 'free';
+};
+
+type SettingsState = {
+  attitudeSphereTexture: string; // URL path under /images/textures
+  uiTheme: 'a' | 'b' | 'c';
 };
 
 type AppState = {
@@ -21,6 +27,7 @@ type AppState = {
     activeAutopilots: AutopilotModes;
   };
   ui: UiState;
+  settings: SettingsState;
 };
 
 type Listener = () => void;
@@ -40,6 +47,11 @@ let state: AppState = {
   },
   ui: {
     gridVisible: true,
+    cameraMode: 'follow',
+  },
+  settings: {
+    attitudeSphereTexture: '/images/textures/rLHbWVB.png',
+    uiTheme: 'a',
   },
 };
 
@@ -84,10 +96,41 @@ export function setGridVisible(visible: boolean) {
   setUi({ gridVisible: visible });
 }
 
+export function setCameraMode(mode: 'follow' | 'free') {
+  setUi({ cameraMode: mode });
+}
+
+export function toggleCameraMode() {
+  const current = store.getState().ui.cameraMode;
+  setCameraMode(current === 'follow' ? 'free' : 'follow');
+}
+
 export function useUi() {
   return useSyncExternalStore(
     store.subscribe,
     () => store.getState().ui,
     () => store.getState().ui,
   );
+}
+
+// Settings slice helpers
+export function setSettings(partial: Partial<SettingsState>) {
+  const prev = store.getState().settings;
+  store.setState({ settings: { ...prev, ...partial } } as Partial<AppState>);
+}
+
+export function setAttitudeSphereTexture(url: string) {
+  setSettings({ attitudeSphereTexture: url });
+}
+
+export function useSettings() {
+  return useSyncExternalStore(
+    store.subscribe,
+    () => store.getState().settings,
+    () => store.getState().settings,
+  );
+}
+
+export function setUiTheme(theme: 'a' | 'b' | 'c') {
+  setSettings({ uiTheme: theme });
 }
