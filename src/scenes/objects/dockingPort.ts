@@ -66,7 +66,9 @@ export class DockingPortManager {
                 const handle = physics.attachCylinderCollider(rigid, this.dockingPortRadius, this.dockingPortLength, {
                     translation: { x: 0, y: 0, z },
                     rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
-                    isSensor: false,
+                    // Use sensor to avoid heavy contact resolution between port geometry and other colliders.
+                    // Physical coupling is handled by the docking joint.
+                    isSensor: true,
                     friction: 0.6,
                     restitution: 0.1,
                 });

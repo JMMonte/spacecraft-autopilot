@@ -13,6 +13,9 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
+    // Ensure React DOM JSX types are loaded in editors even if TS server
+    // doesn't auto-detect dependency types
+    "types": ["react", "react-dom", "node"],
 
     /* Linting */
     "strict": true,

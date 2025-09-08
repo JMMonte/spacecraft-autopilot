@@ -423,21 +423,34 @@ export class DockingController {
         const targetPortDir = this.targetSpacecraft.getDockingPortWorldDirection(this._targetPortId);
         if (!ourDir || !targetPortDir) return null;
 
-        const zAim = targetPortDir.clone().multiplyScalar(-1).normalize(); // where our port axis must point
+        // Guard against degenerate directions
+        if (ourDir.lengthSq() < 1e-12 || targetPortDir.lengthSq() < 1e-12) return null;
+
+        const zAim = targetPortDir.clone().multiplyScalar(-1);
+        if (zAim.lengthSq() < 1e-12) return null;
+        zAim.normalize(); // where our port axis must point
         const qCurr = this.spacecraft.getWorldOrientation();
 
         // Step 1: rotate our current port axis onto zAim (delta in world space)
-        const qAlign = new THREE.Quaternion().setFromUnitVectors(ourDir.clone().normalize(), zAim);
+        const ourDirN = ourDir.clone();
+        if (ourDirN.lengthSq() < 1e-12) return null;
+        ourDirN.normalize();
+        const qAlign = new THREE.Quaternion().setFromUnitVectors(ourDirN, zAim);
         const qAfter = new THREE.Quaternion().multiplyQuaternions(qAlign, qCurr);
 
         // Step 2: roll about zAim to match target's "up" in the port plane
         const targetUpWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(this.targetSpacecraft.getWorldOrientation());
         const desiredUp = targetUpWorld.clone().sub(zAim.clone().multiplyScalar(targetUpWorld.dot(zAim)));
-        if (desiredUp.lengthSq() < 1e-8) desiredUp.set(0, 1, 0).sub(zAim.clone().multiplyScalar(zAim.y));
-        desiredUp.normalize();
+        if (desiredUp.lengthSq() < 1e-8) {
+            // Fallback: choose an arbitrary up orthogonal to zAim
+            const fallback = Math.abs(zAim.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+            desiredUp.copy(fallback.sub(zAim.clone().multiplyScalar(fallback.dot(zAim))));
+        }
+        if (desiredUp.lengthSq() > 1e-12) desiredUp.normalize();
 
         const ourUpAfter = new THREE.Vector3(0, 1, 0).applyQuaternion(qAfter);
-        const ourUpProj = ourUpAfter.clone().sub(zAim.clone().multiplyScalar(ourUpAfter.dot(zAim))).normalize();
+        const ourUpProj = ourUpAfter.clone().sub(zAim.clone().multiplyScalar(ourUpAfter.dot(zAim)));
+        if (ourUpProj.lengthSq() > 1e-12) ourUpProj.normalize(); else ourUpProj.copy(desiredUp);
 
         const dot = THREE.MathUtils.clamp(ourUpProj.dot(desiredUp), -1, 1);
         let roll = Math.acos(dot);
@@ -607,14 +620,18 @@ export class DockingController {
 
         // Calculate pitch error (rotation around X axis)
         const pitchPlaneNormal = new THREE.Vector3(1, 0, 0);
-        const pitchProjected = ourPortDir.clone().projectOnPlane(pitchPlaneNormal).normalize();
-        const targetPitchProjected = targetPortDir.clone().projectOnPlane(pitchPlaneNormal).normalize();
+        const pitchProjected = ourPortDir.clone().projectOnPlane(pitchPlaneNormal);
+        if (pitchProjected.lengthSq() > 1e-12) pitchProjected.normalize(); else pitchProjected.set(1, 0, 0);
+        const targetPitchProjected = targetPortDir.clone().projectOnPlane(pitchPlaneNormal);
+        if (targetPitchProjected.lengthSq() > 1e-12) targetPitchProjected.normalize(); else targetPitchProjected.set(1, 0, 0);
         const pitchError = Math.acos(Math.min(1, Math.max(-1, pitchProjected.dot(targetPitchProjected))));
 
         // Calculate yaw error (rotation around Y axis)
         const yawPlaneNormal = new THREE.Vector3(0, 1, 0);
-        const yawProjected = ourPortDir.clone().projectOnPlane(yawPlaneNormal).normalize();
-        const targetYawProjected = targetPortDir.clone().projectOnPlane(yawPlaneNormal).normalize();
+        const yawProjected = ourPortDir.clone().projectOnPlane(yawPlaneNormal);
+        if (yawProjected.lengthSq() > 1e-12) yawProjected.normalize(); else yawProjected.set(0, 0, 1);
+        const targetYawProjected = targetPortDir.clone().projectOnPlane(yawPlaneNormal);
+        if (targetYawProjected.lengthSq() > 1e-12) targetYawProjected.normalize(); else targetYawProjected.set(0, 0, 1);
         const yawError = Math.acos(Math.min(1, Math.max(-1, yawProjected.dot(targetYawProjected))));
 
         // Calculate roll error using each craft's local "up" projected onto the port plane
@@ -650,7 +667,8 @@ export class DockingController {
         const relativeVel = this.getRelativeVelocity();
         if (!relativeVel) return null;
 
-        const rangeVector = new THREE.Vector3().subVectors(targetPortPos, ourPortPos).normalize();
+        const rangeVector = new THREE.Vector3().subVectors(targetPortPos, ourPortPos);
+        if (rangeVector.lengthSq() > 1e-12) rangeVector.normalize(); else return 0;
         return relativeVel.dot(rangeVector);
     }
 
