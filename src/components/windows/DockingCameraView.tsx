@@ -98,6 +98,15 @@ export const DockingCameraView: React.FC<DockingCameraViewProps> = ({ world, spa
   return (
     <div ref={containerRef} className="relative w-full h-full bg-black/50 rounded overflow-hidden border border-white/10">
       <canvas ref={canvasRef} className="w-full h-full block" />
+      {/* Crosshair overlay */}
+      <div className="pointer-events-none absolute inset-0">
+        {/* Horizontal line */}
+        <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-px bg-white/50" />
+        {/* Vertical line */}
+        <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-px bg-white/50" />
+        {/* Center dot */}
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-white/80 shadow-[0_0_6px_rgba(255,255,255,0.8)]" />
+      </div>
       <div className="absolute top-1 left-1 right-1 pointer-events-none">
         <div className="flex items-end gap-1 bg-black/40 backdrop-blur px-1 py-1 rounded border border-white/10 w-auto pointer-events-auto">
           <div className="flex-1 min-w-[120px]">

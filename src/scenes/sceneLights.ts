@@ -44,7 +44,7 @@ export class SceneLights {
         const shadowSize = this.shadowDistance;
 
         // Sun light (directional with lens flare)
-        this.sunLight = new THREE.DirectionalLight(0xffffff, 3.0);
+        this.sunLight = new THREE.DirectionalLight(0xffffff, 10.0);
         this.sunLight.position.copy(direction.clone().multiplyScalar(SUN_DISTANCE));
 
         // Balanced shadow settings
