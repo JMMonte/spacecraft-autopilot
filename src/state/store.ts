@@ -11,11 +11,16 @@ type AutopilotModes = {
   goToPosition: boolean;
 };
 
+type UiState = {
+  gridVisible: boolean;
+};
+
 type AppState = {
   autopilot: {
     enabled: boolean;
     activeAutopilots: AutopilotModes;
   };
+  ui: UiState;
 };
 
 type Listener = () => void;
@@ -32,6 +37,9 @@ let state: AppState = {
   autopilot: {
     enabled: false,
     activeAutopilots: { ...defaultAutopilot },
+  },
+  ui: {
+    gridVisible: true,
   },
 };
 
@@ -66,3 +74,20 @@ export function useAutopilot() {
   );
 }
 
+// UI slice helpers
+export function setUi(partial: Partial<UiState>) {
+  const prev = store.getState().ui;
+  store.setState({ ui: { ...prev, ...partial } } as Partial<AppState>);
+}
+
+export function setGridVisible(visible: boolean) {
+  setUi({ gridVisible: visible });
+}
+
+export function useUi() {
+  return useSyncExternalStore(
+    store.subscribe,
+    () => store.getState().ui,
+    () => store.getState().ui,
+  );
+}

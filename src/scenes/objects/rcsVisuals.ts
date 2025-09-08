@@ -88,6 +88,9 @@ class ThrusterMaterials {
             gradientLines, // Height of the texture (number of gradient lines)
             THREE.RGBAFormat
         );
+        // Avoid driver warnings; only valid for 2D textures, but be explicit
+        gradientTexture.flipY = false;
+        gradientTexture.premultiplyAlpha = false;
         gradientTexture.needsUpdate = true;
 
         this.exhaustConeMaterial = new THREE.MeshBasicMaterial({
@@ -168,6 +171,13 @@ export class RCSVisuals {
     }
 
     public applyForce(index: number, magnitude: number, dt: number = 0): void {
+        // Sanitize inputs and handle zero/invalid magnitudes by turning visuals off
+        if (!Number.isFinite(magnitude) || magnitude <= 0 || !this.cones[index]) {
+            if (this.coneMeshes[index]) this.coneMeshes[index].visible = false;
+            const light = this.thrusterLights[index];
+            if (light) light.visible = false;
+            return;
+        }
         if (this.cones[index]) {
             // Apply force and update visuals
             this.cones[index].applyForce(magnitude, dt);
@@ -431,7 +441,7 @@ export class RCSVisuals {
             map: texture,
             color: new THREE.Color(0xffffff),
             transparent: true,
-            opacity: 0.35,
+            opacity: 0.175,
             depthWrite: false,
             blending: THREE.NormalBlending
         });
@@ -447,7 +457,7 @@ export class RCSVisuals {
         if (!sprite) return;
         sprite.position.copy(worldPos);
         sprite.scale.setScalar(size);
-        (sprite.material as THREE.SpriteMaterial).opacity = 0.4;
+        (sprite.material as THREE.SpriteMaterial).opacity = 0.2;
         this.scene.add(sprite);
         this.activeParticles.push({ sprite, velocity: worldVel.clone(), life, maxLife: life, growth });
     }
@@ -520,7 +530,7 @@ export class RCSVisuals {
             p.sprite.position.addScaledVector(p.velocity, dt);
             // Fade and shrink
             const t = 1 - (p.life / p.maxLife);
-            const alpha = 0.35 * Math.pow(1 - t, 1.2); // lower overall opacity
+            const alpha = 0.175 * Math.pow(1 - t, 1.2); // lower overall opacity (halved)
             (p.sprite.material as THREE.SpriteMaterial).opacity = Math.max(0, Math.min(alpha, 1));
             const scale = Math.min(0.6, p.sprite.scale.x * (1 + p.growth * dt));
             p.sprite.scale.setScalar(scale);

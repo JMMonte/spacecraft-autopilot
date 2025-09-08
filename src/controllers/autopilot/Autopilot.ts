@@ -30,7 +30,19 @@ export class Autopilot {
     public targetOrientation: THREE.Quaternion;
     private targetObject: Spacecraft | null = null;
     private targetPoint: THREE.Vector3 = new THREE.Vector3();
+    private referenceObject: Spacecraft | null = null;
     private autoTuneEnabled: boolean = false;
+    private useWorker: boolean = true;
+    private worker?: Worker;
+    private workerReady: boolean = false;
+    // Output buffer and scheduling
+    private forcesBuffer: number[] = new Array(24).fill(0);
+    private updateInterval: number = 1 / 30; // run autopilot at 30 Hz to reduce load
+    private timeSinceUpdate: number = 0;
+    // Scratch objects to avoid per-frame allocations
+    private scratchDir = new THREE.Vector3();
+    private scratchForward = new THREE.Vector3();
+    private scratchQuat = new THREE.Quaternion();
 
     // Mode instances
     private cancelRotationMode!: CancelRotation;
@@ -60,6 +72,7 @@ export class Autopilot {
             maxAngularMomentum?: number;
             maxLinearMomentum?: number;
             autoTune?: boolean;
+            useWorker?: boolean;
         } = {}
     ) {
         this.spacecraft = spacecraft;
@@ -67,7 +80,8 @@ export class Autopilot {
         this.thrust = thrust;
         this.targetPosition = new THREE.Vector3();
         this.targetOrientation = new THREE.Quaternion();
-        this.autoTuneEnabled = options.autoTune ?? false;
+        this.autoTuneEnabled = options.autoTune ?? true;
+        this.useWorker = options.useWorker ?? true;
 
         // Initialize config with default values
         const defaultPidGains = {
@@ -135,8 +149,9 @@ export class Autopilot {
             goToPosition: false
         };
 
-        // Initialize modes
+        // Initialize modes (for local path)
         this.initializeModes();
+        // Defer worker creation until a mode is enabled to avoid idle workers
     }
 
     private initializeModes(): void {
@@ -184,6 +199,64 @@ export class Autopilot {
         );
     }
 
+    // Sets a moving reference for translation modes (relative motion)
+    public setReferenceObject(obj: Spacecraft | null): void {
+        this.referenceObject = obj;
+        if (obj) {
+            const refVel = obj.getWorldVelocity();
+            this.cancelLinearMotionMode.setReferenceVelocityWorld(refVel);
+            this.goToPositionMode.setReferenceVelocityWorld(refVel);
+        } else {
+            this.cancelLinearMotionMode.setReferenceVelocityWorld(null);
+            this.goToPositionMode.setReferenceVelocityWorld(null);
+        }
+    }
+
+    private initWorker(): void {
+        try {
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore: Vite worker URL
+            this.worker = new Worker(new URL('../../workers/autopilot.worker.ts', import.meta.url), { type: 'module' });
+        } catch (err) {
+            this.log.warn('Failed to create autopilot worker; falling back to main thread.', err);
+            this.useWorker = false;
+            return;
+        }
+
+        const dims = this.spacecraft.getMainBodyDimensions();
+        const thrusters = (this.spacecraft.getThrusterConfigs?.() || []).map((t: any) => ({
+            position: [t.position.x, t.position.y, t.position.z] as [number, number, number],
+            direction: [t.direction.x, t.direction.y, t.direction.z] as [number, number, number],
+        }));
+
+        this.worker.onmessage = (ev: MessageEvent<any>) => {
+            const data = ev.data;
+            if (data?.type === 'ready') {
+                this.workerReady = true;
+                return;
+            }
+            if (data?.type === 'forces' && data.forces) {
+                const arr: Float32Array = data.forces;
+                for (let i = 0; i < 24; i++) this.forcesBuffer[i] = arr[i] || 0;
+                return;
+            }
+        };
+
+        this.worker.postMessage({
+            type: 'init',
+            thrusterGroups: this.thrusterGroups,
+            thrust: this.thrust,
+            config: this.config,
+            mass: this.spacecraft.getMass(),
+            dims: [dims.x, dims.y, dims.z] as [number, number, number],
+            thrusterConfigs: thrusters,
+            autoCalibrate: true,
+        });
+
+        // Randomize update phase to avoid spikes when many autopilots run
+        this.timeSinceUpdate = Math.random() * this.updateInterval;
+    }
+
     public getTargetObject(): Spacecraft | null {
         return this.targetObject;
     }
@@ -215,6 +288,8 @@ export class Autopilot {
                 default:
                     this.targetPoint.set(0, 0, 0);
             }
+            // Default the moving reference to the selected target
+            this.setReferenceObject(target);
         }
     }
 
@@ -256,47 +331,93 @@ export class Autopilot {
     }
 
     public calculateAutopilotForces(dt: number): number[] {
-        if (!this.isEnabled) {
-            return Array(24).fill(0);
+        // Fast exit if globally disabled or no active modes
+        const anyModeActive = this.activeAutopilots.orientationMatch || this.activeAutopilots.cancelRotation || this.activeAutopilots.cancelLinearMotion || this.activeAutopilots.pointToPosition || this.activeAutopilots.goToPosition;
+        if (!this.isEnabled || !anyModeActive) {
+            // keep buffer but zero it to avoid stale forces
+            this.forcesBuffer.fill(0);
+            return this.forcesBuffer;
         }
 
-        let forces = Array(24).fill(0);
+        // Continuously track target object's latest pose if present
+        if (this.targetObject) {
+            // Refresh target position/orientation every cycle
+            // Use docking port world position when targetPoint indicates one; otherwise center
+            const useFront = this.targetPoint.z === 1;
+            const useBack = this.targetPoint.z === -1;
+            if (useFront) {
+                const p = this.targetObject.getDockingPortWorldPosition('front');
+                if (p) this.targetPosition.copy(p);
+            } else if (useBack) {
+                const p = this.targetObject.getDockingPortWorldPosition('back');
+                if (p) this.targetPosition.copy(p);
+            } else {
+                this.targetPosition.copy(this.targetObject.objects.box.position);
+            }
+            this.targetOrientation.copy(this.targetObject.objects.box.quaternion);
+        }
 
-        // Publish live target orientation when pointing to a position (for UI arrows)
+        // Keep relative motion reference in sync as well
+        if (this.referenceObject) {
+            const refVel = this.referenceObject.getWorldVelocity();
+            this.cancelLinearMotionMode.setReferenceVelocityWorld(refVel);
+            this.goToPositionMode.setReferenceVelocityWorld(refVel);
+        } else {
+            this.cancelLinearMotionMode.setReferenceVelocityWorld(null);
+            this.goToPositionMode.setReferenceVelocityWorld(null);
+        }
+
+        // Publish/update live target orientation when pointing to a position (for UI arrows)
         if (this.activeAutopilots.pointToPosition) {
-            const q = this.spacecraft.getWorldOrientation();
-            const pos = this.spacecraft.getWorldPosition();
-            const dirWorld = this.targetPosition.clone().sub(pos);
-            if (dirWorld.lengthSq() > 1e-10) {
-                dirWorld.normalize();
-                const forwardWorld = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
-                const delta = new THREE.Quaternion().setFromUnitVectors(forwardWorld, dirWorld);
-                const qTargetWorld = delta.multiply(q);
-                this.setTargetOrientation(qTargetWorld);
+            const q = this.spacecraft.getWorldOrientationRef();
+            const pos = this.spacecraft.getWorldPositionRef();
+            this.scratchDir.copy(this.targetPosition).sub(pos);
+            if (this.scratchDir.lengthSq() > 1e-10) {
+                this.scratchDir.normalize();
+                this.scratchForward.set(0, 0, 1).applyQuaternion(q);
+                this.scratchQuat.setFromUnitVectors(this.scratchForward, this.scratchDir);
+                this.scratchQuat.multiply(q); // qTargetWorld = delta * q
+                this.setTargetOrientation(this.scratchQuat);
             }
         }
 
-        if (this.activeAutopilots.cancelRotation) {
-            forces = this.mergeForces(forces, this.cancelRotationMode.calculateForces(dt));
-        }
-        if (this.activeAutopilots.cancelLinearMotion) {
-            forces = this.mergeForces(forces, this.cancelLinearMotionMode.calculateForces(dt));
-        }
-        if (this.activeAutopilots.pointToPosition) {
-            forces = this.mergeForces(forces, this.pointToPositionMode.calculateForces(dt));
-        }
-        if (this.activeAutopilots.orientationMatch) {
-            forces = this.mergeForces(forces, this.orientationMatchMode.calculateForces(dt));
-        }
-        if (this.activeAutopilots.goToPosition) {
-            forces = this.mergeForces(forces, this.goToPositionMode.calculateForces(dt));
+        if (this.useWorker && this.worker && this.workerReady) {
+            // Worker path: throttle sends; hold last forces between updates
+            this.timeSinceUpdate += dt;
+            if (this.timeSinceUpdate >= this.updateInterval) {
+                this.timeSinceUpdate = 0;
+                const p = this.spacecraft.getWorldPositionRef();
+                const q = this.spacecraft.getWorldOrientationRef();
+                const lv = this.spacecraft.getWorldVelocityRef();
+                const av = this.spacecraft.getWorldAngularVelocityRef();
+                const active = { ...this.activeAutopilots };
+                const refVel = this.referenceObject ? this.referenceObject.getWorldVelocityRef() : this.scratchDir.set(0, 0, 0);
+                this.worker.postMessage({
+                    type: 'update',
+                    dt,
+                    snapshot: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], lv: [lv.x, lv.y, lv.z], av: [av.x, av.y, av.z] },
+                    active,
+                    targetPos: [this.targetPosition.x, this.targetPosition.y, this.targetPosition.z],
+                    targetQuat: [this.targetOrientation.x, this.targetOrientation.y, this.targetOrientation.z, this.targetOrientation.w],
+                    refVel: [refVel.x, refVel.y, refVel.z],
+                });
+            }
+            return this.forcesBuffer;
         }
 
-        return forces;
-    }
-
-    private mergeForces(a: number[], b: number[]): number[] {
-        return a.map((val, i) => val + b[i]);
+        // Local compute path with throttling
+        this.timeSinceUpdate += dt;
+        if (this.timeSinceUpdate < this.updateInterval) {
+            return this.forcesBuffer;
+        }
+        this.timeSinceUpdate = 0;
+        for (let i = 0; i < 24; i++) this.forcesBuffer[i] = 0;
+        if (this.activeAutopilots.cancelRotation) this.cancelRotationMode.calculateForces(dt, this.forcesBuffer);
+        if (this.activeAutopilots.cancelLinearMotion) this.cancelLinearMotionMode.calculateForces(dt, this.forcesBuffer);
+        if (this.activeAutopilots.pointToPosition) this.pointToPositionMode.calculateForces(dt, this.forcesBuffer);
+        if (this.activeAutopilots.orientationMatch) this.orientationMatchMode.calculateForces(dt, this.forcesBuffer);
+        if (this.activeAutopilots.goToPosition) this.goToPositionMode.calculateForces(dt, this.forcesBuffer);
+        return this.forcesBuffer;
     }
 
     public setMode(mode: keyof AutopilotModes, enabled: boolean = true): void {
@@ -352,6 +473,17 @@ export class Autopilot {
             this.log.warn('Autopilot store update error:', err);
         }
         // Legacy DOM event removed; React store handles subscriptions
+
+        // Manage worker lifecycle lazily
+        if (this.useWorker) {
+            if (this.isEnabled && !this.worker) {
+                this.initWorker();
+            } else if (!this.isEnabled && this.worker) {
+                try { this.worker.terminate(); } catch {}
+                this.worker = undefined;
+                this.workerReady = false;
+            }
+        }
     }
 
     public getTargetOrientation(): THREE.Quaternion {
@@ -373,6 +505,13 @@ export class Autopilot {
             goToPosition: false
         };
         
+        // Terminate worker if running to avoid leaks on React StrictMode remounts
+        if (this.worker) {
+            try { this.worker.terminate(); } catch {}
+            this.worker = undefined;
+            this.workerReady = false;
+        }
+
         // Clear references
         this.targetPosition.set(0, 0, 0);
         this.targetOrientation.set(0, 0, 0, 1);
@@ -399,6 +538,11 @@ export class Autopilot {
         this.autoTuneEnabled = enabled;
     }
 
+    public setUpdateRateHz(hz: number): void {
+        const clamped = Math.max(5, Math.min(120, hz));
+        this.updateInterval = 1 / clamped;
+    }
+
     public setTargetPosition(position: THREE.Vector3): void {
         this.targetPosition.copy(position);
         // Clear any target object when setting a direct position
@@ -411,6 +555,7 @@ export class Autopilot {
         this.targetPosition.set(0, 0, 0);
         this.targetOrientation.set(0, 0, 0, 1);
         this.targetPoint.set(0, 0, 0);
+        this.setReferenceObject(null);
     }
 
     public resetAllModes(): void {

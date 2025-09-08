@@ -32,9 +32,11 @@ export class Spacecraft {
     public dockingController: DockingController;
     public showVelocityArrow: boolean;
     public showAngularVelocityArrow: boolean;
+    public showTraceLines: boolean;
     public dockingPorts: DockingPorts;
     public name: string;
     public uuid: string;
+    public dockingLights: { front: boolean; back: boolean } = { front: false, back: false };
     private debugObjects: THREE.Object3D[] = [];
     private physics?: import('../physics').PhysicsEngine;
     private dockingHandle?: unknown;
@@ -96,6 +98,8 @@ export class Spacecraft {
         // Initialize helper arrow visibility
         this.showVelocityArrow = false;
         this.showAngularVelocityArrow = false;
+        this.showTraceLines = false;
+        this.dockingLights = { front: false, back: false };
 
         // Initialize docking ports
         this.dockingPorts = {
@@ -124,6 +128,10 @@ export class Spacecraft {
     public update(): void {
         this.objects.update();
         this.dockingController.update();
+        // Update trace line regardless of autopilot state
+        if (this.helpers) {
+            this.helpers.updateTrace(this.getWorldPosition(), this.getWorldVelocity());
+        }
     }
 
     public cleanup(): void {
@@ -144,6 +152,14 @@ export class Spacecraft {
     }
 
     /**
+     * Zero-allocation reference accessors for hot paths (autopilots, rendering).
+     * Callers MUST treat the returned objects as read-only snapshots for the frame.
+     */
+    public getWorldPositionRef(): THREE.Vector3 {
+        return this.objects.box.position;
+    }
+
+    /**
      * Get all Three.js objects that can be clicked to select this spacecraft
      */
     public getThreeObjects(): THREE.Object3D[] {
@@ -151,28 +167,24 @@ export class Spacecraft {
     }
 
     /**
-     * Get the world position of a docking port
+     * Get the world position of a docking port center (at the base of the port cylinder).
+     * Uses forward axis with proper offset so it stays consistent with visual geometry.
      */
     public getDockingPortWorldPosition(portId: keyof DockingPorts): THREE.Vector3 | null {
-        const port = this.dockingPorts[portId];
-        if (!port) return null;
-
-        const worldPos = port.position.clone();
-        worldPos.applyQuaternion(this.getWorldOrientation());
-        worldPos.add(this.getWorldPosition());
-        return worldPos;
+        const dir = this.getDockingPortWorldDirection(portId);
+        if (!dir) return null;
+        const offset = this.getPortOffset(portId);
+        return this.getWorldPosition().clone().add(dir.multiplyScalar(offset));
     }
 
     /**
-     * Get the world direction of a docking port
+     * Get the world direction of a docking port axis.
+     * Front port is +Z in local space, back port is -Z.
      */
     public getDockingPortWorldDirection(portId: keyof DockingPorts): THREE.Vector3 | null {
-        const port = this.dockingPorts[portId];
-        if (!port) return null;
-
-        const worldDir = port.direction.clone();
-        worldDir.applyQuaternion(this.getWorldOrientation());
-        return worldDir;
+        const q = this.getWorldOrientation();
+        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(q).normalize();
+        return portId === 'front' ? forward : forward.clone().multiplyScalar(-1);
     }
 
     /**
@@ -203,12 +215,24 @@ export class Spacecraft {
         ourPort.dockedTo = { spacecraft: otherSpacecraft, port: theirPortId };
         theirPort.dockedTo = { spacecraft: this, port: ourPortId };
 
-        // Create a physical constraint between the spacecraft
-        // Create a fixed joint via physics engine if available (works with Rapier)
+        // Create a physical constraint between the spacecraft using port-face anchors
+        // Use joint frames positioned at each port face and oriented to lock the relative pose at creation.
         if (this.physics && this.objects.rigid && otherSpacecraft.objects.rigid) {
-            this.dockingHandle = this.physics.createFixedConstraint(this.objects.rigid, otherSpacecraft.objects.rigid);
-            
-            // Zero out relative velocities
+            // Compute local anchor positions at each port face
+            const ourSign = ourPortId === 'front' ? 1 : -1;
+            const theirSign = theirPortId === 'front' ? 1 : -1;
+            const ourFaceDist = (this.objects.boxDepth / 2) + (this.objects.dockingPortDepth || 0.3) + (this.objects.dockingPortLength || 0.1) * 0.5;
+            const theirFaceDist = (otherSpacecraft.objects.boxDepth / 2) + (otherSpacecraft.objects.dockingPortDepth || 0.3) + (otherSpacecraft.objects.dockingPortLength || 0.1) * 0.5;
+            const localA = { x: 0, y: 0, z: ourSign * ourFaceDist };
+            const localB = { x: 0, y: 0, z: theirSign * theirFaceDist };
+
+            // Choose joint frame rotations to preserve current relative orientation (no sudden torque)
+            const qA = this.getWorldOrientation();
+            const qB = otherSpacecraft.getWorldOrientation();
+            const qAinv = new THREE.Quaternion(qA.x, qA.y, qA.z, qA.w).invert();
+            const qBinv = new THREE.Quaternion(qB.x, qB.y, qB.z, qB.w).invert();
+
+            // Soften initial impulses: zero relative velocities first
             const vA = this.objects.rigid.getLinearVelocity();
             const vB = otherSpacecraft.objects.rigid.getLinearVelocity();
             const relV = { x: (vA.x - vB.x) * 0.5, y: (vA.y - vB.y) * 0.5, z: (vA.z - vB.z) * 0.5 };
@@ -220,9 +244,35 @@ export class Spacecraft {
             const relW = { x: (wA.x - wB.x) * 0.5, y: (wA.y - wB.y) * 0.5, z: (wA.z - wB.z) * 0.5 };
             this.objects.rigid.setAngularVelocity({ x: wA.x - relW.x, y: wA.y - relW.y, z: wA.z - relW.z });
             otherSpacecraft.objects.rigid.setAngularVelocity({ x: wB.x + relW.x, y: wB.y + relW.y, z: wB.z + relW.z });
+
+            // Create the joint with frames
+            this.dockingHandle = this.physics.createFixedConstraint(this.objects.rigid, otherSpacecraft.objects.rigid, {
+                frameA: { position: localA, rotation: { x: qAinv.x, y: qAinv.y, z: qAinv.z, w: qAinv.w } },
+                frameB: { position: localB, rotation: { x: qBinv.x, y: qBinv.y, z: qBinv.z, w: qBinv.w } },
+            });
         } else {
             console.warn('Docking: constraints not supported in current physics engine. Visual docking only.');
         }
+
+        // After creating the hard constraint, ensure both crafts' autopilots are quiescent.
+        // This avoids fighting the joint with stale guidance modes or references.
+        try {
+            const apA = this.spacecraftController?.autopilot;
+            const apB = otherSpacecraft.spacecraftController?.autopilot;
+            if (apA) {
+                apA.resetAllModes();
+                apA.setReferenceObject(null);
+                apA.setEnabled(false);
+            }
+            if (apB) {
+                apB.resetAllModes();
+                apB.setReferenceObject(null);
+                apB.setEnabled(false);
+            }
+            // Clear any latched RCS pulses on both controllers
+            this.spacecraftController?.resetThrusterLatch?.();
+            otherSpacecraft.spacecraftController?.resetThrusterLatch?.();
+        } catch {}
 
         return true;
     }
@@ -271,6 +321,23 @@ export class Spacecraft {
                     this.helpers.rotationAxisArrow.visible = visible;
                 }
                 break;
+        }
+    }
+
+    /**
+     * Toggle visibility of trace lines helper
+     */
+    public toggleTraceLines(visible: boolean): void {
+        this.showTraceLines = visible;
+        if (this.helpers) {
+            this.helpers.setTraceVisible(visible);
+        }
+    }
+
+    /** Clear the accumulated trace line points */
+    public clearTraceLines(): void {
+        if (this.helpers) {
+            this.helpers.resetTrace();
         }
     }
 
@@ -334,12 +401,14 @@ export class Spacecraft {
     }
 
     public getPortOffset(portId: keyof DockingPorts): number {
+        // Param kept for API compatibility; not used (direction carries sign)
+        void portId;
+        // Return a positive distance from the spacecraft center to the base of the port.
+        // The port axis direction (front/back) already carries the sign; combining a signed
+        // direction with a signed offset would cancel out and always place both ports on the same side.
         const boxDepth = this.objects.boxDepth;
         const dockingPortDepth = this.objects.dockingPortDepth || 0.3;
-        
-        return portId === 'front' ? 
-            boxDepth / 2 + dockingPortDepth :
-            -boxDepth / 2 - dockingPortDepth;
+        return (boxDepth / 2) + dockingPortDepth;
     }
 
     public getDockingPortCamera(portId: keyof DockingPorts): THREE.PerspectiveCamera | undefined {
@@ -351,9 +420,53 @@ export class Spacecraft {
         return this.objects.getDockingPortCameras();
     }
 
+    /**
+     * Return a list of spacecraft currently docked to any of our ports.
+     */
+    public getDockedSpacecrafts(): Spacecraft[] {
+        const partners: Spacecraft[] = [];
+        (['front', 'back'] as const).forEach((pid) => {
+            const p = this.dockingPorts[pid];
+            if (p?.isOccupied && p.dockedTo?.spacecraft) {
+                partners.push(p.dockedTo.spacecraft);
+            }
+        });
+        // Deduplicate in case multiple ports connect to the same craft
+        const seen = new Set<string>();
+        return partners.filter((s) => {
+            if (seen.has(s.uuid)) return false;
+            seen.add(s.uuid);
+            return true;
+        });
+    }
+
+    /** True when any docking port is occupied. */
+    public isDocked(): boolean {
+        return (this.dockingPorts.front?.isOccupied === true) || (this.dockingPorts.back?.isOccupied === true);
+    }
+
+    public setDockingLights(enabled: boolean): void {
+        this.dockingLights.front = enabled;
+        this.dockingLights.back = enabled;
+        this.objects.setDockingLightsEnabled(enabled);
+    }
+
+    public setDockingLight(portId: 'front' | 'back', enabled: boolean): void {
+        this.dockingLights[portId] = enabled;
+        this.objects.setDockingLightEnabled(portId, enabled);
+    }
+
+    public isDockingLightOn(portId: 'front' | 'back'): boolean {
+        return !!this.dockingLights[portId];
+    }
+
     public getWorldOrientation(): THREE.Quaternion {
         // Read from the rendered transform to avoid querying Rapier during stepping
         return this.objects.box.quaternion.clone();
+    }
+
+    public getWorldOrientationRef(): THREE.Quaternion {
+        return this.objects.box.quaternion;
     }
 
     public getWorldVelocity(): THREE.Vector3 {
@@ -361,9 +474,17 @@ export class Spacecraft {
         return this.objects.boxBody.velocity.clone();
     }
 
+    public getWorldVelocityRef(): THREE.Vector3 {
+        return this.objects.boxBody.velocity;
+    }
+
     public getWorldAngularVelocity(): THREE.Vector3 {
         // Synced in SpacecraftModel.update()
         return this.objects.boxBody.angularVelocity.clone();
+    }
+
+    public getWorldAngularVelocityRef(): THREE.Vector3 {
+        return this.objects.boxBody.angularVelocity;
     }
 
     public visualizeDebugObjects(scene: THREE.Scene): void {

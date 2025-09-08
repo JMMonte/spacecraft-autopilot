@@ -1,8 +1,10 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, ChangeEvent } from 'react';
 import * as THREE from 'three';
 import { BasicWorld } from '../../core/BasicWorld';
 import { Spacecraft } from '../../core/spacecraft';
 import { useElementSize } from '../../hooks/useElementSize';
+import { RangeInput } from '../ui/RangeInput';
+import { NumberInput } from '../ui/NumberInput';
 
 export type PortId = 'front' | 'back';
 
@@ -17,6 +19,7 @@ export const DockingCameraView: React.FC<DockingCameraViewProps> = ({ world, spa
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const { width, height } = useElementSize(containerRef.current);
+  const [fov, setFov] = useState<number>(60);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -53,6 +56,7 @@ export const DockingCameraView: React.FC<DockingCameraViewProps> = ({ world, spa
             renderer.setPixelRatio(dpr);
             renderer.setSize(w, h, false);
           }
+          // Keep camera aspect up to date
           cam.aspect = w / h;
           cam.updateProjectionMatrix();
           renderer.render(scene, cam);
@@ -64,10 +68,60 @@ export const DockingCameraView: React.FC<DockingCameraViewProps> = ({ world, spa
     return () => cancelAnimationFrame(raf);
   }, [world, spacecraft, portId, width, height]);
 
+  // Initialize FOV from the current docking camera when available or when portId/spacecraft changes
+  useEffect(() => {
+    if (!spacecraft) return;
+    const cam = spacecraft.getDockingPortCamera(portId);
+    if (cam) setFov(cam.fov);
+  }, [spacecraft, portId]);
+
+  const applyFov = (nextFov: number) => {
+    setFov(nextFov);
+    const cam = spacecraft?.getDockingPortCamera(portId);
+    if (cam) {
+      cam.fov = nextFov;
+      cam.updateProjectionMatrix();
+    }
+  };
+
+  const onFovSlider = (e: ChangeEvent<HTMLInputElement>) => {
+    const v = Number(e.target.value);
+    applyFov(Math.min(120, Math.max(20, v)));
+  };
+
+  const onFovInput = (e: ChangeEvent<HTMLInputElement>) => {
+    const v = Number(e.target.value);
+    if (!Number.isFinite(v)) return;
+    applyFov(Math.min(120, Math.max(20, v)));
+  };
+
   return (
-    <div ref={containerRef} className="w-full h-full bg-black/50 rounded overflow-hidden border border-white/10">
+    <div ref={containerRef} className="relative w-full h-full bg-black/50 rounded overflow-hidden border border-white/10">
       <canvas ref={canvasRef} className="w-full h-full block" />
+      <div className="absolute top-1 left-1 right-1 pointer-events-none">
+        <div className="flex items-end gap-1 bg-black/40 backdrop-blur px-1 py-1 rounded border border-white/10 w-auto pointer-events-auto">
+          <div className="flex-1 min-w-[120px]">
+            <RangeInput
+              label="FOV"
+              unit="deg"
+              value={fov}
+              onChange={onFovSlider}
+              min={20}
+              max={120}
+              step={1}
+              className="text-[10px]"
+            />
+          </div>
+          <div className="w-16">
+            <NumberInput
+              value={Number.isFinite(fov) ? Number(fov.toFixed(1)) : 60}
+              onChange={onFovInput}
+              step={1}
+              className="text-[10px]"
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
-

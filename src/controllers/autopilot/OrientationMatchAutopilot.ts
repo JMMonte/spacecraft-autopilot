@@ -1,5 +1,5 @@
 import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
-import { Spacecraft } from '../../core/spacecraft';
+import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import * as THREE from 'three';
 
@@ -51,11 +51,11 @@ export class OrientationMatchAutopilot extends AutopilotMode {
         this.reverseAlign = reverse;
     }
 
-    calculateForces(dt: number): number[] {
+    calculateForces(dt: number, out: number[] = Array(24).fill(0)): number[] {
         // Current orientation and angular velocity in world space
-        const q = this.spacecraft.getWorldOrientation();
-        const worldAngularVel = this.spacecraft.getWorldAngularVelocity();
-        const qInv = q.clone().invert();
+        const q = this.spacecraft.getWorldOrientationRef();
+        const worldAngularVel = this.spacecraft.getWorldAngularVelocityRef();
+        const qInv = this.tmpQuatA.copy(q).invert();
 
         // Update target orientation if following a target spacecraft
         if (this.targetSpacecraft) {
@@ -69,18 +69,18 @@ export class OrientationMatchAutopilot extends AutopilotMode {
 
         // Error quaternion expressed in the spacecraft's local frame
         // qErrorLocal = inverse(current) * target
-        const errorQuaternion = qInv.clone().multiply(this.targetOrientation.clone());
+        const errorQuaternion = this.tmpQuatB.copy(qInv).multiply(this.targetOrientation);
 
         // Convert world angular velocity to local space
-        const localAngularVel = worldAngularVel.clone().applyQuaternion(qInv);
+        const localAngularVel = this.tmpVecA.copy(worldAngularVel).applyQuaternion(qInv);
 
         // Extract minimal angle-axis from error quaternion in local frame
         const wClamped = Math.min(1, Math.max(-1, errorQuaternion.w));
         let angle = 2 * Math.acos(wClamped);
         let sinHalf = Math.sqrt(1 - wClamped * wClamped);
         const axis = sinHalf > 1e-6
-            ? new THREE.Vector3(errorQuaternion.x, errorQuaternion.y, errorQuaternion.z).multiplyScalar(1 / sinHalf).normalize()
-            : new THREE.Vector3(0, 0, 0);
+            ? this.tmpVecB.set(errorQuaternion.x, errorQuaternion.y, errorQuaternion.z).multiplyScalar(1 / sinHalf).normalize()
+            : this.tmpVecB.set(0, 0, 0);
         if (angle > Math.PI) { angle = 2 * Math.PI - angle; axis.negate(); }
 
         // Deadband with hysteresis to avoid micro-chatter
@@ -102,10 +102,10 @@ export class OrientationMatchAutopilot extends AutopilotMode {
 
         // Desired angular momentum only along the error axis
         const Ieff = this.getEffectiveInertiaAlongAxis(axis);
-        const desiredL = axis.clone().multiplyScalar(Ieff * wDesMag);
+        const desiredL = this.tmpVecC.copy(axis).multiplyScalar(Ieff * wDesMag);
         const wAlong = localAngularVel.dot(axis);
-        const currentLAlong = axis.clone().multiplyScalar(Ieff * wAlong);
-        let angularMomentumError = desiredL.sub(currentLAlong);
+        const currentLAlong = this.tmpVecD.copy(axis).multiplyScalar(Ieff * wAlong);
+        const angularMomentumError = desiredL.sub(currentLAlong);
         // Clamp by configured max |L|
         const maxL = this.config.limits.maxAngularMomentum;
         if (angularMomentumError.length() > maxL) {
@@ -123,15 +123,12 @@ export class OrientationMatchAutopilot extends AutopilotMode {
             deadband: withinDeadband,
         };
 
-        // Apply PID control in local space
+        // Apply PID control in local space (momentum-domain)
         const pidVector = this.pidController.update(angularMomentumError, dt);
 
-        // Apply additional scaling to overcome inertia
-        const inertiaCompensation = 5.0;
-        pidVector.multiplyScalar(inertiaCompensation);
-
         // Apply directly to thrusters since we're already in local space
-        return this.applyPIDOutputToThrusters(pidVector);
+        this.applyPIDOutputToThrustersInPlace(pidVector, out);
+        return out;
     }
 
     public getTelemetry() {

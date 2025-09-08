@@ -9,8 +9,13 @@ export class PIDController {
     private integral: THREE.Vector3;
     private lastError: THREE.Vector3;
     private lastDerivative: THREE.Vector3;
-    private tempErrorVector: THREE.Vector3;
     private output: THREE.Vector3;
+    // Scratch vectors to avoid per-update allocations
+    private pTerm: THREE.Vector3;
+    private iTerm: THREE.Vector3;
+    private dTerm: THREE.Vector3;
+    private errorDiff: THREE.Vector3;
+    private currentDerivative: THREE.Vector3;
     private calibrationData: {
         samples: { error: number; time: number }[];
         startTime: number;
@@ -32,8 +37,12 @@ export class PIDController {
         this.integral = new THREE.Vector3();
         this.lastError = new THREE.Vector3();
         this.lastDerivative = new THREE.Vector3();
-        this.tempErrorVector = new THREE.Vector3();
         this.output = new THREE.Vector3();
+        this.pTerm = new THREE.Vector3();
+        this.iTerm = new THREE.Vector3();
+        this.dTerm = new THREE.Vector3();
+        this.errorDiff = new THREE.Vector3();
+        this.currentDerivative = new THREE.Vector3();
         this.calibrationData = {
             samples: [],
             startTime: 0,
@@ -56,18 +65,10 @@ export class PIDController {
         this.calibrationData.startTime = Date.now();
 
         try {
-            // Reset gains and accumulators
-            this.integral = new THREE.Vector3();
-            this.lastError = new THREE.Vector3();
-            this.lastDerivative = new THREE.Vector3();
-
-            // Start with zero gains
-            this.kp = 0;
-            this.ki = 0;
-            this.kd = 0;
-
-            // Wait for initial error samples
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Reset accumulators but keep current gains active during calibration
+            this.integral.set(0, 0, 0);
+            this.lastError.set(0, 0, 0);
+            this.lastDerivative.set(0, 0, 0);
 
             // Set initial gains based on type
             switch (this.calibrationData.type) {
@@ -96,8 +97,7 @@ export class PIDController {
                     break;
             }
 
-            // Let the system stabilize with new gains
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // No long stabilization delay; avoid output gaps
 
             this.calibrationData.samples = [];
             this.calibrationData.isCalibrating = false;
@@ -127,34 +127,29 @@ export class PIDController {
             }
         }
 
-        // Store error in temp vector
-        this.tempErrorVector.copy(error);
-
         // Proportional term
-        const p = error.clone().multiplyScalar(this.kp);
+        this.pTerm.copy(error).multiplyScalar(this.kp);
 
         // Integral term
-        this.integral.add(error.clone().multiplyScalar(dt));
+        this.integral.addScaledVector(error, dt);
         if (this.integral.length() > this.maxIntegral) {
             this.integral.normalize();
             this.integral.multiplyScalar(this.maxIntegral);
         }
-        const i = this.integral.clone().multiplyScalar(this.ki);
+        this.iTerm.copy(this.integral).multiplyScalar(this.ki);
 
         // Derivative term (with filtering)
-        const errorDiff = error.clone().sub(this.lastError);
-        const currentDerivative = errorDiff.multiplyScalar(1 / dt);
+        this.errorDiff.subVectors(error, this.lastError);
+        this.currentDerivative.copy(this.errorDiff).multiplyScalar(1 / dt);
         this.lastDerivative.multiplyScalar(this.derivativeAlpha)
-            .add(currentDerivative.multiplyScalar(1 - this.derivativeAlpha));
-        const d = this.lastDerivative.clone().multiplyScalar(this.kd);
+            .addScaledVector(this.currentDerivative, 1 - this.derivativeAlpha);
+        this.dTerm.copy(this.lastDerivative).multiplyScalar(this.kd);
 
         // Update last error
         this.lastError.copy(error);
 
         // Combine terms
-        this.output.copy(p);
-        this.output.add(i);
-        this.output.add(d);
+        this.output.copy(this.pTerm).add(this.iTerm).add(this.dTerm);
 
         return this.output;
     }

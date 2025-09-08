@@ -634,7 +634,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             zIndex={windowZ.arrows}
                             onFocus={() => bringWindowToFront('arrows')}
                         >
-                            <HelperArrowsWindow spacecraft={spacecraft} />
+                            <HelperArrowsWindow spacecraft={spacecraft} world={world} />
                         </DraggableWindow>
                     )}
 

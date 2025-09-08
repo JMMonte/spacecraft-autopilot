@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Spacecraft } from '../../core/spacecraft';
+import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 
 export interface AutopilotConfig {
@@ -29,11 +29,22 @@ export abstract class AutopilotMode {
     protected thrusterGroups: any;
     protected thrust: number;
     protected pidController: PIDController;
+    // Optional moving reference frame (e.g., target spacecraft)
+    // Currently only velocity is needed by translation modes
+    protected referenceVelocityWorld: THREE.Vector3 | null = null;
     // Simple output smoothing to reduce flicker near zero
     protected lastRotCmd: THREE.Vector3 = new THREE.Vector3();
     protected lastLinCmd: THREE.Vector3 = new THREE.Vector3();
     protected rotSmoothAlpha: number = 0.75; // higher alpha => heavier smoothing
     protected linSmoothAlpha: number = 0.5;
+    // Scratch vectors to reduce allocations
+    protected tmpVecA: THREE.Vector3 = new THREE.Vector3();
+    protected tmpVecB: THREE.Vector3 = new THREE.Vector3();
+    protected tmpVecC: THREE.Vector3 = new THREE.Vector3();
+    protected tmpVecD: THREE.Vector3 = new THREE.Vector3();
+    protected tmpVecE: THREE.Vector3 = new THREE.Vector3();
+    protected tmpQuatA: THREE.Quaternion = new THREE.Quaternion();
+    protected tmpQuatB: THREE.Quaternion = new THREE.Quaternion();
     private capsCache?: {
         sig: string;
         linForce: { x: number; y: number; z: number };
@@ -57,58 +68,81 @@ export abstract class AutopilotMode {
         this.pidController = pidController;
     }
 
-    abstract calculateForces(dt: number): number[];
+    // Implementations should write into `out` when provided to avoid allocations
+    abstract calculateForces(dt: number, out?: number[]): number[];
+
+    public setReferenceVelocityWorld(v: THREE.Vector3 | null): void {
+        if (v) {
+            if (!this.referenceVelocityWorld) this.referenceVelocityWorld = new THREE.Vector3();
+            this.referenceVelocityWorld.copy(v);
+        } else {
+            this.referenceVelocityWorld = null;
+        }
+    }
 
     protected applyPIDOutputToThrusters(pidOutput: THREE.Vector3): number[] {
-        // Smooth rotational command
-        const smoothed = this.lastRotCmd.clone().multiplyScalar(this.rotSmoothAlpha)
-            .add(pidOutput.clone().multiplyScalar(1 - this.rotSmoothAlpha));
-        this.lastRotCmd.copy(smoothed);
+        const out = Array(24).fill(0);
+        this.applyPIDOutputToThrustersInPlace(pidOutput, out);
+        return out;
+    }
 
-        const thrusterForces = Array(24).fill(0);
-        const forceMultiplier = 5.0;
+    protected applyPIDOutputToThrustersInPlace(pidOutput: THREE.Vector3, out: number[]): void {
+        // lastRotCmd = lastRotCmd * alpha + pidOutput * (1 - alpha)
+        this.lastRotCmd.multiplyScalar(this.rotSmoothAlpha);
+        this.tmpVecA.copy(pidOutput).multiplyScalar(1 - this.rotSmoothAlpha);
+        this.lastRotCmd.add(this.tmpVecA);
 
-        // Slightly higher activation threshold to avoid chatter
-        const epsilon = this.config.limits.epsilon * 2.0;
+        // Map momentum-like command to torque fraction dynamically per spacecraft
+        const eps = this.config.limits.epsilon * 2.0;
+        const Lcap = Math.max(1e-6, this.config.limits.maxAngularMomentum);
+        const caps = this.getDynamicCaps();
 
-        const pitchForce = Math.abs(smoothed.x) * this.thrust * forceMultiplier;
-        const yawForce = Math.abs(smoothed.y) * this.thrust * forceMultiplier;
-        const rollForce = Math.abs(smoothed.z) * this.thrust * forceMultiplier;
-
-        if (Math.abs(smoothed.x) > epsilon) {
-            const pitchGroup = this.thrusterGroups.pitch[smoothed.x >= 0 ? 1 : 0];
-            const forcePerThruster = pitchForce / pitchGroup.length;
-            pitchGroup.forEach((index: number) => {
-                thrusterForces[index] = forcePerThruster;
-            });
+        // X axis (pitch)
+        const x = this.lastRotCmd.x;
+        if (Math.abs(x) > eps) {
+            const tauAxisMax = Math.max(1e-6, caps.angTorque.x);
+            // Desired torque based on fraction of momentum-domain command vs Lcap
+            const tauCmd = Math.min(tauAxisMax, Math.abs(x) / Lcap * tauAxisMax);
+            const group = this.thrusterGroups.pitch[x >= 0 ? 1 : 0];
+            // Distribute by axis max capacity; avoids per-frame torque geometry scans
+            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust);
+            group.forEach((idx: number) => { out[idx] += perThruster; });
         }
 
-        if (Math.abs(smoothed.y) > epsilon) {
-            const yawGroup = this.thrusterGroups.yaw[smoothed.y >= 0 ? 0 : 1];
-            const forcePerThruster = yawForce / yawGroup.length;
-            yawGroup.forEach((index: number) => {
-                thrusterForces[index] = forcePerThruster;
-            });
+        // Y axis (yaw)
+        const y = this.lastRotCmd.y;
+        if (Math.abs(y) > eps) {
+            const tauAxisMax = Math.max(1e-6, caps.angTorque.y);
+            const tauCmd = Math.min(tauAxisMax, Math.abs(y) / Lcap * tauAxisMax);
+            const group = this.thrusterGroups.yaw[y >= 0 ? 0 : 1];
+            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust);
+            group.forEach((idx: number) => { out[idx] += perThruster; });
         }
 
-        if (Math.abs(smoothed.z) > epsilon) {
-            const rollGroup = this.thrusterGroups.roll[smoothed.z >= 0 ? 0 : 1];
-            const forcePerThruster = rollForce / rollGroup.length;
-            rollGroup.forEach((index: number) => {
-                thrusterForces[index] = forcePerThruster;
-            });
+        // Z axis (roll)
+        const z = this.lastRotCmd.z;
+        if (Math.abs(z) > eps) {
+            const tauAxisMax = Math.max(1e-6, caps.angTorque.z);
+            const tauCmd = Math.min(tauAxisMax, Math.abs(z) / Lcap * tauAxisMax);
+            const group = this.thrusterGroups.roll[z >= 0 ? 0 : 1];
+            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust);
+            group.forEach((idx: number) => { out[idx] += perThruster; });
         }
-
-        return thrusterForces;
     }
 
     protected applyTranslationalForcesToThrusterGroups(localForce: THREE.Vector3): number[] {
-        // Smooth translational command
-        const smoothed = this.lastLinCmd.clone().multiplyScalar(this.linSmoothAlpha)
-            .add(localForce.clone().multiplyScalar(1 - this.linSmoothAlpha));
-        this.lastLinCmd.copy(smoothed);
+        const out = Array(24).fill(0);
+        this.applyTranslationalForcesToThrusterGroupsInPlace(localForce, out);
+        return out;
+    }
 
-        const forces = Array(24).fill(0);
+    protected applyTranslationalForcesToThrusterGroupsInPlace(localForce: THREE.Vector3, out: number[]): void {
+        // lastLinCmd = lastLinCmd * alpha + localForce * (1 - alpha)
+        this.lastLinCmd.multiplyScalar(this.linSmoothAlpha);
+        this.tmpVecA.copy(localForce).multiplyScalar(1 - this.linSmoothAlpha);
+        this.lastLinCmd.add(this.tmpVecA);
+
+        const smoothed = this.lastLinCmd;
         const axes = [
             { axis: 'z' as keyof THREE.Vector3, groups: this.thrusterGroups.forward, positive: true },
             { axis: 'y' as keyof THREE.Vector3, groups: this.thrusterGroups.up, positive: true },
@@ -116,18 +150,16 @@ export abstract class AutopilotMode {
         ];
 
         const epsilon = this.config.limits.epsilon * 2.0;
+        const caps = this.getDynamicCaps();
         axes.forEach(({ axis, groups, positive }) => {
-            const val = smoothed[axis] as number;
-            if (Math.abs(val) > epsilon) {
-                const thrusterGroup =
-                    val * (positive ? 1 : -1) > 0 ? groups[0] : groups[1];
-                const thrusterForce = Math.min(Math.abs(val) / 4, this.thrust);
-                thrusterGroup.forEach((index: number) => {
-                    forces[index] = thrusterForce;
-                });
-            }
+            const val = smoothed[axis] as number; // desired total local force [N] along axis
+            if (Math.abs(val) <= epsilon) return;
+            const thrusterGroup = val * (positive ? 1 : -1) > 0 ? groups[0] : groups[1];
+            const capAxis = axis === 'x' ? caps.linForce.x : axis === 'y' ? caps.linForce.y : caps.linForce.z;
+            const total = THREE.MathUtils.clamp(Math.abs(val), 0, capAxis);
+            const forcePerThruster = total / Math.max(1, thrusterGroup.length);
+            thrusterGroup.forEach((index: number) => { out[index] += forcePerThruster; });
         });
-        return forces;
     }
 
     protected calculateMomentOfInertia(): number {
@@ -158,7 +190,7 @@ export abstract class AutopilotMode {
 
     protected getEffectiveInertiaAlongAxis(axis: THREE.Vector3): number {
         const I = this.calculateMomentOfInertiaByAxis();
-        const a = axis.clone().normalize();
+        const a = this.tmpVecA.copy(axis).normalize();
         return I.x * a.x * a.x + I.y * a.y * a.y + I.z * a.z * a.z;
     }
 

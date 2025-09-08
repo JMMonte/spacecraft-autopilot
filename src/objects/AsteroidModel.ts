@@ -20,6 +20,10 @@ export class AsteroidModel {
   private physics?: PhysicsEngine;
   private rigid?: RigidBody;
   private static fbx = new FBXLoader();
+  // Simple spin model (client-side only)
+  private spinAxis: THREE.Vector3 = new THREE.Vector3(0, 1, 0);
+  private spinRateRadSec = 0; // radians per second
+  private spinEnabled = false;
   // Use a local LoadingManager to avoid polluting DefaultLoadingManager error logs
   private static makeTextureLoader() {
     const mgr = new THREE.LoadingManager();
@@ -137,6 +141,27 @@ export class AsteroidModel {
     const q = this.rigid.getQuaternion();
     this.mesh.position.set(p.x, p.y, p.z);
     this.mesh.quaternion.set(q.x, q.y, q.z, q.w);
+  }
+
+  // Advance local spin by dt seconds (optionally multiplied by a timeScale)
+  public advance(dt: number, timeScale = 1): void {
+    if (!this.mesh) return;
+    if (!this.spinEnabled || this.spinRateRadSec === 0) return;
+    const angle = this.spinRateRadSec * dt * timeScale;
+    if (angle === 0) return;
+    const dq = new THREE.Quaternion().setFromAxisAngle(this.spinAxis, angle);
+    // Apply to current orientation
+    const current = this.rigid ? this.rigid.getQuaternion() : this.mesh.quaternion;
+    const q = new THREE.Quaternion(current.x, current.y, current.z, 'w' in current ? (current as any).w : this.mesh.quaternion.w);
+    q.premultiply(dq);
+    this.setQuaternion(q);
+  }
+
+  // Configure continuous spin
+  public setSpin(axis: THREE.Vector3, rateRadSec: number): void {
+    this.spinAxis = axis.clone().normalize();
+    this.spinRateRadSec = rateRadSec;
+    this.spinEnabled = Math.abs(rateRadSec) > 0;
   }
 
   public setPosition(pos: THREE.Vector3): void {

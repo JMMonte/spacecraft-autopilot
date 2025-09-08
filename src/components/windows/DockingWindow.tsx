@@ -28,6 +28,8 @@ interface DockingInfo {
     totalWaypoints?: number;
     waypointThreshold?: number;
     distanceToWaypoint?: number;
+    intent?: string;
+    modes?: { orientationMatch: boolean; cancelRotation: boolean; cancelLinearMotion: boolean; pointToPosition: boolean; goToPosition: boolean };
 }
 
 interface PortSettings {
@@ -185,7 +187,8 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
             return;
         }
 
-        if (dockingController.getDockingPhase() === 'docked') {
+        const isDocked = (spacecraft.getDockedSpacecrafts?.() || []).length > 0 || dockingController.getDockingPhase() === 'docked';
+        if (isDocked) {
             log.info('Undocking');
             dockingController.undock();
         } else if (dockingController.isDocking()) {
@@ -233,6 +236,9 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
             const waypointThreshold = dockingController.getCurrentWaypointThreshold();
             const distanceToWaypoint = dockingController.getDistanceToWaypoint() ?? 0;
 
+            // Guidance status
+            const guidance = (dockingController as any).getGuidanceStatus?.();
+
             // Create info object
             const newInfo: DockingInfo = {
                 phase,
@@ -250,7 +256,9 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
                 currentWaypoint,
                 totalWaypoints,
                 waypointThreshold,
-                distanceToWaypoint
+                distanceToWaypoint,
+                intent: guidance?.intent || undefined,
+                modes: guidance?.modes || undefined
             };
 
             setDockingInfo(newInfo);
@@ -265,6 +273,11 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
                 <div className={`col-span-3 ${dockingInfo.phase === 'idle' ? 'text-white/50' : dockingInfo.phase === 'docked' ? 'text-green-400' : 'text-yellow-400'}`}>
                     Phase: {dockingInfo.phase.toUpperCase()}
                 </div>
+                {dockingInfo.intent && (
+                    <div className="col-span-3 text-white/70">
+                        Intent: {dockingInfo.intent}
+                    </div>
+                )}
                 
                 <div className={`${Math.abs(dockingInfo.closingSpeed) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
                     Range: {dockingInfo.range.toFixed(2)}m
@@ -294,6 +307,28 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
                 </div>
                 <div className="text-white/50">
                     WP: {dockingInfo.currentWaypoint !== undefined ? dockingInfo.currentWaypoint + 1 : '-'}/{dockingInfo.totalWaypoints || '-'}
+                </div>
+            </div>
+
+            {/* Docking Port Lights toggles */}
+            <div className="mt-1 grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-between gap-1">
+                    <label className="text-[10px] text-white/70 font-mono">Front Light</label>
+                    <input
+                        type="checkbox"
+                        checked={!!spacecraft?.isDockingLightOn?.('front')}
+                        onChange={(e) => spacecraft?.setDockingLight?.('front', e.target.checked)}
+                        className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+                    />
+                </div>
+                <div className="flex items-center justify-between gap-1">
+                    <label className="text-[10px] text-white/70 font-mono">Back Light</label>
+                    <input
+                        type="checkbox"
+                        checked={!!spacecraft?.isDockingLightOn?.('back')}
+                        onChange={(e) => spacecraft?.setDockingLight?.('back', e.target.checked)}
+                        className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+                    />
                 </div>
             </div>
 
@@ -347,20 +382,30 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
                 </div>
             </div>
 
+            {dockingInfo.modes && (
+                <div className="mt-2 grid grid-cols-5 gap-1 text-[10px] text-white/70">
+                    <div className={`${dockingInfo.modes.goToPosition ? 'text-cyan-300' : 'text-white/40'}`}>AP: GoTo</div>
+                    <div className={`${dockingInfo.modes.orientationMatch ? 'text-cyan-300' : 'text-white/40'}`}>Orient</div>
+                    <div className={`${dockingInfo.modes.cancelLinearMotion ? 'text-cyan-300' : 'text-white/40'}`}>Hold</div>
+                    <div className={`${dockingInfo.modes.cancelRotation ? 'text-cyan-300' : 'text-white/40'}`}>NoSpin</div>
+                    <div className={`${dockingInfo.modes.pointToPosition ? 'text-cyan-300' : 'text-white/40'}`}>Point</div>
+                </div>
+            )}
+
             <button
                 className={`w-full mt-2 px-2 py-1 rounded ${
-                    spacecraft?.dockingController?.getDockingPhase() === 'docked'
+                    (spacecraft?.getDockedSpacecrafts?.() || []).length > 0 || spacecraft?.dockingController?.getDockingPhase() === 'docked'
                         ? 'bg-green-500/30 border-green-500/50'
                         : spacecraft?.dockingController?.isDocking()
                             ? 'bg-red-500/30 border-red-500/50'
                             : 'bg-cyan-500/30 border-cyan-500/50'
                 } border text-white/90 text-sm font-mono ${
-                    spacecraft?.dockingController?.isDocking() ? '' : !canDock() ? 'opacity-50' : ''
+                    spacecraft?.dockingController?.isDocking() ? '' : (!canDock() && (spacecraft?.getDockedSpacecrafts?.() || []).length === 0 ? 'opacity-50' : '')
                 }`}
                 onClick={handleDock}
-                disabled={!spacecraft?.dockingController?.isDocking() && !canDock()}
+                disabled={!spacecraft?.dockingController?.isDocking() && !canDock() && (spacecraft?.getDockedSpacecrafts?.() || []).length === 0}
             >
-                {spacecraft?.dockingController?.getDockingPhase() === 'docked'
+                {(spacecraft?.getDockedSpacecrafts?.() || []).length > 0 || spacecraft?.dockingController?.getDockingPhase() === 'docked'
                     ? 'Undock'
                     : spacecraft?.dockingController?.isDocking()
                         ? 'Cancel Docking'

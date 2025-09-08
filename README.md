@@ -14,8 +14,8 @@ A Three.js-based space simulator with realistic physics and an autopilot system.
 
 ### Prerequisites
 
-- Node.js (v14 or higher)
-- npm (v6 or higher)
+- Node.js 22.x (LTS)
+- npm 10+ (bundled with Node 22)
 
 ### Installation
 

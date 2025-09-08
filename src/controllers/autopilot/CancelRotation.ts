@@ -1,25 +1,24 @@
 import { AutopilotMode } from './AutopilotMode';
-import * as THREE from 'three';
 
 export class CancelRotation extends AutopilotMode {
-    calculateForces(dt: number): number[] {
-        const q = this.spacecraft.getWorldOrientation();
-        const qInv = q.clone().invert();
-        const worldAngularVel = this.spacecraft.getWorldAngularVelocity();
+    calculateForces(dt: number, out: number[] = Array(24).fill(0)): number[] {
+        const q = this.spacecraft.getWorldOrientationRef();
+        const qInv = this.tmpQuatA.copy(q).invert();
+        const worldAngularVel = this.spacecraft.getWorldAngularVelocityRef();
 
-        // Convert global angular velocity to local space
-        const localAngularVel = worldAngularVel.clone().applyQuaternion(qInv);
+        // Convert global angular velocity to local space (no allocations)
+        const localAngularVel = this.tmpVecA.copy(worldAngularVel).applyQuaternion(qInv);
 
         // Work in angular momentum domain; target L = 0 (use axis-specific inertias)
         const Iax = this.calculateMomentOfInertiaByAxis();
-        const currentL = new THREE.Vector3(
+        const currentL = this.tmpVecB.set(
             localAngularVel.x * Iax.x,
             localAngularVel.y * Iax.y,
             localAngularVel.z * Iax.z
         );
         // Limit corrective momentum to configured maximum
         const maxL = this.config.limits.maxAngularMomentum;
-        let momentumError = currentL.clone().multiplyScalar(-1);
+        const momentumError = currentL.multiplyScalar(-1);
         if (momentumError.length() > maxL) {
             momentumError.multiplyScalar(maxL / momentumError.length());
         }
@@ -27,11 +26,8 @@ export class CancelRotation extends AutopilotMode {
         // PID controller works in local space using momentum error
         const pidVector = this.pidController.update(momentumError, dt);
 
-        // Apply additional scaling to overcome inertia
-        const inertiaCompensation = 5.0;
-        pidVector.multiplyScalar(inertiaCompensation);
-
-        // Apply directly to thrusters since we're already in local space
-        return this.applyPIDOutputToThrusters(pidVector);
+        // Apply directly to thrusters since we're already in local space (accumulate)
+        this.applyPIDOutputToThrustersInPlace(pidVector, out);
+        return out;
     }
 }

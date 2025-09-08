@@ -35,6 +35,8 @@ export class TrajectoryVisualizer {
             // Common info
             portDimensions?: THREE.Vector3;
             waypointThreshold?: number;
+            // When the current waypoint moves with a target, override its position
+            currentWaypointOverride?: THREE.Vector3;
 
             // Other spacecraft info
             otherSpacecraft?: Array<{
@@ -50,14 +52,17 @@ export class TrajectoryVisualizer {
         // Create spheres for each waypoint
         waypoints.forEach((waypoint, index) => {
             const color = index === currentWaypointIndex ? 0xffff00 : 0x888888;
-            const sphere = this.createDebugSphere(waypoint, color, 0.1, 1.0);
+            const wpPos = (index === currentWaypointIndex && options?.currentWaypointOverride)
+                ? options.currentWaypointOverride
+                : waypoint;
+            const sphere = this.createDebugSphere(wpPos, color, 0.1, 1.0);
             this.scene.add(sphere);
             this.debugObjects.push(sphere);
 
             // Add threshold visualization for current waypoint
             if (index === currentWaypointIndex && options?.waypointThreshold) {
                 const thresholdSphere = this.createDebugSphere(
-                    waypoint,
+                    wpPos,
                     0xffff00,
                     options.waypointThreshold,
                     0.1
@@ -80,6 +85,10 @@ export class TrajectoryVisualizer {
             // Unreached segments (gray)
             if (currentWaypointIndex < waypoints.length - 1) {
                 const unreachedPoints = waypoints.slice(currentWaypointIndex);
+                // If the current waypoint is moving (e.g., last approach point), update its position
+                if (options?.currentWaypointOverride && unreachedPoints.length > 0) {
+                    unreachedPoints[0] = options.currentWaypointOverride;
+                }
                 const unreachedLine = this.createDebugLine(unreachedPoints, 0x888888);
                 this.scene.add(unreachedLine);
                 this.debugObjects.push(unreachedLine);

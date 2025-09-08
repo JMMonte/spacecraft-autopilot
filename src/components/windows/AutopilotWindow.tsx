@@ -291,6 +291,7 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                 {apTelemetry?.modes?.goToPosition && apTelemetry?.goto && (
                     <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
                         <div className="text-cyan-300/90">Go To Position</div>
+                        <div>target: {apTelemetry.goto.targetType || 'static'}</div>
                         <div>dist: {apTelemetry.goto.distance?.toFixed?.(2)} m</div>
                         <div>v∥: {apTelemetry.goto.vAlong?.toFixed?.(2)} m/s</div>
                         <div>v_des: {apTelemetry.goto.vDes?.toFixed?.(2)} m/s</div>

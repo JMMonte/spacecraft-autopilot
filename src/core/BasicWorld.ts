@@ -7,10 +7,13 @@ import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
 import { Spacecraft } from './spacecraft';
 import { SpacecraftController } from '../controllers/spacecraftController';
+import { canDockWithinThresholds } from '../controllers/docking/DockingUtils';
 import { BackgroundLoader } from '../helpers/backgroundLoader';
 import { AsteroidModel, AsteroidModelId } from '../objects/AsteroidModel';
 import { AsteroidSystem, AsteroidSystemConfig } from '../objects/AsteroidSystem';
 import { createLogger } from '../utils/logger';
+import { InfiniteGrid } from '../scenes/objects/InfiniteGrid';
+import { store } from '../state/store';
 
 interface WorldConfig {
     debug?: boolean;
@@ -72,6 +75,7 @@ export class BasicWorld {
     private rafId: number | null = null;
     private running: boolean = false;
     private stats: Stats | null = null;
+    private grid: InfiniteGrid | null = null;
 
     constructor(config: WorldConfig = {}, canvas: HTMLCanvasElement) {
         this.config = config;
@@ -198,11 +202,30 @@ export class BasicWorld {
         const engineName = this.config.physicsEngine ?? 'rapier';
         this.physics = await createPhysicsEngine(engineName, { gravity: { x: 0, y: 0, z: 0 } });
 
-        // Add grid helper
-        const gridHelper = new THREE.GridHelper(100, 100);
-        // Prevent grid from occluding lens flares
-        (gridHelper as any).userData = { ...(gridHelper as any).userData, lensflare: 'no-occlusion' };
-        this.camera.scene.add(gridHelper);
+        // Add infinite-looking shader grid (drei-like)
+        this.grid = new InfiniteGrid({
+            cellSize: 1,
+            sectionSize: 10,
+            color1: '#404040',
+            color2: '#808080',
+            thickness1: 1.0,
+            thickness2: 2.0,
+            fadeDistance: 300,
+            fadeStrength: 1.25,
+            followCamera: true,
+        });
+        this.grid.addTo(this.camera.scene);
+        // Initialize grid visibility from global UI store and subscribe to changes
+        try {
+            const initialVisible = (store.getState().ui?.gridVisible ?? true);
+            this.grid.mesh.visible = initialVisible;
+            const unsub = store.subscribe(() => {
+                const visible = (store.getState().ui?.gridVisible ?? true);
+                if (this.grid) this.grid.mesh.visible = visible;
+            });
+            (this as any)._storeUnsubs = (this as any)._storeUnsubs || [];
+            (this as any)._storeUnsubs.push(unsub);
+        } catch {}
 
         // Prefer asteroid system if provided; else spawn standalone asteroids
         if (this.config.asteroidSystem) {
@@ -222,6 +245,10 @@ export class BasicWorld {
                     }
                     const pos = new THREE.Vector3(cfg.position.x, cfg.position.y, cfg.position.z);
                     const asteroid = new AsteroidModel(this.camera.scene, { position: pos, diameter: cfg.diameter, model: cfg.model, physics: this.physics });
+                    // Give standalone asteroids a gentle spin (random axis, ~12h period)
+                    const axis = new THREE.Vector3(Math.random(), Math.random(), Math.random()).normalize();
+                    const spinPeriod = 12 * 3600; // seconds
+                    asteroid.setSpin(axis, (2 * Math.PI) / spinPeriod);
                     this.asteroids.push(asteroid);
                 });
             }
@@ -485,29 +512,40 @@ export class BasicWorld {
                 (this as any)._t = ((this as any)._t ?? 0) + deltaTime;
                 this.asteroidSystem.update((this as any)._t);
             } else {
-                this.asteroids.forEach(a => a.update());
-            }
-
-            // Update lights
-            if (this.lights) {
-                this.lights.update();
+                // Advance spins then sync from physics
+                this.asteroids.forEach(a => { a.advance(deltaTime); a.update(); });
             }
 
             // Update spacecraft
             this.spacecraft.forEach(spacecraft => spacecraft.update());
 
             // Update spacecraft controllers
+            // Apply forces (manual + autopilot) for all spacecraft so
+            // autopilots continue running regardless of active selection
             this.spacecraftControllers.forEach(controller => {
-                if (controller.getIsActive()) {
-                    controller.applyForces(deltaTime);
-                }
+                controller.applyForces(deltaTime);
             });
+
+            // Passive auto-docking: no UI mode required
+            this.performPassiveDocking();
 
             // Update camera to follow active spacecraft
             const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.getIsActive());
             if (activeSpacecraft) {
                 this.camera.updateOrbitTarget(activeSpacecraft.objects.box.position);
-                this.camera.controls.update();
+            }
+
+            // Apply latest orbit controls before camera-dependent effects
+            this.camera.controls.update();
+
+            // Update lights after camera controls
+            if (this.lights) {
+                this.lights.update();
+            }
+
+            // Update grid following camera (after controls to avoid 1-frame lag)
+            if (this.grid) {
+                this.grid.update(this.camera.camera);
             }
 
             // Render the scene
@@ -533,6 +571,17 @@ export class BasicWorld {
         this.camera.cleanup();
         this.lights.cleanup();
         this.backgroundLoader.dispose();
+
+        if (this.grid) {
+            this.camera.scene.remove(this.grid.mesh);
+            this.grid.dispose();
+            this.grid = null;
+        }
+
+        // Unsubscribe any store subscriptions
+        const unsubs: Array<() => void> = (this as any)._storeUnsubs || [];
+        unsubs.forEach(u => { try { u(); } catch {} });
+        (this as any)._storeUnsubs = [];
 
         // Cleanup spacecraft
         this.spacecraft.forEach(spacecraft => {
@@ -560,4 +609,54 @@ export class BasicWorld {
         this.asteroids.push(asteroid);
         return asteroid;
     }
-} 
+
+    // Grid visibility controls for UI
+    public setGridVisible(visible: boolean): void {
+        if (this.grid) this.grid.mesh.visible = visible;
+    }
+
+    public getGridVisible(): boolean {
+        return !!this.grid?.mesh.visible;
+    }
+
+    // Evaluate all spacecraft pairs and dock automatically when thresholds are met
+    private performPassiveDocking(): void {
+        const ports: Array<'front' | 'back'> = ['front', 'back'];
+        const list = this.spacecraft;
+        const n = list.length;
+        for (let i = 0; i < n; i++) {
+            const a = list[i];
+            for (let j = i + 1; j < n; j++) {
+                const b = list[j];
+
+                // Skip if these two are already connected via any port
+                const alreadyConnected = (['front', 'back'] as const).some(p => a.dockingPorts[p].dockedTo?.spacecraft === b);
+                if (alreadyConnected) continue;
+
+                // Try all port combinations; stop at the first that satisfies docking
+                let paired = false;
+                for (const aPort of ports) {
+                    if (paired) break;
+                    if (!a.dockingPorts[aPort] || a.dockingPorts[aPort].isOccupied) continue;
+                    for (const bPort of ports) {
+                        if (!b.dockingPorts[bPort] || b.dockingPorts[bPort].isOccupied) continue;
+                        if (!canDockWithinThresholds(a, aPort, b, bPort)) continue;
+
+                        // Create the physical link
+                        if (a.dock(aPort, b, bPort)) {
+                            // Hard-disable autopilots and clear latches on both craft
+                            const apA = a.spacecraftController?.autopilot;
+                            const apB = b.spacecraftController?.autopilot;
+                            if (apA) { apA.resetAllModes(); apA.setReferenceObject(null); apA.setEnabled(false); }
+                            if (apB) { apB.resetAllModes(); apB.setReferenceObject(null); apB.setEnabled(false); }
+                            a.spacecraftController?.resetThrusterLatch?.();
+                            b.spacecraftController?.resetThrusterLatch?.();
+                            paired = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

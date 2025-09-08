@@ -46,7 +46,7 @@ export class SpacecraftModel {
     private numberOfDockingPorts: number;
     private tankThickness: number;
     private readonly defaultDockingPortRadius: number = 0.3;
-    private readonly defaultDockingPortLength: number = 0.1;
+    private readonly defaultDockingPortLength: number = 0.07;
     private readonly defaultDockingPortDepth: number = 0.3;
 
     // Add getters for docking port dimensions
@@ -68,6 +68,14 @@ export class SpacecraftModel {
 
     public getDockingPortCameras(): Partial<Record<'front' | 'back', THREE.PerspectiveCamera>> {
         return this.dockingPortManager?.cameras ?? {};
+    }
+
+    public setDockingLightsEnabled(enabled: boolean): void {
+        this.dockingPortManager?.setDockingLightsEnabled(enabled);
+    }
+
+    public setDockingLightEnabled(id: 'front' | 'back', enabled: boolean): void {
+        this.dockingPortManager?.setDockingLightEnabled(id, enabled);
     }
 
     constructor(

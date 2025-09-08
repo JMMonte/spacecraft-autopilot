@@ -29,6 +29,9 @@ export class SpacecraftController {
     private minPulseOn: number = 0.05;  // seconds
     private minPulseOff: number = 0.05; // seconds
     private activationThresholdFactor: number = 0.02; // as fraction of per-thruster thrust
+    // Reusable buffers to avoid per-frame allocations
+    private manualForcesBuffer: number[] = new Array(24).fill(0);
+    private combinedForcesBuffer: number[] = new Array(24).fill(0);
 
     constructor(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers) {
         this.log.debug('SpacecraftController constructor called');
@@ -82,13 +85,15 @@ export class SpacecraftController {
                     momentum: { kp: 3.0, ki: 0.0, kd: 1.0 }
                 },
                 maxForce: this.thrust * 24,
-                dampingFactor: 1.5
+                dampingFactor: 1.5,
+                autoTune: true,
+                useWorker: true,
             }
         );
 
-        // Enable autopilot by default
-        this.autopilot.setEnabled(true);
-        this.log.debug('Autopilot created and enabled with thrust:', this.thrust);
+        // Do not enable autopilot by default; it will turn on when a mode is activated.
+        // This avoids running idle workers across many spacecraft.
+        this.log.debug('Autopilot created (initially disabled) with thrust:', this.thrust);
     }
 
     private getThrusterGroups() {
@@ -196,17 +201,33 @@ export class SpacecraftController {
      * Called each frame or physics step with dt
      */
     public applyForces(dt: number = 1/60): boolean[] {
-        
+        // If this craft is docked, force autopilot fully off and suppress cluster sync
+        if (this.spacecraft.isDocked?.()) {
+            if (this.autopilot?.getAutopilotEnabled() || Object.values(this.autopilot.getActiveAutopilots()).some(Boolean)) {
+                this.autopilot.resetAllModes();
+                this.autopilot.setReferenceObject(null);
+                this.autopilot.setEnabled(false);
+                this.resetThrusterLatch();
+            }
+        } else {
+            // Sync autopilots across docked cluster so they act as one (only when not currently docked)
+            this.syncDockedAutopilots();
+        }
+
         // 1) Manual forces from user
         const manualForces = this.calculateManualForces();
 
         // 2) Autopilot forces if autopilot is active
         const autopilotForces = this.autopilot.getAutopilotEnabled()
             ? this.autopilot.calculateAutopilotForces(dt)
-            : Array(24).fill(0);
+            : (this.combinedForcesBuffer.fill(0), this.combinedForcesBuffer); // reuse buffer if disabled
 
         // 3) Combine
-        const combined = manualForces.map((val, i) => val + autopilotForces[i]);
+        // Combine into reusable buffer
+        for (let i = 0; i < 24; i++) {
+            this.combinedForcesBuffer[i] = (manualForces[i] || 0) + (autopilotForces[i] || 0);
+        }
+        const combined = this.combinedForcesBuffer;
 
         // 4) Apply
         const coneVisibility = this.applyForcesToThrusters(combined, dt);
@@ -220,35 +241,96 @@ export class SpacecraftController {
         return coneVisibility;
     }
 
-    private updateHelpers(thrustForces: number[]): void {
-        if (!this.autopilot?.getTargetOrientation()) {
-            return;
+    /**
+     * If docked with other spacecraft, mirror this autopilot's active modes and targets
+     * into the partner(s). The cluster then behaves like one craft using all thrusters.
+     * We elect the cluster leader by smallest UUID to avoid double-driving.
+     */
+    private syncDockedAutopilots(): void {
+        const partners = this.spacecraft.getDockedSpacecrafts?.() || [];
+        if (!partners.length) return;
+
+        // Build cluster and elect leader
+        const cluster = [this.spacecraft, ...partners];
+        cluster.sort((a, b) => a.uuid.localeCompare(b.uuid));
+        const leader = cluster[0];
+        if (leader !== this.spacecraft) return; // only leader propagates
+
+        const leaderAP = this.autopilot;
+        if (!leaderAP?.getAutopilotEnabled()) return;
+
+        // Snapshot leader's modes and targets
+        const active = leaderAP.getActiveAutopilots();
+        const targetPos = leaderAP.getTargetPosition?.();
+        const targetQuat = leaderAP.getTargetOrientation?.();
+
+        for (const craft of cluster.slice(1)) {
+            const ctrl = craft.spacecraftController as SpacecraftController | undefined;
+            const ap = ctrl?.autopilot;
+            if (!ap) continue;
+            // Ensure enabled
+            ap.setEnabled(true);
+            // Mirror targets
+            if (targetPos) ap.setTargetPosition(targetPos.clone());
+            if (targetQuat) ap.setTargetOrientation(targetQuat.clone());
+            // Mirror modes
+            ap.setMode('goToPosition', !!active.goToPosition);
+            ap.setMode('orientationMatch', !!active.orientationMatch);
+            ap.setMode('cancelLinearMotion', !!active.cancelLinearMotion);
+            ap.setMode('cancelRotation', !!active.cancelRotation);
+            ap.setMode('pointToPosition', !!active.pointToPosition);
         }
-        const bodyPosition = this.spacecraft.getWorldPosition();
-        const currentAngularVelocity = this.spacecraft.getWorldAngularVelocity();
-        const currentVelocity = this.spacecraft.getWorldVelocity();
+    }
 
-        // Example "torques" for debug
-        // (You can refine how you compute these based on thruster geometry)
-        const pitchTorque = thrustForces[0] + thrustForces[3] + thrustForces[4] + thrustForces[7];
-        const yawTorque   = thrustForces[8] + thrustForces[11] + thrustForces[12] + thrustForces[15];
-        const rollTorque  = thrustForces[1] + thrustForces[2] + thrustForces[5] + thrustForces[6];
+    private updateHelpers(thrustForces: number[]): void {
+        // Skip all work if no helper is visible and trace is off
+        const h = this.helpers;
+        if (!h) return;
+        const anyVisible = !!(
+            h.autopilotArrow?.visible ||
+            h.autopilotTorqueArrow?.visible ||
+            h.rotationAxisArrow?.visible ||
+            h.orientationArrow?.visible ||
+            h.velocityArrow?.visible ||
+            this.spacecraft?.showTraceLines
+        );
+        if (!anyVisible) return;
 
-        const defaultForwardVector = new THREE.Vector3(0, 0, 1);
-        const targetOrientationQuat = this.autopilot.getTargetOrientation();
-        const targetOrientationVector = defaultForwardVector.clone().applyQuaternion(targetOrientationQuat);
+        if (!this.autopilot?.getTargetOrientation()) return;
 
-        const autopilotTorque = new THREE.Vector3(pitchTorque, yawTorque, rollTorque);
-        const rotationAxis = currentAngularVelocity.clone();
+        const bodyPosition = this.spacecraft.getWorldPositionRef();
 
-        const orientationVector = defaultForwardVector.clone().applyQuaternion(this.spacecraft.getWorldOrientation());
+        // Compute only what is needed per visible helper
+        if (h.velocityArrow?.visible) {
+            const currentVelocity = this.spacecraft.getWorldVelocityRef();
+            this.helpers.updateVelocityArrow(bodyPosition, currentVelocity);
+        }
 
-        // Update your arrow helpers
-        this.helpers.updateAutopilotArrow(bodyPosition, targetOrientationVector);
-        this.helpers.updateAutopilotTorqueArrow(bodyPosition, autopilotTorque);
-        this.helpers.updateRotationAxisArrow(bodyPosition, rotationAxis);
-        this.helpers.updateOrientationArrow(bodyPosition, orientationVector);
-        this.helpers.updateVelocityArrow(bodyPosition, currentVelocity);
+        if (h.rotationAxisArrow?.visible) {
+            const currentAngularVelocity = this.spacecraft.getWorldAngularVelocityRef();
+            this.helpers.updateRotationAxisArrow(bodyPosition, currentAngularVelocity);
+        }
+
+        if (h.orientationArrow?.visible) {
+            const defaultForwardVector = new THREE.Vector3(0, 0, 1);
+            const orientationVector = defaultForwardVector.applyQuaternion(this.spacecraft.getWorldOrientationRef());
+            this.helpers.updateOrientationArrow(bodyPosition, orientationVector);
+        }
+
+        if (h.autopilotArrow?.visible) {
+            const defaultForwardVector = new THREE.Vector3(0, 0, 1);
+            const targetOrientationQuat = this.autopilot.getTargetOrientation();
+            const targetOrientationVector = defaultForwardVector.applyQuaternion(targetOrientationQuat);
+            this.helpers.updateAutopilotArrow(bodyPosition, targetOrientationVector);
+        }
+
+        if (h.autopilotTorqueArrow?.visible) {
+            const pitchTorque = thrustForces[0] + thrustForces[3] + thrustForces[4] + thrustForces[7];
+            const yawTorque   = thrustForces[8] + thrustForces[11] + thrustForces[12] + thrustForces[15];
+            const rollTorque  = thrustForces[1] + thrustForces[2] + thrustForces[5] + thrustForces[6];
+            const autopilotTorque = new THREE.Vector3(pitchTorque, yawTorque, rollTorque);
+            this.helpers.updateAutopilotTorqueArrow(bodyPosition, autopilotTorque);
+        }
     }
 
     private applyForcesToThrusters(forces: number[], dt: number): boolean[] {
@@ -326,7 +408,8 @@ export class SpacecraftController {
     }
 
     private calculateManualForces(): number[] {
-        const forces = Array(24).fill(0);
+        const forces = this.manualForcesBuffer;
+        for (let i = 0; i < 24; i++) forces[i] = 0;
 
         Object.entries(this.keyToThrusters()).forEach(([key, indices]) => {
             if (!this.keysPressed[key]) return;
@@ -383,6 +466,22 @@ export class SpacecraftController {
 
     public destroy(): void {
         // No-op; BasicWorld manages global listeners
+    }
+
+    /**
+     * Immediately clear any latched thruster outputs and hide RCS visuals.
+     * Useful when external events (e.g., docking) require an abrupt stop.
+     */
+    public resetThrusterLatch(): void {
+        for (let i = 0; i < 24; i++) {
+            this.thrusterOnLatch[i] = false;
+            this.thrusterLatchTimer[i] = 0;
+            this.thrusterLatchedForce[i] = 0;
+        }
+        // Also clear any lingering visual effects
+        try {
+            this.spacecraft.rcsVisuals.getConeMeshes().forEach((cone) => (cone.visible = false));
+        } catch {}
     }
 
     handleKeyPress(event: KeyboardEvent): void {

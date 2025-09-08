@@ -1,5 +1,5 @@
 import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
-import { Spacecraft } from '../../core/spacecraft';
+import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import * as THREE from 'three';
 
@@ -34,39 +34,39 @@ export class PointToPosition extends AutopilotMode {
         this.targetPosition = position;
     }
 
-    calculateForces(dt: number): number[] {
-        const q = this.spacecraft.getWorldOrientation();
-        const currentAngularVelocity = this.spacecraft.getWorldAngularVelocity();
-        const qInv = q.clone().invert();
+    calculateForces(dt: number, out: number[] = Array(24).fill(0)): number[] {
+        const q = this.spacecraft.getWorldOrientationRef();
+        const currentAngularVelocity = this.spacecraft.getWorldAngularVelocityRef();
+        const qInv = this.tmpQuatA.copy(q).invert();
 
         // Compute world-space direction to target
-        const currentPosition = this.spacecraft.getWorldPosition();
-        const dirWorld = this.targetPosition.clone().sub(currentPosition);
+        const currentPosition = this.spacecraft.getWorldPositionRef();
+        const dirWorld = this.tmpVecA.copy(this.targetPosition).sub(currentPosition);
         if (dirWorld.lengthSq() < 1e-12) {
             // Already at target position; no pointing needed
-            return Array(24).fill(0);
+            return out.fill(0);
         }
         dirWorld.normalize();
 
         // Convert target direction into the spacecraft's local frame
-        const dirLocal = dirWorld.clone().applyQuaternion(qInv).normalize();
+        const dirLocal = dirWorld.applyQuaternion(qInv).normalize();
 
         // Local forward axis is +Z for this spacecraft
-        const forwardLocal = new THREE.Vector3(0, 0, 1);
+        const forwardLocal = this.tmpVecB.set(0, 0, 1);
 
         // Error quaternion expressed in local frame: rotate forward to desired local direction
-        const errorQuaternion = new THREE.Quaternion().setFromUnitVectors(forwardLocal, dirLocal);
+        const errorQuaternion = this.tmpQuatB.setFromUnitVectors(forwardLocal, dirLocal);
 
         // Convert angular velocity to local space
-        const localAngularVelocity = currentAngularVelocity.clone().applyQuaternion(qInv);
+        const localAngularVelocity = this.tmpVecC.copy(currentAngularVelocity).applyQuaternion(qInv);
 
         // Compute minimal angle-axis from error quaternion in local frame
         const wClamped = Math.min(1, Math.max(-1, errorQuaternion.w));
         let angle = 2 * Math.acos(wClamped);
         let sinHalf = Math.sqrt(1 - wClamped * wClamped);
         const axis = sinHalf > 1e-6
-            ? new THREE.Vector3(errorQuaternion.x, errorQuaternion.y, errorQuaternion.z).multiplyScalar(1 / sinHalf).normalize()
-            : new THREE.Vector3(0, 0, 0);
+            ? this.tmpVecD.set(errorQuaternion.x, errorQuaternion.y, errorQuaternion.z).multiplyScalar(1 / sinHalf).normalize()
+            : this.tmpVecD.set(0, 0, 0);
         if (angle > Math.PI) { angle = 2 * Math.PI - angle; axis.negate(); }
 
         // Deadband with hysteresis
@@ -88,10 +88,10 @@ export class PointToPosition extends AutopilotMode {
 
         // Work in angular momentum domain along the axis to create accelerate-then-brake profile
         const Ieff = this.getEffectiveInertiaAlongAxis(axis);
-        const desiredL = axis.clone().multiplyScalar(Ieff * wDesMag);
+        const desiredL = this.tmpVecE.copy(axis).multiplyScalar(Ieff * wDesMag);
         const wAlong = localAngularVelocity.dot(axis);
-        const currentLAlong = axis.clone().multiplyScalar(Ieff * wAlong);
-        let angularMomentumError = desiredL.sub(currentLAlong);
+        const currentLAlong = this.tmpVecB.copy(axis).multiplyScalar(Ieff * wAlong);
+        const angularMomentumError = desiredL.sub(currentLAlong);
         // Clamp by configured max |L|
         const maxL = this.config.limits.maxAngularMomentum;
         if (angularMomentumError.length() > maxL) {
@@ -111,14 +111,11 @@ export class PointToPosition extends AutopilotMode {
             deadband: withinDeadband,
         };
 
-        // Apply PID control
+        // Apply PID control (momentum-domain)
         const pidVector = this.pidController.update(angularMomentumError, dt);
 
-        // Apply additional scaling to overcome inertia
-        const inertiaCompensation = 5.0;
-        pidVector.multiplyScalar(inertiaCompensation);
-
-        return this.applyPIDOutputToThrusters(pidVector);
+        this.applyPIDOutputToThrustersInPlace(pidVector, out);
+        return out;
     }
 
     public getTelemetry() {

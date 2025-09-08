@@ -1,5 +1,5 @@
 import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
-import { Spacecraft } from '../../core/spacecraft';
+import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import * as THREE from 'three';
 
@@ -26,6 +26,10 @@ export class GoToPosition extends AutopilotMode {
         vMax: number;
         tGo?: number;
         aCmdLocal?: { x: number; y: number; z: number };
+        targetType?: 'spacecraft' | 'static';
+        vTargetMag?: number;
+        vTargetAlong?: number;
+        vRelMag?: number;
     } | null = null;
 
     constructor(
@@ -64,21 +68,23 @@ export class GoToPosition extends AutopilotMode {
         return this.threshold;
     }
 
-    calculateForces(dt: number): number[] {
-        const currentPosition = this.spacecraft.getWorldPosition();
-        const currentVelocity = this.spacecraft.getWorldVelocity();
-        const q = this.spacecraft.getWorldOrientation();
-        const qInv = q.clone().invert();
+    calculateForces(dt: number, out: number[] = Array(24).fill(0)): number[] {
+        const currentPosition = this.spacecraft.getWorldPositionRef();
+        const currentVelocity = this.spacecraft.getWorldVelocityRef();
+        const targetRefVel = this.referenceVelocityWorld || this.tmpVecC.set(0, 0, 0);
+        const relVelocityWorld = this.tmpVecA.copy(currentVelocity).sub(targetRefVel);
+        const q = this.spacecraft.getWorldOrientationRef();
+        const qInv = this.tmpQuatA.copy(q).invert();
 
         // Position error in world
-        const posErrWorld = this.targetPosition.clone().sub(currentPosition);
+        const posErrWorld = this.tmpVecB.copy(this.targetPosition).sub(currentPosition);
         const dist = posErrWorld.length();
-        const dirWorld = posErrWorld.clone().multiplyScalar(1 / Math.max(dist, 1e-9));
+        const dirWorld = this.tmpVecD.copy(posErrWorld).multiplyScalar(1 / Math.max(dist, 1e-9));
 
         // Local frame quantities
-        const dirLocal = dirWorld.clone().applyQuaternion(qInv);
-        const velLocal = currentVelocity.clone().applyQuaternion(qInv);
-        const posErrLocal = posErrWorld.clone().applyQuaternion(qInv);
+        const dirLocal = this.tmpVecE.copy(dirWorld).applyQuaternion(qInv);
+        const velLocal = relVelocityWorld.applyQuaternion(qInv);
+        const posErrLocal = posErrWorld.applyQuaternion(qInv);
 
         // Guidance: estimate dynamic accel caps
         // Dynamic acceleration capability projected along desired direction
@@ -86,7 +92,7 @@ export class GoToPosition extends AutopilotMode {
         const caps = this.getDynamicCaps();
 
         // Scale by pointing alignment so we don't thrust hard when misaligned
-        const forwardWorld = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+        const forwardWorld = this.tmpVecC.set(0, 0, 1).applyQuaternion(q);
         const alignDot = Math.max(-1, Math.min(1, forwardWorld.dot(dirWorld)));
         const alignAngle = Math.acos(alignDot) * 180 / Math.PI; // degrees
         // Update alignment gate with hysteresis (used for scaling, not hard block)
@@ -102,7 +108,7 @@ export class GoToPosition extends AutopilotMode {
         // Distance-derived speed cap from stopping distance formula (no fixed vMax)
         const vStopCap = Math.sqrt(2 * aMax * Math.max(dist, 0));
 
-        const vAlong = currentVelocity.dot(dirWorld);
+        const vAlong = relVelocityWorld.dot(dirWorld);
         const dStop = (vAlong * vAlong) / (2 * Math.max(aMax, 1e-6));
         const nearLinearKV = 2.0; // m/s per m in close range
 
@@ -128,15 +134,15 @@ export class GoToPosition extends AutopilotMode {
         const tVel = aMax > 1e-6 ? vMag / aMax : 0.0;
         const tGo = Math.max(tMin, Math.min(tMax, 0.8 * tTri + 0.2 * tVel));
 
-        // Zero-Effort Miss/Velocity guidance (target velocity = 0)
-        // ZEM = posErr - v * tGo, ZEV = -v
-        const ZEM = posErrWorld.clone().sub(currentVelocity.clone().multiplyScalar(tGo));
-        const ZEV = currentVelocity.clone().multiplyScalar(-1);
+        // Zero-Effort Miss/Velocity guidance (relative to moving reference)
+        // ZEM = posErr - vRel * tGo, ZEV = -vRel
+        const ZEV = relVelocityWorld.clone().multiplyScalar(-1); // keep relVelocityWorld for telemetry
+        const ZEM = posErrWorld.sub(relVelocityWorld.clone().multiplyScalar(tGo));
         const kR = 6.0 / (tGo * tGo);
         const kV = 4.0 / Math.max(tGo, 1e-6);
         const aCmdWorld = ZEM.multiplyScalar(kR).add(ZEV.multiplyScalar(kV));
         // Transform to local for axis-wise saturation
-        let aCmdLocal = aCmdWorld.clone().applyQuaternion(qInv);
+        let aCmdLocal = aCmdWorld.applyQuaternion(qInv);
         // Axis caps in local frame with alignment scaling
         const axCap = Math.min(this.config.limits.maxLinearAcceleration ?? Infinity, caps.linAccel.x * alignScale);
         const ayCap = Math.min(this.config.limits.maxLinearAcceleration ?? Infinity, caps.linAccel.y * alignScale);
@@ -160,14 +166,18 @@ export class GoToPosition extends AutopilotMode {
             vMax: vStopCap,
             tGo,
             aCmdLocal: { x: aCmdLocal.x, y: aCmdLocal.y, z: aCmdLocal.z },
+            targetType: this.referenceVelocityWorld ? 'spacecraft' : 'static',
+            vTargetMag: targetRefVel.length(),
+            vTargetAlong: targetRefVel.dot(dirWorld),
+            vRelMag: relVelocityWorld.length(),
         };
 
         if (dist <= this.threshold) {
             // Near-target hold: damp velocity and gently pull toward the setpoint
             const kPos = 1.4; // m/s^2 per m
             const kVel = this.config.damping.factor; // m/s^2 per (m/s)
-            aCmdLocal = posErrLocal.clone().multiplyScalar(kPos)
-                .add(velLocal.clone().multiplyScalar(-kVel));
+            aCmdLocal = posErrLocal.multiplyScalar(kPos)
+                .add(velLocal.multiplyScalar(-kVel));
         } else {
             // Use ZEM/ZEV acceleration command computed above
             // (already saturated to axis caps)
@@ -175,7 +185,7 @@ export class GoToPosition extends AutopilotMode {
 
         // Force command
         const mass = this.spacecraft.getMass();
-        const localForce = aCmdLocal.clone().multiplyScalar(mass);
+        const localForce = aCmdLocal.multiplyScalar(mass);
 
         // Clamp by force and step momentum budget
         const maxByForce = this.config.limits.maxForce;
@@ -185,7 +195,8 @@ export class GoToPosition extends AutopilotMode {
             localForce.multiplyScalar(maxAllowable / localForce.length());
         }
 
-        return this.applyTranslationalForcesToThrusterGroups(localForce);
+        this.applyTranslationalForcesToThrusterGroupsInPlace(localForce, out);
+        return out;
     }
 
     public getTelemetry() {
@@ -227,5 +238,33 @@ export class GoToPosition extends AutopilotMode {
         }
 
         return thrusterForces;
+    }
+
+    protected applyTranslationalForcesToThrusterGroupsInPlace(localForce: THREE.Vector3, out: number[]): void {
+        const forceMultiplier = 1.0;
+
+        if (Math.abs(localForce.z) > this.config.limits.epsilon) {
+            const zGroup = this.thrusterGroups.forward[localForce.z >= 0 ? 0 : 1];
+            const forcePerThruster = Math.min(Math.abs(localForce.z), this.thrust) * forceMultiplier / zGroup.length;
+            zGroup.forEach((index: number) => {
+                out[index] += forcePerThruster;
+            });
+        }
+
+        if (Math.abs(localForce.y) > this.config.limits.epsilon) {
+            const yGroup = this.thrusterGroups.up[localForce.y >= 0 ? 0 : 1];
+            const forcePerThruster = Math.min(Math.abs(localForce.y), this.thrust) * forceMultiplier / yGroup.length;
+            yGroup.forEach((index: number) => {
+                out[index] += forcePerThruster;
+            });
+        }
+
+        if (Math.abs(localForce.x) > this.config.limits.epsilon) {
+            const xGroup = this.thrusterGroups.left[localForce.x >= 0 ? 1 : 0];
+            const forcePerThruster = Math.min(Math.abs(localForce.x), this.thrust) * forceMultiplier / xGroup.length;
+            xGroup.forEach((index: number) => {
+                out[index] += forcePerThruster;
+            });
+        }
     }
 } 

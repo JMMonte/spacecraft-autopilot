@@ -11,6 +11,10 @@ export class DockingPortManager {
 
     private colliderHandles: unknown[] = [];
     public cameras: Partial<Record<'front' | 'back', THREE.PerspectiveCamera>> = {};
+    private spotlights: Partial<Record<'front' | 'back', THREE.SpotLight>> = {};
+    private lightTargets: Partial<Record<'front' | 'back', THREE.Object3D>> = {};
+    private lampMeshes: Partial<Record<'front' | 'back', THREE.Mesh>> = {};
+    private lightsState: Partial<Record<'front' | 'back', boolean>> = { front: false, back: false };
 
     public addDockingPorts(
         box: THREE.Mesh,
@@ -86,6 +90,54 @@ export class DockingPortManager {
             box.add(camera);
             camera.updateProjectionMatrix();
             this.cameras[id] = camera;
+
+            // Add a small off-center cylinder acting as a lamp housing
+            const lampRadius = Math.max(this.dockingPortRadius * 0.1, 0.02);
+            const lampLength = Math.max(this.dockingPortLength * 0.2, 0.03);
+            const lampGeom = new THREE.CylinderGeometry(lampRadius, lampRadius, lampLength, 16);
+            const lampMat = new THREE.MeshStandardMaterial({
+                color: 0xffffff,
+                emissive: this.lightsState[id] ? 0xffffbb : 0x000000,
+                emissiveIntensity: this.lightsState[id] ? 2.0 : 0.0,
+                metalness: 0.3,
+                roughness: 0.5,
+            });
+            const lamp = new THREE.Mesh(lampGeom, lampMat);
+            lamp.name = `${name}Lamp`;
+            lamp.castShadow = true;
+            lamp.receiveShadow = true;
+            // Align cylinder along Z (default is Y), and position off-center on X
+            lamp.rotation.x = Math.PI / 2;
+            // Place lamp slightly off-center near the rim (not too far out)
+            const radialOffset = Math.max(this.dockingPortRadius * 1.0, lampRadius);
+            const zClearance = (this.dockingPortLength / 2) + (lampLength / 2) + 0;
+            lamp.position.set(radialOffset, 0, z + (id === 'front' ? zClearance : -zClearance));
+            box.add(lamp);
+            this.lampMeshes[id] = lamp;
+
+            // Create a SpotLight near the lamp, pointing outward along port direction
+            const spot = new THREE.SpotLight(0xffffff, 2.0, 20, Math.PI / 8, 0.3, 1.0);
+            spot.name = `${name}SpotLight`;
+            spot.castShadow = true;
+            // Soften shadows a bit
+            spot.shadow.mapSize.width = 1024;
+            spot.shadow.mapSize.height = 1024;
+            spot.shadow.bias = -0.0001;
+            // Place light slightly ahead of the lamp so it doesn't self-shadow harshly
+            const forward = zClearance + 0.05;
+            spot.position.set(radialOffset, 0, z + (id === 'front' ? forward : -forward));
+            spot.visible = !!this.lightsState[id];
+
+            // Create and place target so the light points straight out of the port
+            const target = new THREE.Object3D();
+            target.name = `${name}SpotTarget`;
+            target.position.set(radialOffset, 0, z + (id === 'front' ? forward + 2 : -forward - 2));
+            box.add(target);
+            spot.target = target;
+
+            box.add(spot);
+            this.spotlights[id] = spot;
+            this.lightTargets[id] = target;
         });
     }
 
@@ -98,7 +150,13 @@ export class DockingPortManager {
                 child.name === 'dockingPortFrontRing' ||
                 child.name === 'dockingPortBackRing' ||
                 child.name === 'dockingPortFrontCamera' ||
-                child.name === 'dockingPortBackCamera'
+                child.name === 'dockingPortBackCamera' ||
+                child.name === 'dockingPortFrontLamp' ||
+                child.name === 'dockingPortBackLamp' ||
+                child.name === 'dockingPortFrontSpotLight' ||
+                child.name === 'dockingPortBackSpotLight' ||
+                child.name === 'dockingPortFrontSpotTarget' ||
+                child.name === 'dockingPortBackSpotTarget'
         );
         visualToRemove.forEach(obj => {
             box.remove(obj);
@@ -119,6 +177,9 @@ export class DockingPortManager {
         }
         this.colliderHandles = [];
         this.cameras = {};
+        this.spotlights = {};
+        this.lightTargets = {};
+        this.lampMeshes = {};
     }
 
     public updateDockingPorts(
@@ -130,5 +191,23 @@ export class DockingPortManager {
     ): void {
         this.removeDockingPorts(box, boxBody, physics);
         this.addDockingPorts(box, boxBody, material, rigid, physics);
+    }
+
+    public setDockingLightsEnabled(enabled: boolean): void {
+        this.setDockingLightEnabled('front', enabled);
+        this.setDockingLightEnabled('back', enabled);
+    }
+
+    public setDockingLightEnabled(id: 'front' | 'back', enabled: boolean): void {
+        this.lightsState[id] = enabled;
+        const light = this.spotlights[id];
+        if (light) light.visible = enabled;
+        const lamp = this.lampMeshes[id];
+        if (lamp && lamp.material && (lamp.material as any).emissive) {
+            const mat = lamp.material as THREE.MeshStandardMaterial;
+            mat.emissive.setHex(enabled ? 0xffffbb : 0x000000);
+            mat.emissiveIntensity = enabled ? 2.0 : 0.0;
+            mat.needsUpdate = true;
+        }
     }
 }
