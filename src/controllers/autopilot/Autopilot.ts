@@ -216,6 +216,11 @@ export class Autopilot {
         );
     }
 
+    // Expose config for helpers like ManualAllocator
+    public getConfig(): AutopilotConfig {
+        return this.config;
+    }
+
     // --- Auto-tune helpers -------------------------------------------------
     private computeAxisInertia(): { x: number; y: number; z: number } {
         const mass = this.spacecraft.getMass();
@@ -432,6 +437,38 @@ export class Autopilot {
         if (this.useWorker && this.worker && this.workerReady) {
             try { this.worker.postMessage({ type: 'setThrusterStrengths', strengths: arr }); } catch {}
         }
+    }
+
+    // Dynamically update thruster grouping after geometry changes
+    public setThrusterGroups(groups: any): void {
+        this.thrusterGroups = groups;
+        try { this.cancelRotationMode.setThrusterGroups(groups); } catch {}
+        try { this.cancelLinearMotionMode.setThrusterGroups(groups); } catch {}
+        try { this.pointToPositionMode.setThrusterGroups(groups); } catch {}
+        try { this.orientationMatchMode.setThrusterGroups(groups); } catch {}
+        try { this.goToPositionMode.setThrusterGroups(groups); } catch {}
+        if (this.useWorker && this.worker && this.workerReady) {
+            try { this.worker.postMessage({ type: 'setThrusterGroups', groups }); } catch {}
+        }
+    }
+
+    // Push current thruster transforms (position+direction) to worker and clear caps caches
+    public refreshThrusters(): void {
+        try {
+            const thrusters = (this.spacecraft.getThrusterConfigs?.() || []).map((t: any) => ({
+                position: [t.position.x, t.position.y, t.position.z] as [number, number, number],
+                direction: [t.direction.x, t.direction.y, t.direction.z] as [number, number, number],
+            }));
+            // Invalidate caps on all modes (thruster layout affects torque capacities)
+            this.cancelRotationMode.invalidateCaps();
+            this.cancelLinearMotionMode.invalidateCaps();
+            this.pointToPositionMode.invalidateCaps();
+            this.orientationMatchMode.invalidateCaps();
+            this.goToPositionMode.invalidateCaps();
+            if (this.useWorker && this.worker && this.workerReady) {
+                this.worker.postMessage({ type: 'setThrusters', thrusters });
+            }
+        } catch {}
     }
 
     // Sets a moving reference for translation modes (relative motion)

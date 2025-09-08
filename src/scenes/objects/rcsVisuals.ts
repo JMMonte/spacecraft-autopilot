@@ -176,6 +176,23 @@ export class RCSVisuals {
         return this.coneMeshes;
     }
 
+    /**
+     * Return per-thruster local transforms for control logic.
+     * - position: local position relative to the spacecraft body origin
+     * - direction: local nozzle direction (+Y of the thruster group)
+     */
+    public getThrusterConfigs(): { position: THREE.Vector3; direction: THREE.Vector3 }[] {
+        const out: { position: THREE.Vector3; direction: THREE.Vector3 }[] = [];
+        for (let i = 0; i < this.thrusterGroups.length; i++) {
+            const g = this.thrusterGroups[i];
+            if (!g) { out.push({ position: new THREE.Vector3(), direction: new THREE.Vector3(0, 1, 0) }); continue; }
+            const pos = new THREE.Vector3(g.position.x, g.position.y, g.position.z);
+            const dir = new THREE.Vector3(0, 1, 0).applyQuaternion(g.quaternion).normalize();
+            out.push({ position: pos, direction: dir });
+        }
+        return out;
+    }
+
     public applyForce(index: number, magnitude: number, dt: number = 0): void {
         // Sanitize inputs and handle zero/invalid magnitudes by turning visuals off
         if (!Number.isFinite(magnitude) || magnitude <= 0 || !this.cones[index]) {

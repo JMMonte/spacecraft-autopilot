@@ -122,6 +122,8 @@ export class Spacecraft {
         // Add a listener for RCS visuals updates
         this.objects.onRCSVisualsUpdate = (newRcsVisuals: RCSVisuals) => {
             this.rcsVisuals = newRcsVisuals;
+            // Propagate new thruster transforms into controller/autopilot
+            try { this.spacecraftController?.refreshThrusterGroups?.(); } catch {}
         };
     }
 
@@ -362,13 +364,17 @@ export class Spacecraft {
     }
 
     public getThrusterConfigs() {
+        try {
+            const cfg = (this.rcsVisuals as any)?.getThrusterConfigs?.();
+            if (Array.isArray(cfg) && cfg.length) return cfg;
+        } catch {}
+        // Fallback to older static layout if needed
         const thrustersData = this.rcsVisuals.getThrusterData();
         return thrustersData.map(data => {
-            const direction = new THREE.Vector3(0, 1, 0);
-            direction.applyAxisAngle(data.rotation.axis, data.rotation.angle);
+            const direction = new THREE.Vector3(0, 1, 0).applyAxisAngle(data.rotation.axis, data.rotation.angle);
             return {
                 position: new THREE.Vector3(...data.position),
-                direction: direction
+                direction,
             };
         });
     }

@@ -196,6 +196,16 @@ type SetThrusterStrengthsMsg = {
   strengths: number[];
 };
 
+type SetThrusterGroupsMsg = {
+  type: 'setThrusterGroups';
+  groups: any;
+};
+
+type SetThrustersMsg = {
+  type: 'setThrusters';
+  thrusters: ThrusterConfig[];
+};
+
 type UpdateMsg = {
   type: 'update';
   dt: number;
@@ -206,7 +216,7 @@ type UpdateMsg = {
   refVel: [number, number, number];
 };
 
-self.onmessage = async (ev: MessageEvent<InitMsg | UpdateMsg | SetGainsMsg | CalibrateMsg | SetThrusterStrengthsMsg>) => {
+self.onmessage = async (ev: MessageEvent<InitMsg | UpdateMsg | SetGainsMsg | CalibrateMsg | SetThrusterStrengthsMsg | SetThrusterGroupsMsg | SetThrustersMsg>) => {
   const data = ev.data;
   if (data.type === 'init') {
     scAdapter = new SpacecraftAdapter();
@@ -261,6 +271,30 @@ self.onmessage = async (ev: MessageEvent<InitMsg | UpdateMsg | SetGainsMsg | Cal
       (autopilot as any)['pointToPositionMode']?.setThrusterMax?.(arr);
       (autopilot as any)['orientationMatchMode']?.setThrusterMax?.(arr);
       (autopilot as any)['goToPositionMode']?.setThrusterMax?.(arr);
+    } catch {}
+    return;
+  }
+  if (data.type === 'setThrusterGroups') {
+    if (!autopilot) return;
+    try {
+      (autopilot as any)['thrusterGroups'] = data.groups;
+      (autopilot as any)['cancelRotationMode']?.setThrusterGroups?.(data.groups);
+      (autopilot as any)['cancelLinearMotionMode']?.setThrusterGroups?.(data.groups);
+      (autopilot as any)['pointToPositionMode']?.setThrusterGroups?.(data.groups);
+      (autopilot as any)['orientationMatchMode']?.setThrusterGroups?.(data.groups);
+      (autopilot as any)['goToPositionMode']?.setThrusterGroups?.(data.groups);
+    } catch {}
+    return;
+  }
+  if (data.type === 'setThrusters') {
+    if (!autopilot || !scAdapter) return;
+    try {
+      scAdapter.setThrusters(data.thrusters);
+      (autopilot as any)['cancelRotationMode']?.invalidateCaps?.();
+      (autopilot as any)['cancelLinearMotionMode']?.invalidateCaps?.();
+      (autopilot as any)['pointToPositionMode']?.invalidateCaps?.();
+      (autopilot as any)['orientationMatchMode']?.invalidateCaps?.();
+      (autopilot as any)['goToPositionMode']?.invalidateCaps?.();
     } catch {}
     return;
   }

@@ -4,6 +4,8 @@ import { SceneHelpers } from '../scenes/sceneHelpers';
 import { Autopilot } from './autopilot/Autopilot';
 import { createLogger } from '../utils/logger';
 import { getBasicThrusterGroups } from '../config/spacecraftConfig';
+import { computeThrusterGroups } from '../utils/utils';
+import { ManualAllocator } from './autopilot/ManualAllocator';
 
 interface KeyMap {
     [key: string]: boolean;
@@ -34,6 +36,7 @@ export class SpacecraftController {
     // Reusable buffers to avoid per-frame allocations
     private manualForcesBuffer: number[] = new Array(24).fill(0);
     private combinedForcesBuffer: number[] = new Array(24).fill(0);
+    private manualAllocator!: ManualAllocator;
 
     constructor(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers) {
         this.log.debug('SpacecraftController constructor called');
@@ -96,13 +99,40 @@ export class SpacecraftController {
             }
         );
 
+        // Manual allocator uses the same config/groups/caps as autopilot
+        this.manualAllocator = new ManualAllocator(
+            this.spacecraft,
+            this.autopilot.getConfig(),
+            thrusterGroups,
+            this.thrust,
+            this.thrusterMax
+        );
+
         // Do not enable autopilot by default; it will turn on when a mode is activated.
         // This avoids running idle workers across many spacecraft.
         this.log.debug('Autopilot created (initially disabled) with thrust:', this.thrust);
     }
 
     private getThrusterGroups() {
+        try {
+            const thrusters = this.spacecraft.getThrusterConfigs?.() || [];
+            if (Array.isArray(thrusters) && thrusters.length) {
+                return computeThrusterGroups(thrusters);
+            }
+        } catch {}
         return getBasicThrusterGroups();
+    }
+
+    /**
+     * Recompute thruster grouping based on current thruster transforms and
+     * propagate updates into the autopilot (main + worker).
+     */
+    public refreshThrusterGroups(): void {
+        const groups = this.getThrusterGroups();
+        try { this.autopilot?.setThrusterGroups(groups); } catch {}
+        try { this.autopilot?.refreshThrusters?.(); } catch {}
+        try { this.manualAllocator?.setThrusterGroups(groups); } catch {}
+        try { this.manualAllocator?.invalidateCaps?.(); } catch {}
     }
 
     public handleKeyDown(event: KeyboardEvent): void {
@@ -372,41 +402,45 @@ export class SpacecraftController {
         return ['KeyU', 'KeyO', 'KeyK', 'KeyI', 'KeyJ', 'KeyL'];
     }
 
-    private keyToThrusters(): ThrusterMap {
-        const g = getBasicThrusterGroups();
-        return {
-            'KeyU': g.forward[0],                    // Forward
-            'KeyO': g.forward[1],                    // Back
-            'KeyJ': g.left[0],                       // Left
-            'KeyL': g.left[1],                       // Right
-            'KeyK': g.up[1],                         // Up (matches previous index set)
-            'KeyI': g.up[0],                         // Down (matches previous index set)
-            'KeyW': g.pitch[0],                      // Pitch up
-            'KeyS': g.pitch[1],                      // Pitch down
-            'KeyQ': g.roll[0],                       // Roll right
-            'KeyE': g.roll[1],                       // Roll left
-            'KeyA': g.yaw[0],                        // Yaw left
-            'KeyD': g.yaw[1],                        // Yaw right
-        };
-    }
-
     private calculateManualForces(): number[] {
-        const forces = this.manualForcesBuffer;
-        for (let i = 0; i < 24; i++) forces[i] = 0;
+        const out = this.manualForcesBuffer;
+        for (let i = 0; i < 24; i++) out[i] = 0;
 
-        Object.entries(this.keyToThrusters()).forEach(([key, indices]) => {
-            if (!this.keysPressed[key]) return;
+        // 1) Build desired local translation vector
+        // Semantics preserved: U (+Z fwd), O (-Z back), J (-X left), L (+X right), K (+Y up), I (-Y down)
+        const lin = new THREE.Vector3(0, 0, 0);
+        if (this.keysPressed['KeyU']) lin.z += 1; // forward
+        if (this.keysPressed['KeyO']) lin.z -= 1; // back
+        if (this.keysPressed['KeyJ']) lin.x -= 1; // left
+        if (this.keysPressed['KeyL']) lin.x += 1; // right
+        if (this.keysPressed['KeyK']) lin.y += 1; // up
+        if (this.keysPressed['KeyI']) lin.y -= 1; // down
 
-            // rotation => half thrust
-            const isRotation = this.rotationKeys().includes(key);
-            const forceMag = isRotation ? this.thrust / 2 : this.thrust;
+        // Scale to saturate per-axis groups (allocator clamps to group capacity)
+        const linScale = this.thrust * 24; // large enough to reach clamp
+        lin.multiplyScalar(linScale);
 
-            indices.forEach(idx => {
-                forces[idx] = forceMag;
-            });
-        });
+        // 2) Build desired rotational command vector (use autopilot's momentum-domain scaling)
+        const rot = new THREE.Vector3(0, 0, 0);
+        if (this.keysPressed['KeyW']) rot.x += 1; // pitch up
+        if (this.keysPressed['KeyS']) rot.x -= 1; // pitch down
+        if (this.keysPressed['KeyA']) rot.y += 1; // yaw left
+        if (this.keysPressed['KeyD']) rot.y -= 1; // yaw right
+        if (this.keysPressed['KeyQ']) rot.z += 1; // roll right
+        if (this.keysPressed['KeyE']) rot.z -= 1; // roll left
 
-        return forces;
+        // Use Lcap so a unit command saturates thrusters per axis inside allocator
+        const Lcap = Math.max(1e-6, this.autopilot.getConfig().limits.maxAngularMomentum);
+        rot.multiplyScalar(Lcap);
+
+        // 3) Allocate using the same distribution rules as the autopilot
+        // Translation first, then add rotation on top
+        this.manualAllocator.allocateTranslation(lin, out);
+        const tmp = new Array(24).fill(0);
+        this.manualAllocator.allocateRotation(rot, tmp);
+        for (let i = 0; i < 24; i++) out[i] += tmp[i];
+
+        return out;
     }
 
     public cleanup(): void {
@@ -439,6 +473,7 @@ export class SpacecraftController {
         if (!Array.isArray(max) || max.length !== 24) return;
         this.thrusterMax = max.slice(0, 24);
         try { this.autopilot?.setThrusterStrengths(this.thrusterMax); } catch {}
+        try { this.manualAllocator?.setThrusterMax(this.thrusterMax); } catch {}
     }
 
     public getSpacecraft(): Spacecraft {

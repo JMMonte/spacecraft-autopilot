@@ -72,6 +72,17 @@ export abstract class AutopilotMode {
         this.thrusterMax = (thrusterMax && thrusterMax.length === 24) ? thrusterMax.slice(0, 24) : new Array(24).fill(thrust);
     }
 
+    // Update grouping dynamically (e.g., when RCS transforms change)
+    public setThrusterGroups(groups: any): void {
+        this.thrusterGroups = groups;
+        this.capsCache = undefined;
+    }
+
+    // Invalidate cached capability calculations (e.g., after thruster layout change)
+    public invalidateCaps(): void {
+        this.capsCache = undefined;
+    }
+
     // Update per-thruster capacities at runtime and invalidate cached caps
     public setThrusterMax(max: number[]): void {
         if (Array.isArray(max) && max.length === 24) this.thrusterMax = max.slice(0, 24);
