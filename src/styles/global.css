@@ -1,6 +1,7 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Allow @apply to reference Tailwind utilities in this file (Tailwind v4) */
+@reference "tailwindcss";
 
 /* Custom styles that can't be handled by Tailwind */
 @layer base {
