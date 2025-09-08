@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, ChangeEvent } from 'react';
+import type { JSX } from 'react';
 import * as THREE from 'three';
 import { Spacecraft } from '../../core/spacecraft';
 import { SpacecraftController } from '../../controllers/spacecraftController';

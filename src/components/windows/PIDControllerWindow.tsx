@@ -1,4 +1,4 @@
-import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import React, { ChangeEvent, useEffect, useState } from 'react';
 import { NumberInput } from '../ui/NumberInput';
 import { PIDController } from '../../controllers/pidController';
 import type { Autopilot } from '../../controllers/autopilot/Autopilot';

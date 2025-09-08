@@ -300,8 +300,8 @@ class RapierPhysics implements PhysicsEngine {
     if (inds.length >= 3) {
       try {
         const colDesc = R.ColliderDesc.trimesh(verts, inds);
-        // Treat large environment meshes as sensors to avoid heavy contact resolution
-        try { colDesc.setSensor(true); } catch (_) {}
+        // Solid collider for trimesh so asteroids physically collide
+        // (was previously a sensor, which disabled contact response).
         this.world.createCollider(colDesc, rb);
       } catch (_) {
         // Fallback to cuboid using bounds
@@ -317,7 +317,7 @@ class RapierPhysics implements PhysicsEngine {
         const hy = Math.max(1e-3, (maxY - minY) * 0.5);
         const hz = Math.max(1e-3, (maxZ - minZ) * 0.5);
         const cd = R.ColliderDesc.cuboid(hx, hy, hz);
-        try { cd.setSensor(true); } catch (_) {}
+        // Solid cuboid fallback collider
         this.world.createCollider(cd, rb);
       }
     } else {
@@ -334,7 +334,7 @@ class RapierPhysics implements PhysicsEngine {
       const hy = Math.max(1e-3, (maxY - minY) * 0.5);
       const hz = Math.max(1e-3, (maxZ - minZ) * 0.5);
       const cd = R.ColliderDesc.cuboid(hx, hy, hz);
-      try { cd.setSensor(true); } catch (_) {}
+      // Solid cuboid fallback collider
       this.world.createCollider(cd, rb);
     }
     const entry = { rb, cache: { p: { x: 0, y: 0, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 }, lv: { x: 0, y: 0, z: 0 }, av: { x: 0, y: 0, z: 0 } } };

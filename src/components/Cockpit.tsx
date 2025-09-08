@@ -179,7 +179,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
     const horizonCameraRef = useRef<THREE.PerspectiveCamera | THREE.OrthographicCamera | null>(null);
     const horizonRendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const sphereMeshRef = useRef<THREE.Mesh | null>(null);
-    const targetArrowRef = useRef<THREE.Object3D | null>(null);
+    const targetArrowRef = useRef<THREE.Mesh | null>(null);
 
     // Reactful resize handling using ResizeObserver on the UI container
     const uiContainerRef = useRef<HTMLDivElement>(null);

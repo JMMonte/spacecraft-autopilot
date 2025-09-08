@@ -28,7 +28,8 @@ export default defineConfig({
         outDir: 'dist',
         assetsDir: 'assets',
         sourcemap: true,
-        chunkSizeWarningLimit: 1000,
+        // Increase warning threshold; large WASM/vendor chunks are expected (Rapier/Three)
+        chunkSizeWarningLimit: 2500,
         rollupOptions: {
             output: {
                 manualChunks: {

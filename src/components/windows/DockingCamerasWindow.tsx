@@ -38,7 +38,6 @@ export const DockingCamerasWindow: React.FC<DockingCamerasWindowProps> = ({ worl
 
     return (
         <div className="flex flex-col gap-2">
-            <div className="text-sm text-white/70">Click a camera to toggle its window</div>
             <div className="divide-y divide-white/10 rounded border border-white/10 overflow-hidden">
                 {spacecraftList.length === 0 && (
                     <div className="px-3 py-2 text-white/60 text-xs">No spacecraft available</div>

@@ -35,6 +35,7 @@ export class SpacecraftController {
     private manualForcesBuffer: number[] = new Array(24).fill(0);
     private combinedForcesBuffer: number[] = new Array(24).fill(0);
     private manualAllocator!: ManualAllocator;
+    // no waypoint planner
 
     constructor(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers) {
         this.log.debug('SpacecraftController constructor called');
@@ -221,6 +222,8 @@ export class SpacecraftController {
             // Sync autopilots across docked cluster so they act as one (only when not currently docked)
             this.syncDockedAutopilots();
         }
+
+        // no waypoint-following orchestration
 
         // 1) Manual forces from user
         const manualForces = this.calculateManualForces();
@@ -493,6 +496,8 @@ export class SpacecraftController {
     public destroy(): void {
         // No-op; BasicWorld manages global listeners
     }
+
+    // no waypoint utilities
 
     /**
      * Immediately clear any latched thruster outputs and hide RCS visuals.

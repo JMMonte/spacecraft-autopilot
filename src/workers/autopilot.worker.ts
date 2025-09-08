@@ -188,7 +188,9 @@ type SetGainsMsg = {
 
 type CalibrateMsg = {
   type: 'calibrate';
-  targets: Array<'rotation' | 'linear' | 'momentum'>;
+  // Accept legacy names ('attitude', 'rotCancel') in addition to current
+  // categories to keep messages forward/backward compatible.
+  targets: Array<'rotation' | 'linear' | 'momentum' | 'attitude' | 'rotCancel'>;
 };
 
 type SetThrusterStrengthsMsg = {

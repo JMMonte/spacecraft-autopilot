@@ -69,6 +69,10 @@ export class InfiniteGrid {
     const fragmentShader = /* glsl */`
       #include <common>
       #include <logdepthbuf_pars_fragment>
+      // Enable standard derivatives on WebGL1 for fwidth/dFdx/dFdy
+      #ifdef GL_OES_standard_derivatives
+      #extension GL_OES_standard_derivatives : enable
+      #endif
       precision highp float;
       varying vec3 vWorldPos;
 
@@ -136,8 +140,7 @@ export class InfiniteGrid {
       side: THREE.DoubleSide,
       name: 'InfiniteGridMaterial',
     });
-    // Ensure derivative functions (fwidth) work across WebGL1/2
-    this.material.extensions = { ...this.material.extensions, derivatives: true };
+    // Derivative functions (fwidth) are available in WebGL2; for WebGL1, three.js injects fallbacks where possible.
 
     this.mesh = new THREE.Mesh(geometry, this.material);
     this.mesh.rotation.x = -Math.PI / 2; // lay on XZ plane

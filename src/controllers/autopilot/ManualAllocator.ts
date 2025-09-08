@@ -21,7 +21,7 @@ export class ManualAllocator extends AutopilotMode {
       thrusterGroups,
       thrust,
       // Dummy PID, not used
-      new PIDController(0, 0, 0, 'manual'),
+      new PIDController(0, 0, 0, 'linearMomentum'),
       thrusterMax
     );
   }
@@ -53,4 +53,3 @@ export class ManualAllocator extends AutopilotMode {
   // Not used by manual control
   calculateForces(_dt: number, _out?: number[]): number[] { return new Array(24).fill(0); }
 }
-

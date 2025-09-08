@@ -15,7 +15,7 @@
     "jsx": "react-jsx",
     // Ensure React DOM JSX types are loaded in editors even if TS server
     // doesn't auto-detect dependency types
-    "types": ["react", "react-dom", "node"],
+    "types": ["react", "react-dom", "node", "vite/client"],
 
     /* Linting */
     "strict": true,
