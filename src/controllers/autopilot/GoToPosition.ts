@@ -83,8 +83,8 @@ export class GoToPosition extends AutopilotMode {
 
         // Local frame quantities
         const dirLocal = this.tmpVecE.copy(dirWorld).applyQuaternion(qInv);
-        const velLocal = relVelocityWorld.applyQuaternion(qInv);
-        const posErrLocal = posErrWorld.applyQuaternion(qInv);
+        const velLocal = relVelocityWorld.clone().applyQuaternion(qInv);
+        const posErrLocal = posErrWorld.clone().applyQuaternion(qInv);
 
         // Guidance: estimate dynamic accel caps
         // Dynamic acceleration capability projected along desired direction
@@ -108,6 +108,7 @@ export class GoToPosition extends AutopilotMode {
         // Distance-derived speed cap from stopping distance formula (no fixed vMax)
         const vStopCap = Math.sqrt(2 * aMax * Math.max(dist, 0));
 
+        // Project world-relative velocity along world direction to target
         const vAlong = relVelocityWorld.dot(dirWorld);
         const dStop = (vAlong * vAlong) / (2 * Math.max(aMax, 1e-6));
         const nearLinearKV = 2.0; // m/s per m in close range
@@ -137,12 +138,12 @@ export class GoToPosition extends AutopilotMode {
         // Zero-Effort Miss/Velocity guidance (relative to moving reference)
         // ZEM = posErr - vRel * tGo, ZEV = -vRel
         const ZEV = relVelocityWorld.clone().multiplyScalar(-1); // keep relVelocityWorld for telemetry
-        const ZEM = posErrWorld.sub(relVelocityWorld.clone().multiplyScalar(tGo));
+        const ZEM = posErrWorld.clone().sub(relVelocityWorld.clone().multiplyScalar(tGo));
         const kR = 6.0 / (tGo * tGo);
         const kV = 4.0 / Math.max(tGo, 1e-6);
         const aCmdWorld = ZEM.multiplyScalar(kR).add(ZEV.multiplyScalar(kV));
-        // Transform to local for axis-wise saturation
-        let aCmdLocal = aCmdWorld.applyQuaternion(qInv);
+        // Transform to local for axis-wise saturation (do not mutate world vector)
+        let aCmdLocal = aCmdWorld.clone().applyQuaternion(qInv);
         // Axis caps in local frame with alignment scaling
         const axCap = Math.min(this.config.limits.maxLinearAcceleration ?? Infinity, caps.linAccel.x * alignScale);
         const ayCap = Math.min(this.config.limits.maxLinearAcceleration ?? Infinity, caps.linAccel.y * alignScale);

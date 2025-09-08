@@ -20,10 +20,10 @@ export function SpacecraftListWindow({
   onDeleteSpacecraft, 
   version 
 }: SpacecraftListWindowProps) {
-  const otherSpacecraft = useMemo(() => {
-    // Get spacecraft list from BasicWorld
-    return world?.getSpacecraftList()?.filter(s => s !== activeSpacecraft) ?? [];
-  }, [world, activeSpacecraft, version]);
+  const spacecraftList = useMemo(() => {
+    // Get spacecraft list from BasicWorld in creation order
+    return world?.getSpacecraftList() ?? [];
+  }, [world, version]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -38,48 +38,45 @@ export function SpacecraftListWindow({
 
       {/* Spacecraft List */}
       <div className="flex flex-col gap-1">
-        {/* Active spacecraft */}
-        {activeSpacecraft && (
-          <div
-            className="flex items-center gap-2 px-1 py-0.5 rounded border text-[10px] font-mono bg-cyan-500/30 border-cyan-500/50 text-white"
-          >
-            <button className="flex-grow text-left">
-              {activeSpacecraft.name} (Active)
-            </button>
-          </div>
-        )}
-
-        {/* Other spacecraft */}
-        {otherSpacecraft.length > 0 ? (
-          otherSpacecraft.map((spacecraft: Spacecraft) => (
-            <div
-              key={spacecraft.name}
-              className="flex items-center gap-2 px-1 py-0.5 rounded border text-[10px] font-mono bg-black/40 border-white/20 text-white/90 hover:bg-white/20"
-            >
-              {/* Spacecraft Name & Selection */}
-              <button
-                className="flex-grow text-left"
-                onClick={() => onSelectSpacecraft(spacecraft)}
+        {spacecraftList.length > 0 ? (
+          spacecraftList.map((spacecraft: Spacecraft) => {
+            const isActive = spacecraft === activeSpacecraft;
+            const containerClass = isActive
+              ? 'bg-cyan-500/30 border-cyan-500/50 text-white'
+              : 'bg-black/40 border-white/20 text-white/90 hover:bg-white/20';
+            return (
+              <div
+                key={spacecraft.name}
+                className={`flex items-center gap-2 px-1 py-0.5 rounded border text-[10px] font-mono ${containerClass}`}
               >
-                {spacecraft.name}
-              </button>
+                {/* Spacecraft Name & Selection */}
+                <button
+                  className="flex-grow text-left"
+                  onClick={() => !isActive && onSelectSpacecraft(spacecraft)}
+                  disabled={isActive}
+                >
+                  {spacecraft.name}{isActive ? ' (Active)' : ''}
+                </button>
 
-              {/* Delete Button */}
-              <button
-                className="text-red-400/70 hover:text-red-400 transition-colors"
-                onClick={() => onDeleteSpacecraft(spacecraft)}
-                title="Delete Spacecraft"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          ))
+                {/* Delete Button for non-active spacecraft */}
+                {!isActive && (
+                  <button
+                    className="text-red-400/70 hover:text-red-400 transition-colors"
+                    onClick={() => onDeleteSpacecraft(spacecraft)}
+                    title="Delete Spacecraft"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            );
+          })
         ) : (
           <div className="text-white/50 italic text-center bg-black/40 p-1 rounded border border-white/10 text-[10px]">
-            No other spacecraft available
+            No spacecraft available
           </div>
         )}
       </div>
     </div>
   );
-} 
+}

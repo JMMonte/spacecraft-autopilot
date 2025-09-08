@@ -35,6 +35,7 @@ export class Autopilot {
     private useWorker: boolean = true;
     private worker?: Worker;
     private workerReady: boolean = false;
+    private workerTelemetry: { point?: any; orient?: any; goto?: any } = {};
     // Output buffer and scheduling
     private forcesBuffer: number[] = new Array(24).fill(0);
     private updateInterval: number = 1 / 30; // run autopilot at 30 Hz to reduce load
@@ -238,6 +239,13 @@ export class Autopilot {
             if (data?.type === 'forces' && data.forces) {
                 const arr: Float32Array = data.forces;
                 for (let i = 0; i < 24; i++) this.forcesBuffer[i] = arr[i] || 0;
+                // Snapshot telemetry from worker for UI polling
+                try {
+                    const t = data.telemetry || {};
+                    this.workerTelemetry.point = t.point || this.workerTelemetry.point;
+                    this.workerTelemetry.orient = t.orient || this.workerTelemetry.orient;
+                    this.workerTelemetry.goto = t.goto || this.workerTelemetry.goto;
+                } catch {}
                 return;
             }
         };
@@ -571,12 +579,15 @@ export class Autopilot {
 
     // Telemetry accessors for UI
     public getPointToPositionTelemetry(): any {
+        if (this.useWorker && this.worker) return this.workerTelemetry.point ?? (this.pointToPositionMode as any)?.getTelemetry?.();
         return (this.pointToPositionMode as any)?.getTelemetry?.();
     }
     public getOrientationMatchTelemetry(): any {
+        if (this.useWorker && this.worker) return this.workerTelemetry.orient ?? (this.orientationMatchMode as any)?.getTelemetry?.();
         return (this.orientationMatchMode as any)?.getTelemetry?.();
     }
     public getGoToPositionTelemetry(): any {
+        if (this.useWorker && this.worker) return this.workerTelemetry.goto ?? (this.goToPositionMode as any)?.getTelemetry?.();
         return (this.goToPositionMode as any)?.getTelemetry?.();
     }
 }

@@ -19,6 +19,8 @@ import { DockingWindow } from './windows/DockingWindow';
 import { DockingCamerasWindow } from './windows/DockingCamerasWindow';
 import { DockingCameraView, PortId as DockingPortId } from './windows/DockingCameraView';
 import { Spacecraft } from '../core/spacecraft';
+import { RangeInput } from './ui/RangeInput';
+import { NumberInput } from './ui/NumberInput';
 import { useElementSize } from '../hooks/useElementSize';
 import { SpacecraftController } from '../controllers/spacecraftController';
 
@@ -160,9 +162,12 @@ export const Cockpit: React.FC<CockpitProps> = ({
     // Per-camera draggable windows + z-order
     const [cameraWindows, setCameraWindows] = useState<Record<CameraKey, CameraWindowState>>({});
     const [cameraWindowZ, setCameraWindowZ] = useState<Record<CameraKey, number>>({});
+    const [activeCameraKey, setActiveCameraKey] = useState<CameraKey | null>(null);
+    const [fovValue, setFovValue] = useState<number | null>(null);
     const bringCameraWindowToFront = (key: CameraKey) => {
         setCameraWindowZ(prev => ({ ...prev, [key]: zCounter + 1 }));
         setZCounter(prev => prev + 1);
+        setActiveCameraKey(key);
     };
 
     // Refs
@@ -186,7 +191,9 @@ export const Cockpit: React.FC<CockpitProps> = ({
             const key: CameraKey = `${spacecraftUuid}:${portId}`;
             const existing = prev[key];
             if (existing) {
-                return { ...prev, [key]: { ...existing, open: !existing.open } };
+                const nextOpen = !existing.open;
+                if (nextOpen) setActiveCameraKey(key);
+                return { ...prev, [key]: { ...existing, open: nextOpen } };
             }
             // New window: position it near the docking cameras window by default
             const basePos = windowPositions.dockingCameras || { x: 20, y: 20 };
@@ -200,6 +207,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 position: { x: basePos.x + 280 + offset, y: basePos.y + offset },
                 size: { width: 320, height: 200 },
             };
+            setActiveCameraKey(key);
             return { ...prev, [key]: newWin };
         });
         setCameraWindowZ(prev => {
@@ -506,6 +514,38 @@ export const Cockpit: React.FC<CockpitProps> = ({
         initializeHorizon();
     }, []);
 
+    // Sync global FOV UI with the active camera's FOV
+    useEffect(() => {
+        if (!activeCameraKey) { setFovValue(null); return; }
+        const [uuid, port] = activeCameraKey.split(':') as [string, DockingPortId];
+        const sc = world?.getSpacecraftList?.().find(s => s.uuid === uuid) ?? null;
+        const cam = sc?.getDockingPortCamera(port);
+        if (cam) setFovValue(cam.fov);
+        else setFovValue(null);
+    }, [activeCameraKey, world, spacecraftListVersion]);
+
+    const handleFovSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const v = Math.min(120, Math.max(20, Number(e.target.value)));
+        setFovValue(v);
+        if (!activeCameraKey) return;
+        const [uuid, port] = activeCameraKey.split(':') as [string, DockingPortId];
+        const sc = world?.getSpacecraftList?.().find(s => s.uuid === uuid) ?? null;
+        const cam = sc?.getDockingPortCamera(port);
+        if (cam) { cam.fov = v; cam.updateProjectionMatrix(); }
+    };
+
+    const handleFovInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const raw = Number(e.target.value);
+        if (!Number.isFinite(raw)) return;
+        const v = Math.min(120, Math.max(20, raw));
+        setFovValue(v);
+        if (!activeCameraKey) return;
+        const [uuid, port] = activeCameraKey.split(':') as [string, DockingPortId];
+        const sc = world?.getSpacecraftList?.().find(s => s.uuid === uuid) ?? null;
+        const cam = sc?.getDockingPortCamera(port);
+        if (cam) { cam.fov = v; cam.updateProjectionMatrix(); }
+    };
+
     const toggleWindow = (windowName: string) => {
         setVisibleWindows(prev => {
             const key = windowName as WindowKey;
@@ -745,6 +785,37 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 >
                     <Command size={14} />
                 </button>
+
+                {/* Global FOV control fixed at bottom of the window */}
+                {Object.values(cameraWindows).some(w => w.open) && (
+                    <div
+                        className="fixed left-2 right-10 bottom-2 pointer-events-none"
+                        style={{ zIndex: zCounter + 100 }}
+                    >
+                        <div className="flex items-end gap-2 bg-black/60 backdrop-blur px-2 py-2 rounded border border-white/20 pointer-events-auto">
+                            <div className="flex-1 min-w-[180px]">
+                                <RangeInput
+                                    label="FOV"
+                                    unit="deg"
+                                    value={fovValue}
+                                    onChange={handleFovSlider}
+                                    min={20}
+                                    max={120}
+                                    step={1}
+                                    className="text-[10px]"
+                                />
+                            </div>
+                            <div className="w-20">
+                                <NumberInput
+                                    value={Number.isFinite(fovValue as number) ? Number((fovValue ?? 60).toFixed(1)) : 60}
+                                    onChange={handleFovInput}
+                                    step={1}
+                                    className="text-[10px]"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
 
             <KeyboardShortcuts

@@ -125,7 +125,7 @@ class WorkerAutopilot {
     this.goToPositionMode.setReferenceVelocityWorld(this.referenceVelocityWorld);
   }
 
-  compute(dt: number, active: { orientationMatch: boolean; cancelRotation: boolean; cancelLinearMotion: boolean; pointToPosition: boolean; goToPosition: boolean }): Float32Array {
+  compute(dt: number, active: { orientationMatch: boolean; cancelRotation: boolean; cancelLinearMotion: boolean; pointToPosition: boolean; goToPosition: boolean }): { forces: Float32Array; telemetry: { point?: any; orient?: any; goto?: any } } {
     // Update targetOrientation if pointing to a position (like main thread version)
     if (active.pointToPosition) {
       const q = this.sc.getWorldOrientationRef();
@@ -146,7 +146,13 @@ class WorkerAutopilot {
     if (active.pointToPosition) this.pointToPositionMode.calculateForces(dt, out);
     if (active.orientationMatch) this.orientationMatchMode.calculateForces(dt, out);
     if (active.goToPosition) this.goToPositionMode.calculateForces(dt, out);
-    return Float32Array.from(out);
+    const forces = Float32Array.from(out);
+    const telemetry = {
+      point: active.pointToPosition ? (this.pointToPositionMode as any)?.getTelemetry?.() : undefined,
+      orient: active.orientationMatch ? (this.orientationMatchMode as any)?.getTelemetry?.() : undefined,
+      goto: active.goToPosition ? (this.goToPositionMode as any)?.getTelemetry?.() : undefined,
+    };
+    return { forces, telemetry };
   }
 }
 
@@ -192,9 +198,9 @@ self.onmessage = async (ev: MessageEvent<InitMsg | UpdateMsg>) => {
     scAdapter.updateSnapshot(data.snapshot);
     autopilot.setTargets(data.targetPos, data.targetQuat);
     autopilot.setReferenceVelocity(data.refVel);
-    const forces = autopilot.compute(data.dt, data.active);
+    const { forces, telemetry } = autopilot.compute(data.dt, data.active);
     // Transfer array buffer for performance
-    (self as any).postMessage({ type: 'forces', forces }, [forces.buffer]);
+    (self as any).postMessage({ type: 'forces', forces, telemetry }, [forces.buffer]);
     return;
   }
 };

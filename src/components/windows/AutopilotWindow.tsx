@@ -1,10 +1,11 @@
-import React, { useState, useEffect, ChangeEvent } from 'react';
+import React, { useState, useEffect, useRef, ChangeEvent } from 'react';
 import * as THREE from 'three';
 import { Spacecraft } from '../../core/spacecraft';
 import { SpacecraftController } from '../../controllers/spacecraftController';
 import { BasicWorld } from '../../core/BasicWorld';
 import { NumberInput } from '../ui/NumberInput';
 import { useAutopilot } from '../../state/store';
+import { TargetGizmo } from '../../scenes/objects/TargetGizmo';
 
 interface AutopilotWindowProps {
     spacecraft: Spacecraft | null;
@@ -18,6 +19,7 @@ interface TargetSettings {
     targetPoint: 'center' | 'front' | 'back';
     selectedSpacecraft: Spacecraft | null;
     customPosition: THREE.Vector3;
+    customOrientation?: THREE.Quaternion;
 }
 
 interface TargetSettingsMap {
@@ -40,6 +42,8 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
 
     const autopilot = controller?.getAutopilot();
     const [apTelemetry, setApTelemetry] = useState<any | null>(null);
+    const gizmoRef = useRef<TargetGizmo | null>(null);
+    const [gizmoMode, setGizmoMode] = useState<'translate' | 'rotate'>('translate');
 
     // Update spacecraft list when version changes
     useEffect(() => {
@@ -54,7 +58,8 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                 targetType: 'custom',
                 targetPoint: 'center',
                 selectedSpacecraft: null,
-                customPosition: autopilot?.getTargetPosition()?.clone() || new THREE.Vector3()
+                customPosition: autopilot?.getTargetPosition()?.clone() || new THREE.Vector3(),
+                customOrientation: autopilot?.getTargetOrientation()?.clone() || new THREE.Quaternion()
             };
 
             setTargetType(savedSettings.targetType);
@@ -70,10 +75,61 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                     autopilot.setTargetObject(target, savedSettings.targetPoint);
                 } else if (savedSettings.customPosition) {
                     autopilot.setTargetPosition(savedSettings.customPosition);
+                    if (savedSettings.customOrientation) {
+                        autopilot.setTargetOrientation(savedSettings.customOrientation);
+                    }
                 }
             }
         }
     }, [spacecraft?.name, world, autopilot, version]);
+
+    // Create/teardown the 3D drag gizmo when using a custom target position
+    useEffect(() => {
+        if (!world || !autopilot) return;
+
+        const shouldShow = targetType === 'custom';
+        if (shouldShow && !gizmoRef.current) {
+            try {
+                const scene = world.camera.scene as unknown as THREE.Scene;
+                const camera = world.camera.camera as unknown as THREE.Camera;
+                const dom = world.renderer.renderer.domElement as unknown as HTMLElement;
+                const initialPos = autopilot.getTargetPosition()?.clone?.() || new THREE.Vector3();
+                const initialQuat = autopilot.getTargetOrientation()?.clone?.() || new THREE.Quaternion();
+
+                gizmoRef.current = new TargetGizmo(
+                    scene,
+                    camera,
+                    dom,
+                    (pos: THREE.Vector3, quat: THREE.Quaternion) => {
+                        // Push updates into autopilot + persist settings
+                        autopilot.setTargetPosition(pos.clone());
+                        autopilot.setTargetOrientation(quat.clone());
+                        saveSettings({ customPosition: pos.clone(), customOrientation: quat.clone() });
+                    },
+                    { size: 0.9, mode: gizmoMode },
+                    (world.camera.controls as unknown as { enabled: boolean })
+                );
+                gizmoRef.current.setPosition(initialPos);
+                gizmoRef.current.setOrientation(initialQuat);
+                gizmoRef.current.setVisible(true);
+            } catch (err) {
+                console.warn('Failed to initialize TargetGizmo:', err);
+            }
+        } else if (!shouldShow && gizmoRef.current) {
+            // Hide and destroy when not in custom target mode
+            try { gizmoRef.current.setVisible(false); } catch {}
+            try { gizmoRef.current.dispose(); } catch {}
+            gizmoRef.current = null;
+        }
+
+        // Cleanup on unmount
+        return () => {
+            if (gizmoRef.current) {
+                try { gizmoRef.current.dispose(); } catch {}
+                gizmoRef.current = null;
+            }
+        };
+    }, [world, autopilot, targetType]);
 
     // Poll autopilot telemetry periodically for display
     useEffect(() => {
@@ -94,13 +150,14 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
     const saveSettings = (updates: Partial<TargetSettings> = {}) => {
         if (!spacecraft?.name) return;
 
-        const currentSettings = targetSettings[spacecraft.name] || {};
+        const currentSettings = targetSettings[spacecraft.name] || {} as Partial<TargetSettings>;
         const newSettings: TargetSettings = {
             ...currentSettings,
             targetType,
             targetPoint,
             selectedSpacecraft,
             customPosition: autopilot?.getTargetPosition()?.clone() || new THREE.Vector3(),
+            customOrientation: autopilot?.getTargetOrientation()?.clone() || new THREE.Quaternion(),
             ...updates
         };
 
@@ -122,9 +179,37 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
         if (target && autopilot) {
             autopilot.setTargetObject(target, targetPoint);
             saveSettings({ selectedSpacecraft: target });
+            // Switching to an object target: hide gizmo if present
+            if (gizmoRef.current) {
+                try { gizmoRef.current.dispose(); } catch {}
+                gizmoRef.current = null;
+            }
         } else if (autopilot) {
             autopilot.clearTargetObject();
             saveSettings({ selectedSpacecraft: null });
+            // If in custom mode, restore gizmo at the current position
+            if (targetType === 'custom' && world && !gizmoRef.current) {
+                try {
+                    const scene = world.camera.scene as unknown as THREE.Scene;
+                    const camera = world.camera.camera as unknown as THREE.Camera;
+                    const dom = world.renderer.renderer.domElement as unknown as HTMLElement;
+                    gizmoRef.current = new TargetGizmo(
+                        scene,
+                        camera,
+                        dom,
+                        (pos: THREE.Vector3, quat: THREE.Quaternion) => {
+                            autopilot.setTargetPosition(pos.clone());
+                            autopilot.setTargetOrientation(quat.clone());
+                            saveSettings({ customPosition: pos.clone(), customOrientation: quat.clone() });
+                        },
+                        { size: 0.9, mode: gizmoMode },
+                        (world.camera.controls as unknown as { enabled: boolean })
+                    );
+                    gizmoRef.current.setPosition(autopilot.getTargetPosition()?.clone?.() || new THREE.Vector3());
+                    gizmoRef.current.setOrientation(autopilot.getTargetOrientation()?.clone?.() || new THREE.Quaternion());
+                    gizmoRef.current.setVisible(true);
+                } catch {}
+            }
         }
     };
 
@@ -145,9 +230,41 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
         if (type === 'custom' && autopilot) {
             autopilot.clearTargetObject();
             saveSettings({ targetType: type });
+            // Ensure gizmo exists and is positioned correctly
+            if (world && !gizmoRef.current) {
+                try {
+                    const scene = world.camera.scene as unknown as THREE.Scene;
+                    const camera = world.camera.camera as unknown as THREE.Camera;
+                    const dom = world.renderer.renderer.domElement as unknown as HTMLElement;
+                    gizmoRef.current = new TargetGizmo(
+                        scene,
+                        camera,
+                        dom,
+                        (pos: THREE.Vector3, quat: THREE.Quaternion) => {
+                            autopilot.setTargetPosition(pos.clone());
+                            autopilot.setTargetOrientation(quat.clone());
+                            saveSettings({ customPosition: pos.clone(), customOrientation: quat.clone() });
+                        },
+                        { size: 0.9, mode: gizmoMode },
+                        (world.camera.controls as unknown as { enabled: boolean })
+                    );
+                    gizmoRef.current.setPosition(autopilot.getTargetPosition()?.clone?.() || new THREE.Vector3());
+                    gizmoRef.current.setOrientation(autopilot.getTargetOrientation()?.clone?.() || new THREE.Quaternion());
+                    gizmoRef.current.setVisible(true);
+                } catch {}
+            } else if (gizmoRef.current) {
+                gizmoRef.current.setVisible(true);
+                gizmoRef.current.setPosition(autopilot.getTargetPosition()?.clone?.() || new THREE.Vector3());
+                gizmoRef.current.setOrientation(autopilot.getTargetOrientation()?.clone?.() || new THREE.Quaternion());
+            }
         } else if (type === 'spacecraft' && selectedSpacecraft && autopilot) {
             autopilot.setTargetObject(selectedSpacecraft, targetPoint);
             saveSettings({ targetType: type });
+            // Hide gizmo when not using a custom target
+            if (gizmoRef.current) {
+                try { gizmoRef.current.dispose(); } catch {}
+                gizmoRef.current = null;
+            }
         }
     };
 
@@ -159,6 +276,10 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
         newPosition[axis] = parseFloat(value);
         autopilot.setTargetPosition(newPosition);
         saveSettings({ customPosition: newPosition });
+        // Reflect in gizmo immediately
+        if (gizmoRef.current) {
+            gizmoRef.current.setPosition(newPosition);
+        }
     };
 
     const autopilotButtons: AutopilotButton[] = [
@@ -244,6 +365,18 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                     </div>
                 ) : (
                     <div className="space-y-0.5">
+                        <div className="flex items-center gap-1">
+                            <button
+                                className={`px-1 py-0.5 text-[10px] border ${gizmoMode === 'translate' ? 'bg-cyan-300/20 border-cyan-300/40' : 'bg-black/60 border-white/20'}`}
+                                onClick={() => { setGizmoMode('translate'); gizmoRef.current?.setMode('translate'); }}
+                                title="Move gizmo"
+                            >Move</button>
+                            <button
+                                className={`px-1 py-0.5 text-[10px] border ${gizmoMode === 'rotate' ? 'bg-cyan-300/20 border-cyan-300/40' : 'bg-black/60 border-white/20'}`}
+                                onClick={() => { setGizmoMode('rotate'); gizmoRef.current?.setMode('rotate'); }}
+                                title="Rotate gizmo"
+                            >Rotate</button>
+                        </div>
                         {(['x', 'y', 'z'] as const).map(axis => (
                             <div key={axis} className="flex items-center gap-1">
                                 <label className="text-[10px] text-cyan-300/90 font-mono w-4">{axis}</label>
