@@ -11,9 +11,7 @@ interface KeyMap {
     [key: string]: boolean;
 }
 
-interface ThrusterMap {
-    [key: string]: number[];
-}
+// Removed unused ThrusterMap after switching manual control to vector allocation
 
 export class SpacecraftController {
     private log = createLogger('controllers:SpacecraftController');
