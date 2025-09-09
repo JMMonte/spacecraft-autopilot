@@ -50,6 +50,14 @@
                 "eccentricity": 0.18,
                 "meanAnomalyDeg": 180,
                 "model": "1e"
+            },
+            {
+                "name": "Ecceles",
+                "diameter": 65,
+                "semiMajorAxis": 4000,
+                "eccentricity": 0.5,
+                "meanAnomalyDeg": 90,
+                "model": "2a"
             }
         ]
     }
