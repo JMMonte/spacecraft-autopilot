@@ -172,4 +172,43 @@ export class PIDController {
             case 'Kd': this.kd = value; break;
         }
     }
-} 
+
+    // --- Auto-tune helpers (PID-side gain mapping) ---------------------------
+    private clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+
+    /**
+     * Set gains from a measured time constant tau using controller-specific rules.
+     * The mapping mirrors the profile used in Autopilot's active tuning.
+     */
+    public tuneFromTau(domain: 'attitude' | 'rotCancel' | 'position' | 'linMomentum', tau: number): void {
+        const t = Math.max(1e-6, tau);
+        if (domain === 'attitude') {
+            const kp = this.clamp(0.15 / t, 0.05, 0.6);
+            const kd = this.clamp(0.08 * t, 0.02, 0.25);
+            const ki = 0.0;
+            this.setGain('Kp', kp); this.setGain('Kd', kd); this.setGain('Ki', ki);
+            return;
+        }
+        if (domain === 'rotCancel') {
+            const kp = this.clamp(0.35 / t, 0.05, 1.2);
+            const kd = this.clamp(0.12 * t, 0.02, 0.35);
+            const ki = 0.0;
+            this.setGain('Kp', kp); this.setGain('Kd', kd); this.setGain('Ki', ki);
+            return;
+        }
+        if (domain === 'position') {
+            const kp = this.clamp(0.8 / t, 0.05, 4.0);
+            const kd = this.clamp(0.35 * t, 0.02, 2.5);
+            const ki = 0.0005; // gentle integral
+            this.setGain('Kp', kp); this.setGain('Kd', kd); this.setGain('Ki', ki);
+            return;
+        }
+        if (domain === 'linMomentum') {
+            const kp = this.clamp(1.1 / t, 0.3, 6.0);
+            const kd = this.clamp(0.22 * t, 0.02, 2.0);
+            const ki = 0.0;
+            this.setGain('Kp', kp); this.setGain('Kd', kd); this.setGain('Ki', ki);
+            return;
+        }
+    }
+}

@@ -4,7 +4,9 @@ import { SceneHelpers } from '../scenes/sceneHelpers';
 import { Autopilot } from './autopilot/Autopilot';
 import { createLogger } from '../utils/logger';
 import { getBasicThrusterGroups } from '../config/spacecraftConfig';
+import type { ThrusterGroups } from '../config/spacecraftConfig';
 import { computeThrusterGroups } from '../utils/utils';
+import type { ThrusterConfig } from '../utils/utils';
 import { ManualAllocator } from './autopilot/ManualAllocator';
 
 interface KeyMap {
@@ -35,6 +37,9 @@ export class SpacecraftController {
     private manualForcesBuffer: number[] = new Array(24).fill(0);
     private combinedForcesBuffer: number[] = new Array(24).fill(0);
     private manualAllocator!: ManualAllocator;
+    // Cluster-aware scaling
+    private baseThrust!: number;
+    // Reserved for future: per-thruster custom caps provided by user/config
     // no waypoint planner
 
     constructor(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers) {
@@ -73,6 +78,7 @@ export class SpacecraftController {
         this.mass = spacecraft.getMass();
         const thrustFactor = 5;
         this.thrust = (this.mass / 24) * thrustFactor;
+        this.baseThrust = this.thrust;
         // Default per-thruster capacities (N). Can be customized later via config.
         this.thrusterMax = new Array(24).fill(this.thrust);
 
@@ -112,10 +118,43 @@ export class SpacecraftController {
         this.log.debug('Autopilot created (initially disabled) with thrust:', this.thrust);
     }
 
-    private getThrusterGroups() {
+    private getThrusterGroups(): ThrusterGroups {
         try {
-            const thrusters = this.spacecraft.getThrusterConfigs?.() || [];
+            const thrusters: ThrusterConfig[] = this.spacecraft.getThrusterConfigs?.() || [];
             if (Array.isArray(thrusters) && thrusters.length) {
+                // If docked, classify torques relative to the combined cluster COM so
+                // both spacecraft work in unison when firing rotational groups.
+                const partners = this.spacecraft.getDockedSpacecrafts?.() || [];
+                if (partners.length > 0) {
+                    // Compute world COM of the docked cluster
+                    const cluster = [this.spacecraft, ...partners];
+                    let mTot = 0;
+                    const comW = new THREE.Vector3(0, 0, 0);
+                    for (const s of cluster) {
+                        const m = Math.max(1e-6, s.getMass?.() || 0);
+                        const p = s.getWorldPosition?.();
+                        if (!p) continue;
+                        comW.addScaledVector(p, m);
+                        mTot += m;
+                    }
+                    if (mTot > 0) comW.multiplyScalar(1 / mTot);
+
+                    // Offset from our origin to COM expressed in our local frame
+                    const pW = this.spacecraft.getWorldPosition?.();
+                    const qW = this.spacecraft.getWorldOrientation?.();
+                    if (pW && qW) {
+                        const toComW = comW.clone().sub(pW);
+                        const qInv = qW.clone().invert();
+                        const toComLocal = toComW.applyQuaternion(qInv);
+                        // Shift thruster positions so r = thrusterPos - COMLocal (torque about COM)
+                        const shifted = thrusters.map((t: ThrusterConfig) => ({
+                            position: t.position.clone().sub(toComLocal),
+                            direction: t.direction.clone(),
+                        }));
+                        return computeThrusterGroups(shifted);
+                    }
+                }
+                // Default: classify in craft-local frame about its origin
                 return computeThrusterGroups(thrusters);
             }
         } catch {}
@@ -210,18 +249,9 @@ export class SpacecraftController {
      * Called each frame or physics step with dt
      */
     public applyForces(dt: number = 1/60): boolean[] {
-        // If this craft is docked, force autopilot fully off and suppress cluster sync
-        if (this.spacecraft.isDocked?.()) {
-            if (this.autopilot?.getAutopilotEnabled() || Object.values(this.autopilot.getActiveAutopilots()).some(Boolean)) {
-                this.autopilot.resetAllModes();
-                this.autopilot.setReferenceObject(null);
-                this.autopilot.setEnabled(false);
-                this.resetThrusterLatch();
-            }
-        } else {
-            // Sync autopilots across docked cluster so they act as one (only when not currently docked)
-            this.syncDockedAutopilots();
-        }
+        // When docked, keep autopilots in sync across the cluster so both crafts
+        // act as one. Leader mirrors its modes/targets into followers.
+        this.syncDockedAutopilots();
 
         // no waypoint-following orchestration
 
@@ -261,11 +291,23 @@ export class SpacecraftController {
         const partners = this.spacecraft.getDockedSpacecrafts?.() || [];
         if (!partners.length) return;
 
-        // Build cluster and elect leader
+        // Build cluster and elect leader. Prefer the craft whose autopilot is enabled;
+        // tie-break by smallest UUID for stability.
         const cluster = [this.spacecraft, ...partners];
-        cluster.sort((a, b) => a.uuid.localeCompare(b.uuid));
-        const leader = cluster[0];
+        const enabledFirst = [...cluster].sort((a, b) => {
+            const aEn = (a.spacecraftController?.autopilot?.getAutopilotEnabled?.() ? 1 : 0);
+            const bEn = (b.spacecraftController?.autopilot?.getAutopilotEnabled?.() ? 1 : 0);
+            if (aEn !== bEn) return bEn - aEn; // enabled before disabled
+            return a.uuid.localeCompare(b.uuid);
+        });
+        const leader = enabledFirst[0];
         if (leader !== this.spacecraft) return; // only leader propagates
+
+        // Update cluster-aware thrust scaling on all participants
+        for (const craft of cluster) {
+            const ctrl = craft.spacecraftController as SpacecraftController | undefined;
+            ctrl?.updateClusterScaling(cluster);
+        }
 
         const leaderAP = this.autopilot;
         if (!leaderAP?.getAutopilotEnabled()) return;
@@ -293,6 +335,31 @@ export class SpacecraftController {
         }
     }
 
+    /**
+     * Update scalar thrust/strength scaling to reflect docked cluster mass.
+     * Keeps physical per-thruster caps unless user customized them.
+     */
+    private updateClusterScaling(cluster?: import('../core/spacecraft').Spacecraft[]): void {
+        const partners = cluster ? cluster.slice(1) : (this.spacecraft.getDockedSpacecrafts?.() || []);
+        const all = cluster ? cluster : [this.spacecraft, ...partners];
+        // Compute mass ratio (total / self)
+        let totalMass = 0;
+        for (const s of all) totalMass += Math.max(1e-6, s.getMass?.() || 0);
+        const selfMass = Math.max(1e-6, this.spacecraft.getMass?.() || 0);
+        const scale = Math.max(1, totalMass / selfMass);
+
+        // Scale thrust budget
+        const newThrust = this.baseThrust * scale;
+        if (Math.abs(newThrust - this.thrust) > 1e-6) this.setThrust(newThrust);
+
+        // Do not scale per-thruster physical caps here; keep hardware limits.
+    }
+
+    /** Public entry to recompute cluster scaling immediately (e.g., on dock). */
+    public applyClusterScalingNow(): void {
+        this.updateClusterScaling();
+    }
+
     private updateHelpers(thrustForces: number[]): void {
         // Skip all work if no helper is visible and trace is off
         const h = this.helpers;
@@ -303,7 +370,8 @@ export class SpacecraftController {
             h.rotationAxisArrow?.visible ||
             h.orientationArrow?.visible ||
             h.velocityArrow?.visible ||
-            this.spacecraft?.showTraceLines
+            this.spacecraft?.showTraceLines ||
+            h.pathLine?.visible || h.pathCarrot?.visible
         );
         if (!anyVisible) return;
 
@@ -342,11 +410,24 @@ export class SpacecraftController {
             const autopilotTorque = new THREE.Vector3(pitchTorque, yawTorque, rollTorque);
             this.helpers.updateAutopilotTorqueArrow(bodyPosition, autopilotTorque);
         }
+
+        // Update path visualization when enabled
+        if ((this.spacecraft as any)?.showPath && (h.pathLine?.visible || h.pathCarrot?.visible)) {
+            try {
+                const ap = this.autopilot;
+                const pts = ap.getPathSamples?.();
+                const carrot = ap.getPathCarrot?.();
+                if (pts && pts.length >= 2) {
+                    this.helpers.updatePath(pts, carrot || undefined);
+                }
+            } catch {}
+        }
     }
 
     private applyForcesToThrusters(forces: number[], dt: number): boolean[] {
         const activationThresholdBase = this.activationThresholdFactor;
         const visibility = new Array(24).fill(false);
+        const appliedForces: number[] = new Array(24).fill(0);
 
         for (let i = 0; i < 24; i++) {
             // clamp desired force
@@ -382,8 +463,10 @@ export class SpacecraftController {
                 const f = Math.max(Math.min(this.thrusterLatchedForce[i], cap), activationThreshold);
                 this.spacecraft.rcsVisuals.applyForce(i, f, dt);
                 visibility[i] = true;
+                appliedForces[i] = f;
             } else {
                 visibility[i] = false;
+                appliedForces[i] = 0;
             }
         }
 
@@ -391,6 +474,25 @@ export class SpacecraftController {
         this.spacecraft.rcsVisuals.getConeMeshes().forEach((coneMesh, index) => {
             coneMesh.visible = visibility[index];
         });
+
+        // Compute latest force metrics for scientific gradient
+        try {
+            const thrusters = this.spacecraft.getThrusterConfigs?.() || [];
+            let absSum = 0;
+            const net = new THREE.Vector3(0, 0, 0);
+            for (let i = 0; i < Math.min(24, appliedForces.length, thrusters.length); i++) {
+                const f = appliedForces[i] || 0;
+                absSum += Math.abs(f);
+                const dir = thrusters[i]?.direction; // assume world-space unit
+                if (dir && typeof dir.x === 'number') {
+                    net.x += dir.x * f;
+                    net.y += dir.y * f;
+                    net.z += dir.z * f;
+                }
+            }
+            const netMag = Math.sqrt(net.x * net.x + net.y * net.y + net.z * net.z);
+            this.helpers.setLatestForceMetrics?.(absSum, netMag);
+        } catch {}
 
         return visibility;
     }
@@ -464,6 +566,8 @@ export class SpacecraftController {
 
     public setThrust(value: number): void {
         this.thrust = value;
+        try { this.autopilot?.setThrust?.(value); } catch {}
+        try { this.manualAllocator?.setThrust?.(value); } catch {}
     }
 
     /**
@@ -475,6 +579,11 @@ export class SpacecraftController {
         this.thrusterMax = max.slice(0, 24);
         try { this.autopilot?.setThrusterStrengths(this.thrusterMax); } catch {}
         try { this.manualAllocator?.setThrusterMax(this.thrusterMax); } catch {}
+    }
+
+    /** Reset thrust to its pre-cluster value. */
+    public resetClusterScalingToBase(): void {
+        this.setThrust(this.baseThrust);
     }
 
     public getSpacecraft(): Spacecraft {

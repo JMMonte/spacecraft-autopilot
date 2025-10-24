@@ -20,6 +20,7 @@ export class AsteroidModel {
   private physics?: PhysicsEngine;
   private rigid?: RigidBody;
   private static fbx = new FBXLoader();
+  private diameter: number = 1; // world units
   // Simple spin model (client-side only)
   private spinAxis: THREE.Vector3 = new THREE.Vector3(0, 1, 0);
   private spinRateRadSec = 0; // radians per second
@@ -35,6 +36,7 @@ export class AsteroidModel {
   constructor(scene: THREE.Scene, opts: AsteroidOptions) {
     this.scene = scene;
     this.physics = opts.physics;
+    this.diameter = Math.max(1e-6, opts.diameter);
     this.load(opts);
   }
 
@@ -176,6 +178,10 @@ export class AsteroidModel {
 
   public getPosition(): THREE.Vector3 | null {
     return this.mesh ? this.mesh.position.clone() : null;
+  }
+
+  public getRadius(): number {
+    return this.diameter * 0.5;
   }
 
   public dispose(): void {

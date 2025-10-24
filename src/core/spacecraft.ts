@@ -6,6 +6,7 @@ import { SpacecraftController } from '../controllers/spacecraftController';
 import { DockingController } from '../controllers/docking/DockingController';
 import { BasicWorld } from './BasicWorld';
 import type { PhysicsEngine } from '../physics';
+import { store } from '../state/store';
 
 interface DockingPortInfo {
     position: THREE.Vector3;
@@ -99,6 +100,7 @@ export class Spacecraft {
         this.showVelocityArrow = false;
         this.showAngularVelocityArrow = false;
         this.showTraceLines = false;
+        (this as any).showPath = false;
         this.dockingLights = { front: false, back: false };
 
         // Initialize docking ports
@@ -132,7 +134,7 @@ export class Spacecraft {
         this.dockingController.update();
         // Update trace line regardless of autopilot state
         if (this.helpers) {
-            this.helpers.updateTrace(this.getWorldPosition(), this.getWorldVelocity());
+            this.helpers.updateTrace(this.uuid, this.getWorldPosition(), this.getWorldVelocity());
         }
     }
 
@@ -274,6 +276,13 @@ export class Spacecraft {
             // Clear any latched RCS pulses on both controllers
             this.spacecraftController?.resetThrusterLatch?.();
             otherSpacecraft.spacecraftController?.resetThrusterLatch?.();
+            // Recompute thruster grouping for both crafts relative to the
+            // combined center of mass so rotational groups act in unison.
+            try { this.spacecraftController?.refreshThrusterGroups?.(); } catch {}
+            try { otherSpacecraft.spacecraftController?.refreshThrusterGroups?.(); } catch {}
+            // Apply cluster-aware thrust/strength scaling immediately
+            try { (this.spacecraftController as any)?.applyClusterScalingNow?.(); } catch {}
+            try { (otherSpacecraft.spacecraftController as any)?.applyClusterScalingNow?.(); } catch {}
         } catch {}
 
         return true;
@@ -301,6 +310,12 @@ export class Spacecraft {
             this.dockingHandle = undefined;
         }
 
+        // Recompute thruster grouping back to per-craft mapping and reset scaling
+        try { this.spacecraftController?.refreshThrusterGroups?.(); } catch {}
+        try { otherSpacecraft.spacecraftController?.refreshThrusterGroups?.(); } catch {}
+        try { (this.spacecraftController as any)?.resetClusterScalingToBase?.(); } catch {}
+        try { (otherSpacecraft.spacecraftController as any)?.resetClusterScalingToBase?.(); } catch {}
+
         return true;
     }
 
@@ -326,6 +341,13 @@ export class Spacecraft {
         }
     }
 
+    /** Toggle visibility of autopilot path (line + carrot) */
+    public togglePath(visible: boolean): void {
+        (this as any).showPath = visible;
+        if (this.helpers) this.helpers.setPathVisible(visible);
+    }
+    public isPathVisible(): boolean { return !!(this as any).showPath; }
+
     /**
      * Toggle visibility of trace lines helper
      */
@@ -341,6 +363,7 @@ export class Spacecraft {
         if (this.helpers) {
             this.helpers.resetTrace();
         }
+        try { store.clearTraceSamples(this.uuid); } catch {}
     }
 
     public getVelocity(): THREE.Vector3 {

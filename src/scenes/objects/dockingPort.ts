@@ -6,7 +6,8 @@ export class DockingPortManager {
         private boxDepth: number,
         public readonly dockingPortRadius: number,
         public readonly dockingPortLength: number,
-        public readonly dockingPortDepth: number
+        public readonly dockingPortDepth: number,
+        private readonly dockingPortMaterialDensity: number = 2700
     ) {}
 
     private colliderHandles: unknown[] = [];
@@ -75,9 +76,10 @@ export class DockingPortManager {
                 const handle = physics.attachCylinderCollider(rigid, this.dockingPortRadius, this.dockingPortLength, {
                     translation: { x: 0, y: 0, z },
                     rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
-                    // Use sensor to avoid heavy contact resolution between port geometry and other colliders.
-                    // Physical coupling is handled by the docking joint.
-                    isSensor: true,
+                    // Enable physical contact for docking ports so they collide and contribute to mass.
+                    isSensor: false,
+                    // Set density to material density so the port's mass is physically represented by the collider.
+                    density: this.dockingPortMaterialDensity,
                     friction: 0.6,
                     restitution: 0.1,
                 });

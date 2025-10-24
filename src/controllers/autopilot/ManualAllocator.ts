@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { PIDController } from '../pidController';
 import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
+import type { Spacecraft } from '../../core/spacecraft';
+import type { ThrusterGroups } from '../../config/spacecraftConfig';
 
 /**
  * Thin wrapper around AutopilotMode that exposes the internal allocation helpers
@@ -9,9 +11,9 @@ import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
  */
 export class ManualAllocator extends AutopilotMode {
   constructor(
-    spacecraft: any,
+    spacecraft: Spacecraft,
     config: AutopilotConfig,
-    thrusterGroups: any,
+    thrusterGroups: ThrusterGroups,
     thrust: number,
     thrusterMax?: number[],
   ) {
@@ -24,6 +26,11 @@ export class ManualAllocator extends AutopilotMode {
       new PIDController(0, 0, 0, 'linearMomentum'),
       thrusterMax
     );
+  }
+
+  // Allow external systems to adjust the scalar thrust budget
+  public setThrust(value: number): void {
+    super.setThrust(value);
   }
 
   /**

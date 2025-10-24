@@ -1,7 +1,7 @@
 import React, { ChangeEvent } from 'react';
 import { Spacecraft } from '../../core/spacecraft';
 import { BasicWorld } from '../../core/BasicWorld';
-import { setGridVisible, useUi } from '../../state/store';
+import { setGridVisible, useUi, useTraceSettings, setTraceSettings } from '../../state/store';
 
 interface HelperArrowsWindowProps {
   spacecraft: Spacecraft | null;
@@ -19,6 +19,7 @@ export const HelperArrowsWindow: React.FC<HelperArrowsWindowProps> = ({ spacecra
     { key: 'angularVelocity', label: 'Show Angular Velocity' }
   ];
   const ui = useUi();
+  const traceSettings = useTraceSettings();
 
   const getArrowVisibility = (key: ArrowConfig['key']): boolean => {
     if (!spacecraft) return false;
@@ -43,6 +44,15 @@ export const HelperArrowsWindow: React.FC<HelperArrowsWindowProps> = ({ spacecra
         />
       </div>
       <div className="flex items-center justify-between gap-1">
+        <label className="text-[10px] text-white/70 font-mono">Show Path</label>
+        <input
+          type="checkbox"
+          checked={!!spacecraft?.isPathVisible?.()}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => spacecraft?.togglePath?.(e.target.checked)}
+          className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+        />
+      </div>
+      <div className="flex items-center justify-between gap-1">
         <label className="text-[10px] text-white/70 font-mono">Show Trace Lines</label>
         <input
           type="checkbox"
@@ -50,6 +60,42 @@ export const HelperArrowsWindow: React.FC<HelperArrowsWindowProps> = ({ spacecra
           onChange={(e: ChangeEvent<HTMLInputElement>) => spacecraft?.toggleTraceLines?.(e.target.checked)}
           className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
         />
+      </div>
+      {/* Scientific gradient controls */}
+      <div className="flex items-center justify-between gap-1">
+        <label className="text-[10px] text-white/70 font-mono">Scientific Gradient</label>
+        <input
+          type="checkbox"
+          checked={traceSettings.gradientEnabled}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setTraceSettings({ gradientEnabled: e.target.checked })}
+          className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+        />
+      </div>
+      <div className="flex items-center justify-between gap-1">
+        <label className="text-[10px] text-white/70 font-mono">Metric</label>
+        <select
+          value={traceSettings.gradientMode}
+          onChange={(e) => setTraceSettings({ gradientMode: e.target.value as any })}
+          disabled={!traceSettings.gradientEnabled || !spacecraft?.showTraceLines}
+          className="text-[10px] font-mono bg-black/40 text-white/90 border border-white/20 rounded px-1 py-0.5 disabled:opacity-40"
+        >
+          <option value="velocity">Velocity</option>
+          <option value="acceleration">Acceleration</option>
+          <option value="forceAbs">Thrust Sum</option>
+          <option value="forceNet">Thrust Net</option>
+        </select>
+      </div>
+      <div className="flex items-center justify-between gap-1">
+        <label className="text-[10px] text-white/70 font-mono">Palette</label>
+        <select
+          value={traceSettings.palette}
+          onChange={(e) => setTraceSettings({ palette: e.target.value as any })}
+          disabled={!traceSettings.gradientEnabled || !spacecraft?.showTraceLines}
+          className="text-[10px] font-mono bg-black/40 text-white/90 border border-white/20 rounded px-1 py-0.5 disabled:opacity-40"
+        >
+          <option value="turbo">Turbo</option>
+          <option value="viridis">Viridis</option>
+        </select>
       </div>
       <div className="flex items-center justify-end gap-1">
         <button

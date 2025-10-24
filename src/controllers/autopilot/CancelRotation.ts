@@ -1,12 +1,15 @@
-import { AutopilotMode } from './AutopilotMode';
+import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
+import type { ThrusterGroups } from '../../config/spacecraftConfig';
+import type { Spacecraft } from '../../core/spacecraft';
+import { PIDController } from '../pidController';
 
 export class CancelRotation extends AutopilotMode {
     constructor(
-        spacecraft: any,
-        config: any,
-        thrusterGroups: any,
+        spacecraft: Spacecraft,
+        config: AutopilotConfig,
+        thrusterGroups: ThrusterGroups,
         thrust: number,
-        pidController: any,
+        pidController: PIDController,
         thrusterMax?: number[]
     ) {
         super(spacecraft, config, thrusterGroups, thrust, pidController, thrusterMax);

@@ -7,8 +7,10 @@ import { PointToPosition } from '../controllers/autopilot/PointToPosition';
 import { OrientationMatchAutopilot } from '../controllers/autopilot/OrientationMatchAutopilot';
 import { GoToPosition } from '../controllers/autopilot/GoToPosition';
 import type { AutopilotConfig } from '../controllers/autopilot/AutopilotMode';
-
-type ThrusterConfig = { position: [number, number, number]; direction: [number, number, number] };
+import { TrajectoryPlanner } from '../controllers/trajectory/TrajectoryPlanner';
+import type { ThrusterGroups } from '../config/spacecraftConfig';
+import type { WorkerInboundMsg } from '../controllers/autopilot/types';
+import type { WorkerThrusterConfig as ThrusterConfig } from '../controllers/autopilot/types';
 
 class SpacecraftAdapter {
   private pos = new THREE.Vector3();
@@ -58,7 +60,7 @@ class SpacecraftAdapter {
 class WorkerAutopilot {
   private sc: SpacecraftAdapter;
   private config: AutopilotConfig;
-  private thrusterGroups: any;
+  private thrusterGroups: ThrusterGroups;
   private thrust: number;
   private thrusterMax: number[];
   private cancelRotationMode: CancelRotation;
@@ -76,10 +78,12 @@ class WorkerAutopilot {
   private scratchForward = new THREE.Vector3();
   private scratchQuat = new THREE.Quaternion();
   private referenceVelocityWorld = new THREE.Vector3();
+  private guidanceMode: 'direct' | 'trackRef' = 'direct';
+  private rotScale = 1.0;
 
   constructor(
     sc: SpacecraftAdapter,
-    thrusterGroups: any,
+    thrusterGroups: ThrusterGroups,
     thrust: number,
     config: AutopilotConfig,
     thrusterMax?: number[],
@@ -130,6 +134,20 @@ class WorkerAutopilot {
     this.goToPositionMode.setReferenceVelocityWorld(this.referenceVelocityWorld);
   }
 
+  setGuidanceModeTrackRef(enabled: boolean) {
+    this.guidanceMode = enabled ? 'trackRef' : 'direct';
+    this.goToPositionMode.setGuidanceMode(this.guidanceMode);
+  }
+
+  setRotationAllocationScale(scale: number) {
+    this.rotScale = Math.max(0, Math.min(1, scale));
+    this.cancelRotationMode.setAllocationScale(this.rotScale);
+    this.orientationMatchMode.setAllocationScale(this.rotScale);
+    this.pointToPositionMode.setAllocationScale(this.rotScale);
+    this.cancelLinearMotionMode.setAllocationScale(1.0);
+    this.goToPositionMode.setAllocationScale(1.0);
+  }
+
   compute(dt: number, active: { orientationMatch: boolean; cancelRotation: boolean; cancelLinearMotion: boolean; pointToPosition: boolean; goToPosition: boolean }): { forces: Float32Array; telemetry: { point?: any; orient?: any; goto?: any } } {
     // Update targetOrientation if pointing to a position (like main thread version)
     if (active.pointToPosition) {
@@ -151,6 +169,11 @@ class WorkerAutopilot {
     if (active.pointToPosition) this.pointToPositionMode.calculateForces(dt, out);
     if (active.orientationMatch) this.orientationMatchMode.calculateForces(dt, out);
     if (active.goToPosition) this.goToPositionMode.calculateForces(dt, out);
+    // Per-thruster saturation to hardware caps
+    for (let i = 0; i < out.length; i++) {
+      const cap = (this as any)['thrusterMax']?.[i] ?? this.thrust;
+      out[i] = Math.min(Math.max(0, out[i] || 0), cap);
+    }
     const forces = Float32Array.from(out);
     const telemetry = {
       point: active.pointToPosition ? (this.pointToPositionMode as any)?.getTelemetry?.() : undefined,
@@ -164,61 +187,8 @@ class WorkerAutopilot {
 let autopilot: WorkerAutopilot | null = null;
 let scAdapter: SpacecraftAdapter | null = null;
 
-type InitMsg = {
-  type: 'init';
-  thrusterGroups: any;
-  thrust: number;
-  config: AutopilotConfig;
-  mass: number;
-  dims: [number, number, number];
-  thrusterConfigs: ThrusterConfig[];
-  thrusterStrengths?: number[];
-  autoCalibrate?: boolean;
-};
 
-type SetGainsMsg = {
-  type: 'setGains';
-  gains: {
-    orientation: { kp: number; ki: number; kd: number };
-    rotationCancel?: { kp: number; ki: number; kd: number };
-    position: { kp: number; ki: number; kd: number };
-    momentum: { kp: number; ki: number; kd: number };
-  };
-};
-
-type CalibrateMsg = {
-  type: 'calibrate';
-  // Accept legacy names ('attitude', 'rotCancel') in addition to current
-  // categories to keep messages forward/backward compatible.
-  targets: Array<'rotation' | 'linear' | 'momentum' | 'attitude' | 'rotCancel'>;
-};
-
-type SetThrusterStrengthsMsg = {
-  type: 'setThrusterStrengths';
-  strengths: number[];
-};
-
-type SetThrusterGroupsMsg = {
-  type: 'setThrusterGroups';
-  groups: any;
-};
-
-type SetThrustersMsg = {
-  type: 'setThrusters';
-  thrusters: ThrusterConfig[];
-};
-
-type UpdateMsg = {
-  type: 'update';
-  dt: number;
-  snapshot: { p: [number, number, number]; q: [number, number, number, number]; lv: [number, number, number]; av: [number, number, number] };
-  active: { orientationMatch: boolean; cancelRotation: boolean; cancelLinearMotion: boolean; pointToPosition: boolean; goToPosition: boolean };
-  targetPos: [number, number, number];
-  targetQuat: [number, number, number, number];
-  refVel: [number, number, number];
-};
-
-self.onmessage = async (ev: MessageEvent<InitMsg | UpdateMsg | SetGainsMsg | CalibrateMsg | SetThrusterStrengthsMsg | SetThrusterGroupsMsg | SetThrustersMsg>) => {
+self.onmessage = async (ev: MessageEvent<WorkerInboundMsg>) => {
   const data = ev.data;
   if (data.type === 'init') {
     scAdapter = new SpacecraftAdapter();
@@ -229,6 +199,43 @@ self.onmessage = async (ev: MessageEvent<InitMsg | UpdateMsg | SetGainsMsg | Cal
     autopilot = new WorkerAutopilot(scAdapter, data.thrusterGroups, data.thrust, data.config, data.thrusterStrengths);
     if (data.autoCalibrate) await autopilot.autoCalibrateAll();
     (self as any).postMessage({ type: 'ready' });
+    return;
+  }
+  if (data.type === 'planPath') {
+    // Build obstacles and compute an efficient curved path in the worker
+    try {
+      const start = new THREE.Vector3(data.start[0], data.start[1], data.start[2]);
+      const goal = new THREE.Vector3(data.goal[0], data.goal[1], data.goal[2]);
+      const obstacles = data.obstacles.map(o => ({ position: new THREE.Vector3(o.pos[0], o.pos[1], o.pos[2]), size: new THREE.Vector3(o.size[0], o.size[1], o.size[2]), isTarget: o.isTarget }));
+
+      // Build safety boxes and check direct blockage using the same logic as main thread
+      const dims = scAdapter?.getMainBodyDimensions?.() || new THREE.Vector3(1,1,1);
+      const craftR = Math.max(dims.x, dims.y, dims.z);
+      const safetyBoxes = obstacles.map(o => TrajectoryPlanner.calculateSafetyBox(o.position, o.size, o.isTarget, craftR * 0.6));
+      let waypoints: THREE.Vector3[] = [start, goal];
+      const directBlocked = TrajectoryPlanner.doesLineIntersectAnySafetyBox(start, goal, safetyBoxes);
+      if (directBlocked) {
+        // Restrict to obstacles near corridor to keep it scalable
+        const seg = goal.clone().sub(start); const L = Math.max(1e-6, seg.length()); const dir = seg.clone().multiplyScalar(1 / L);
+        const nearDist = 12.0;
+        const nearObs = obstacles.filter(o => {
+          const u = THREE.MathUtils.clamp(o.position.clone().sub(start).dot(dir), 0, L);
+          const closest = start.clone().add(dir.clone().multiplyScalar(u));
+          const r = Math.max(o.size.x, o.size.y, o.size.z);
+          return closest.distanceTo(o.position) <= (nearDist + r);
+        });
+        const obsSet = nearObs.length ? nearObs : obstacles;
+        const w = TrajectoryPlanner.calculateAvoidanceWaypoints(start, goal, obsSet, craftR * 0.6);
+        waypoints = (w && w.length >= 2) ? w : [start, goal];
+      }
+
+      // Return result
+      const flat = new Float32Array(waypoints.length * 3);
+      for (let i = 0; i < waypoints.length; i++) { flat[i * 3 + 0] = waypoints[i].x; flat[i * 3 + 1] = waypoints[i].y; flat[i * 3 + 2] = waypoints[i].z; }
+      (self as any).postMessage({ type: 'planPathResult', id: data.id, points: flat }, [flat.buffer]);
+    } catch (err) {
+      (self as any).postMessage({ type: 'planPathResult', id: data.id, points: new Float32Array(0) });
+    }
     return;
   }
   if (data.type === 'setGains') {
@@ -300,11 +307,25 @@ self.onmessage = async (ev: MessageEvent<InitMsg | UpdateMsg | SetGainsMsg | Cal
     } catch {}
     return;
   }
+  if (data.type === 'setThrust') {
+    if (!autopilot) return;
+    try {
+      (autopilot as any)['thrust'] = data.thrust;
+      (autopilot as any)['cancelRotationMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['cancelLinearMotionMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['pointToPositionMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['orientationMatchMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['goToPositionMode']?.setThrust?.(data.thrust);
+    } catch {}
+    return;
+  }
   if (data.type === 'update') {
     if (!autopilot || !scAdapter) return;
     scAdapter.updateSnapshot(data.snapshot);
     autopilot.setTargets(data.targetPos, data.targetQuat);
     autopilot.setReferenceVelocity(data.refVel);
+    autopilot.setGuidanceModeTrackRef(!!data.trackRef);
+    if (typeof data.rotScale === 'number') autopilot.setRotationAllocationScale(data.rotScale);
     const { forces, telemetry } = autopilot.compute(data.dt, data.active);
     // Transfer array buffer for performance
     (self as any).postMessage({ type: 'forces', forces, telemetry }, [forces.buffer]);

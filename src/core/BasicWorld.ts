@@ -131,6 +131,12 @@ export class BasicWorld {
         };
     }
 
+    private markShadowMaterialsDirty(): void {
+        if (this.lights && typeof (this.lights as any).markMaterialsDirty === 'function') {
+            try { (this.lights as any).markMaterialsDirty(); } catch {}
+        }
+    }
+
     private updateLoadingStatus(): void {
         let totalProgress = 0;
         let totalFiles = 0;
@@ -255,6 +261,7 @@ export class BasicWorld {
         // Prefer asteroid system if provided; else spawn standalone asteroids
         if (this.config.asteroidSystem) {
             this.asteroidSystem = new AsteroidSystem(this.camera.scene, this.physics, this.config.asteroidSystem);
+            this.markShadowMaterialsDirty();
         } else {
             const asteroidConfigs = this.config.asteroids || [];
             if (asteroidConfigs.length > 0) {
@@ -276,6 +283,7 @@ export class BasicWorld {
                     asteroid.setSpin(axis, (2 * Math.PI) / spinPeriod);
                     this.asteroids.push(asteroid);
                 });
+                this.markShadowMaterialsDirty();
             }
         }
 
@@ -421,6 +429,7 @@ export class BasicWorld {
         }
         this.spacecraft.push(spacecraft);
         this.spacecraftControllers.push(spacecraft.spacecraftController);
+        this.markShadowMaterialsDirty();
         
         if (!this.activeSpacecraft) {
             this.setActiveSpacecraft(spacecraft);
@@ -451,6 +460,33 @@ export class BasicWorld {
 
     public getSpacecraftList(): Spacecraft[] {
         return this.spacecraft;
+    }
+
+    // Provide asteroid obstacles as AABBs (using radius as half-extent)
+    public getAsteroidObstacles(): Array<{ position: THREE.Vector3; size: THREE.Vector3 }> {
+        const out: Array<{ position: THREE.Vector3; size: THREE.Vector3 }> = [];
+        if (this.asteroidSystem) {
+            try {
+                const primary = this.asteroidSystem.primary;
+                const pPos = primary.getPosition();
+                if (pPos) {
+                    const r = primary.getRadius?.() ?? 1;
+                    out.push({ position: pPos.clone(), size: new THREE.Vector3(r, r, r) });
+                }
+                for (const m of this.asteroidSystem.moons) {
+                    const pos = m.asteroid.getPosition();
+                    const r = m.asteroid.getRadius?.() ?? 1;
+                    if (pos) out.push({ position: pos.clone(), size: new THREE.Vector3(r, r, r) });
+                }
+            } catch {}
+        } else if (this.asteroids && this.asteroids.length) {
+            for (const a of this.asteroids) {
+                const pos = a.getPosition();
+                const r = a.getRadius?.() ?? 1;
+                if (pos) out.push({ position: pos.clone(), size: new THREE.Vector3(r, r, r) });
+            }
+        }
+        return out;
     }
 
     public getActiveSpacecraft(): Spacecraft | null {

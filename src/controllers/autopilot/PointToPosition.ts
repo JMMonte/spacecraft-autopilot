@@ -2,6 +2,7 @@ import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
 import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import * as THREE from 'three';
+import type { ThrusterGroups } from '../../config/spacecraftConfig';
 
 export class PointToPosition extends AutopilotMode {
     private targetPosition: THREE.Vector3;
@@ -21,7 +22,7 @@ export class PointToPosition extends AutopilotMode {
     constructor(
         spacecraft: Spacecraft,
         config: AutopilotConfig,
-        thrusterGroups: any,
+        thrusterGroups: ThrusterGroups,
         thrust: number,
         pidController: PIDController,
         targetPosition: THREE.Vector3,

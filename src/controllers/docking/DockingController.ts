@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import { Spacecraft } from '../../core/spacecraft';
-import { canDockWithinThresholds } from './DockingUtils';
+import { setDockingPlan } from '../../state/store';
+import { canDockWithinThresholds, type DockingPortId, computeDesiredDockQuatFor, computeTargetOrientationQuaternion } from './DockingUtils';
 import { TrajectoryPlanner } from '../trajectory/TrajectoryPlanner';
 import { TrajectoryVisualizer } from '../visualization/TrajectoryVisualizer';
 import { Trajectory } from '../trajectory';
 import { Autopilot } from '../autopilot/Autopilot';
+import { buildDockingInfo } from './DockingInfo';
 
 export type DockingPhase = 'idle' | 'approach' | 'align' | 'dock' | 'docked';
-export type DockingPortId = 'front' | 'back';
 
 export class DockingController {
     private spacecraft: Spacecraft;
@@ -18,6 +19,7 @@ export class DockingController {
     private trajectory: Trajectory | null = null;
     private currentWaypointIndex: number = 0;
     private trajectoryVisualizer: TrajectoryVisualizer;
+    private enableDebugVisuals: boolean = false; // disable old spheres/lines by default
     private visualSpacecraft: Spacecraft[] = [];  // For orange bounding boxes
     private collisionSpacecraft: Spacecraft[] = [];  // For collision avoidance
     private _lastVisualUpdateMs: number = 0;
@@ -66,62 +68,24 @@ export class DockingController {
         this.phase = 'approach';
         this.currentWaypointIndex = 0;
         this.updateTrajectory();
+        // Seed initial docking orientations for both spacecraft (stored in global store)
+        try {
+            const ourQuat = computeDesiredDockQuatFor(this.spacecraft, this._ourPortId!, this.targetSpacecraft, this._targetPortId!);
+            const targQuat = computeDesiredDockQuatFor(this.targetSpacecraft, this._targetPortId!, this.spacecraft, this._ourPortId!);
+            if (ourQuat && targQuat) {
+                setDockingPlan({
+                    sourceUuid: this.spacecraft.uuid,
+                    targetUuid: this.targetSpacecraft.uuid,
+                    sourceQuat: { x: ourQuat.x, y: ourQuat.y, z: ourQuat.z, w: ourQuat.w },
+                    targetQuat: { x: targQuat.x, y: targQuat.y, z: targQuat.z, w: targQuat.w },
+                });
+            }
+        } catch {}
     }
 
     private getSpacecraftInfo() {
-        if (!this.targetSpacecraft) return null;
-
-        const portDimensions = new THREE.Vector3(
-            this.spacecraft.objects.dockingPortRadius,
-            this.spacecraft.objects.dockingPortRadius,
-            this.spacecraft.objects.dockingPortLength
-        );
-
-        // Get port positions and directions using spacecraft helpers (consistent frames)
-        const ourPortDir = this.ourPortId ? this.spacecraft.getDockingPortWorldDirection(this.ourPortId) : null;
-        const targetPortDir = this.targetPortId ? this.targetSpacecraft.getDockingPortWorldDirection(this.targetPortId) : null;
-        const ourPortPos = this.ourPortId ? this.spacecraft.getDockingPortWorldPosition(this.ourPortId) : null;
-        const targetPortPos = this.targetPortId ? this.targetSpacecraft.getDockingPortWorldPosition(this.targetPortId) : null;
-
-        return {
-            target: {
-                position: this.targetSpacecraft.getWorldPosition(),
-                orientation: this.targetSpacecraft.getWorldOrientation(),
-                size: new THREE.Vector3(
-                    this.targetSpacecraft.getMainBodyDimensions().x,
-                    this.targetSpacecraft.getMainBodyDimensions().y,
-                    this.targetSpacecraft.getMainBodyDimensions().z
-                ),
-                fullDimensions: this.targetSpacecraft.getFullDimensions()
-            },
-            our: {
-                position: this.spacecraft.getWorldPosition(),
-                orientation: this.spacecraft.getWorldOrientation(),
-                size: new THREE.Vector3(
-                    this.spacecraft.getMainBodyDimensions().x,
-                    this.spacecraft.getMainBodyDimensions().y,
-                    this.spacecraft.getMainBodyDimensions().z
-                ),
-                fullDimensions: this.spacecraft.getFullDimensions()
-            },
-            ports: {
-                dimensions: portDimensions,
-                ourPosition: ourPortPos!,
-                ourDirection: ourPortDir!,
-                targetPosition: targetPortPos!,
-                targetDirection: targetPortDir!
-            },
-            others: this.visualSpacecraft.map(s => ({
-                position: s.getWorldPosition(),
-                size: new THREE.Vector3(s.getMainBodyDimensions().x, s.getMainBodyDimensions().y, s.getMainBodyDimensions().z),
-                safetySize: new THREE.Vector3(
-                    s.getFullDimensions().x * 1.5,
-                    s.getFullDimensions().y * 1.5,
-                    s.getFullDimensions().z * 1.5
-                ),
-                orientation: s.getWorldOrientation()
-            }))
-        };
+        if (!this.targetSpacecraft || !this._ourPortId || !this._targetPortId) return null;
+        return buildDockingInfo(this.spacecraft, this.targetSpacecraft, this._ourPortId, this._targetPortId, this.visualSpacecraft);
     }
 
     private calculateApproachPosition(targetPort: THREE.Vector3, targetDir: THREE.Vector3, safeDistance: number, targetPortLength: number): THREE.Vector3 {
@@ -193,42 +157,32 @@ export class DockingController {
             ));
         }
 
-        // Create trajectory with appropriate timing
+        // Create trajectory with appropriate timing (kept for visualization only)
         const totalTime = this.phase === 'dock' ? 180 : 60; // More time for final docking
         this.trajectory = TrajectoryPlanner.createTrajectory(waypoints, totalTime);
+        // Centralize following via Autopilot's PathFollower
+        // Path following centralized previously caused plan drift; keep visuals only.
 
-        // Update visualization
-        this.updateVisuals();
+        // Update visualization (disabled by default; GoTo visuals are sufficient)
+        if (this.enableDebugVisuals) this.updateVisuals();
     }
 
     private updateVisuals(): void {
-        if (!this.trajectory) return;
+        if (!this.enableDebugVisuals || !this.trajectory) return;
 
         const info = this.getSpacecraftInfo();
         if (!info) return;
 
-        // If the target is moving, override the current waypoint's position
-        // so the threshold sphere and marker follow the target frame.
+        // If the target is moving, override the current waypoint's position (visual aid)
         let currentWaypointOverride: THREE.Vector3 | undefined;
-        if (this.phase === 'approach') {
-            const waypoints = this.trajectory.getWaypoints();
-            const isLast = this.currentWaypointIndex === waypoints.length - 1;
-            if (isLast && this.targetSpacecraft) {
-                const safeDistance = (info.our.fullDimensions.z + info.target.fullDimensions.z) * 3.0;
-                const targLen = this.targetSpacecraft.objects.dockingPortLength || 0.1;
-                currentWaypointOverride = this.calculateApproachPosition(
+        if (this.phase === 'dock') {
+            // During final closure, continuously point the current waypoint at the live docking pose
+            if (info.ports.targetDirection) {
+                currentWaypointOverride = this.calculateFinalPosition(
                     info.ports.targetPosition,
-                    info.ports.targetDirection,
-                    safeDistance,
-                    targLen
+                    info.ports.targetDirection
                 );
             }
-        } else if (this.phase === 'dock') {
-            // During final closure, continuously point the current waypoint at the live docking pose
-            currentWaypointOverride = this.calculateFinalPosition(
-                info.ports.targetPosition,
-                info.ports.targetDirection
-            );
         }
 
         this.trajectoryVisualizer.clearDebugObjects();
@@ -258,16 +212,34 @@ export class DockingController {
     }
 
     private getWaypointThreshold(): number {
-        switch (this.phase) {
-            case 'approach':
-                return this.currentWaypointIndex === this.trajectory?.getWaypoints().length! - 1 ? 0.5 : 1.0;
-            case 'align':
-                return 0.5;
-            case 'dock':
-                return 0.2;
-            default:
-                return 1.0;
+        const wps = this.trajectory?.getWaypoints() || [];
+        const i = this.currentWaypointIndex;
+        let legLen = 0;
+        if (wps.length >= 2) {
+            if (i > 0 && i < wps.length) {
+                // Distance from previous waypoint to current
+                const a = wps[i - 1]; const b = wps[i];
+                legLen = a.distanceTo(b);
+            } else if (i === 0) {
+                // First leg: estimate using first two waypoints
+                const a = wps[0]; const b = wps[Math.min(1, wps.length - 1)];
+                legLen = a.distanceTo(b);
+            } else {
+                // Out of bounds fallback
+                legLen = 1.0;
+            }
         }
+        // Phase-dependent percentage of leg length
+        let frac = 0.08; // default 8%
+        if (this.phase === 'align') frac = 0.05; // 5%
+        if (this.phase === 'dock') frac = 0.02;  // 2%
+        // If last waypoint in approach, tighten fraction a bit
+        const isLast = (i === wps.length - 1);
+        if (this.phase === 'approach' && isLast) frac = 0.04;
+        const minAbs = 0.1;  // never below 10 cm
+        const maxAbs = 2.0;  // avoid huge thresholds for long legs
+        const threshold = THREE.MathUtils.clamp(frac * Math.max(legLen, 0), minAbs, maxAbs);
+        return threshold;
     }
 
     public update(): void {
@@ -298,50 +270,47 @@ export class DockingController {
         }
 
         // Calculate full target orientation: align port axis AND roll with target port frame
-        const targetQuat = this.computeTargetOrientationQuaternion();
+        const targetQuat = computeTargetOrientationQuaternion(this.spacecraft, this._ourPortId, this.targetSpacecraft, this._targetPortId);
 
-        // Waypoint data (available only when trajectory exists)
-        let currentWaypoint: THREE.Vector3 | null = null;
-        let distanceToWaypoint = Infinity;
-        let waypointThreshold = this.getWaypointThreshold();
-        let waypoints: THREE.Vector3[] = [];
-        if (this.trajectory) {
-            waypoints = this.trajectory.getWaypoints();
-            if (this.currentWaypointIndex < waypoints.length) {
-                currentWaypoint = waypoints[this.currentWaypointIndex];
-                const ourPosition = this.spacecraft.getWorldPosition();
-                distanceToWaypoint = currentWaypoint ? ourPosition.distanceTo(currentWaypoint) : Infinity;
+        // Precompute current desired orientations for both source and target and expose in store
+        try {
+            const ourQuatNow = computeDesiredDockQuatFor(this.spacecraft, this._ourPortId, this.targetSpacecraft, this._targetPortId);
+            const targQuatNow = computeDesiredDockQuatFor(this.targetSpacecraft, this._targetPortId, this.spacecraft, this._ourPortId);
+            if (ourQuatNow && targQuatNow) {
+                setDockingPlan({
+                    sourceUuid: this.spacecraft.uuid,
+                    targetUuid: this.targetSpacecraft.uuid,
+                    sourceQuat: { x: ourQuatNow.x, y: ourQuatNow.y, z: ourQuatNow.z, w: ourQuatNow.w },
+                    targetQuat: { x: targQuatNow.x, y: targQuatNow.y, z: targQuatNow.z, w: targQuatNow.w },
+                });
             }
-        }
+        } catch {}
 
         switch (this.phase) {
             case 'approach': {
-                if (!autopilot || !currentWaypoint) break;
-                // If we're at the final approach waypoint, continuously rebase it on target motion
-                const isLast = waypoints.length > 0 && (this.currentWaypointIndex === waypoints.length - 1);
-                let targetForThisLeg = currentWaypoint;
-                if (isLast) {
-                    const approachPos = this.calculateApproachPosition(
-                        info.ports.targetPosition,
-                        info.ports.targetDirection,
-                        (info.our.fullDimensions.z + info.target.fullDimensions.z) * 3.0,
-                        this.targetSpacecraft.objects.dockingPortLength || 0.1
-                    );
-                    targetForThisLeg = approachPos;
-                    distanceToWaypoint = this.spacecraft.getWorldPosition().distanceTo(approachPos);
-                }
+                if (!autopilot) break;
+                // Clearance offset from target port along negative port axis
+                const safeDistance = (info.our.fullDimensions.z + info.target.fullDimensions.z) * 3.0;
+                const targLen = this.targetSpacecraft.objects.dockingPortLength || 0.1;
+                const approachPos = this.calculateApproachPosition(
+                    info.ports.targetPosition,
+                    info.ports.targetDirection,
+                    safeDistance,
+                    targLen
+                );
                 this.driveAutopilot(autopilot, {
-                    goToPosition: { enabled: true, position: targetForThisLeg },
+                    goToPosition: { enabled: true, position: approachPos },
                     orientationMatch: { enabled: !!targetQuat, orientation: targetQuat || undefined },
                     cancelLinearMotion: { enabled: false }
                 });
-
-                if (distanceToWaypoint < waypointThreshold && this.isStable(0.2)) {
-                    if (this.currentWaypointIndex < waypoints.length - 1) {
-                        this.currentWaypointIndex++;
-                    } else {
-                        this.phase = 'align';
-                    }
+                // Transition when close and oriented reasonably
+                const dist = this.spacecraft.getWorldPosition().distanceTo(approachPos);
+                const orientErr = this.getOrientationErrorRad(targetQuat);
+                const distThresh = Math.max(0.2, Math.min(2.0, safeDistance * 0.06));
+                const orientThresh = 8 * Math.PI / 180; // 8 degrees
+                if (dist < distThresh && orientErr < orientThresh && this.isStable(0.25)) {
+                    this.phase = 'dock';
+                    this.updateTrajectory(); // refresh visuals to final leg
                 }
                 break;
             }
@@ -366,7 +335,6 @@ export class DockingController {
 
             case 'dock': {
                 if (!autopilot) break;
-                // Continuously recompute the ideal COM position so our port face meets theirs
                 const finalPos = this.calculateFinalPosition(
                     info.ports.targetPosition,
                     info.ports.targetDirection
@@ -376,8 +344,7 @@ export class DockingController {
                     orientationMatch: { enabled: !!targetQuat, orientation: targetQuat || undefined },
                     cancelLinearMotion: { enabled: false }
                 });
-
-                // Completion handled only by shouldPhysicallyDock()
+                // Completion handled by shouldPhysicallyDock()
                 break;
             }
         }
@@ -418,51 +385,16 @@ export class DockingController {
 
     // Build a world quaternion that aligns OUR selected port axis with the opposite of the TARGET port axis,
     // then matches roll using the target spacecraft's up projected into the port plane.
-    private computeTargetOrientationQuaternion(): THREE.Quaternion | null {
-        if (!this._ourPortId || !this._targetPortId || !this.targetSpacecraft) return null;
+    // computeTargetOrientationQuaternion and computeDesiredDockQuatFor moved to DockingUtils
 
-        const ourDir = this.spacecraft.getDockingPortWorldDirection(this._ourPortId);
-        const targetPortDir = this.targetSpacecraft.getDockingPortWorldDirection(this._targetPortId);
-        if (!ourDir || !targetPortDir) return null;
-
-        // Guard against degenerate directions
-        if (ourDir.lengthSq() < 1e-12 || targetPortDir.lengthSq() < 1e-12) return null;
-
-        const zAim = targetPortDir.clone().multiplyScalar(-1);
-        if (zAim.lengthSq() < 1e-12) return null;
-        zAim.normalize(); // where our port axis must point
-        const qCurr = this.spacecraft.getWorldOrientation();
-
-        // Step 1: rotate our current port axis onto zAim (delta in world space)
-        const ourDirN = ourDir.clone();
-        if (ourDirN.lengthSq() < 1e-12) return null;
-        ourDirN.normalize();
-        const qAlign = new THREE.Quaternion().setFromUnitVectors(ourDirN, zAim);
-        const qAfter = new THREE.Quaternion().multiplyQuaternions(qAlign, qCurr);
-
-        // Step 2: roll about zAim to match target's "up" in the port plane
-        const targetUpWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(this.targetSpacecraft.getWorldOrientation());
-        const desiredUp = targetUpWorld.clone().sub(zAim.clone().multiplyScalar(targetUpWorld.dot(zAim)));
-        if (desiredUp.lengthSq() < 1e-8) {
-            // Fallback: choose an arbitrary up orthogonal to zAim
-            const fallback = Math.abs(zAim.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-            desiredUp.copy(fallback.sub(zAim.clone().multiplyScalar(fallback.dot(zAim))));
-        }
-        if (desiredUp.lengthSq() > 1e-12) desiredUp.normalize();
-
-        const ourUpAfter = new THREE.Vector3(0, 1, 0).applyQuaternion(qAfter);
-        const ourUpProj = ourUpAfter.clone().sub(zAim.clone().multiplyScalar(ourUpAfter.dot(zAim)));
-        if (ourUpProj.lengthSq() > 1e-12) ourUpProj.normalize(); else ourUpProj.copy(desiredUp);
-
-        const dot = THREE.MathUtils.clamp(ourUpProj.dot(desiredUp), -1, 1);
-        let roll = Math.acos(dot);
-        const cross = new THREE.Vector3().crossVectors(ourUpProj, desiredUp);
-        const sign = Math.sign(cross.dot(zAim));
-        roll *= sign || 1;
-
-        const qRoll = new THREE.Quaternion().setFromAxisAngle(zAim, roll);
-        const qTarget = new THREE.Quaternion().multiplyQuaternions(qRoll, qAfter);
-        return qTarget;
+    private getOrientationErrorRad(target: THREE.Quaternion | null): number {
+        if (!target) return Infinity;
+        const q = this.spacecraft.getWorldOrientation();
+        const qInv = q.clone().invert();
+        const errQ = qInv.multiply(target);
+        const w = THREE.MathUtils.clamp(errQ.w, -1, 1);
+        const ang = 2 * Math.acos(Math.abs(w));
+        return ang;
     }
 
     // Compute the world-space position of a port's outer face (tip of the cylinder)
@@ -503,6 +435,7 @@ export class DockingController {
         if (this.spacecraft.dock(this.ourPortId, this.targetSpacecraft, this.targetPortId)) {
             this.phase = 'docked';
             this.trajectoryVisualizer.clearDebugObjects();
+            try { setDockingPlan(null); } catch {}
             
             const autopilot = this.spacecraft.spacecraftController?.autopilot;
             if (autopilot) {

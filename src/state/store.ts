@@ -1,15 +1,10 @@
 import { useSyncExternalStore } from 'react';
+import type { AutopilotModes } from '../controllers/autopilot/types';
 
 // Lightweight external store for React and non-React code
 // No dependencies; UI subscribes with useSyncExternalStore.
 
-type AutopilotModes = {
-  orientationMatch: boolean;
-  cancelRotation: boolean;
-  cancelLinearMotion: boolean;
-  pointToPosition: boolean;
-  goToPosition: boolean;
-};
+// AutopilotModes imported from controllers/autopilot/types
 
 type UiState = {
   gridVisible: boolean;
@@ -21,6 +16,21 @@ type SettingsState = {
   uiTheme: 'a' | 'b' | 'c';
 };
 
+export type TraceSample = {
+  t: number; // ms since navigationStart
+  x: number; y: number; z: number;
+  speed: number; // m/s
+  accel: number; // m/s^2 (approx)
+  forceAbs: number; // sum of magnitudes across thrusters (N)
+  forceNet: number; // magnitude of net linear force vector (N)
+};
+
+type TraceSettings = {
+  gradientEnabled: boolean;
+  gradientMode: 'velocity' | 'acceleration' | 'forceAbs' | 'forceNet';
+  palette: 'turbo' | 'viridis';
+};
+
 type AppState = {
   autopilot: {
     enabled: boolean;
@@ -28,6 +38,14 @@ type AppState = {
   };
   ui: UiState;
   settings: SettingsState;
+  traces: Record<string, TraceSample[]>; // key: spacecraft uuid
+  traceSettings: TraceSettings;
+  dockingPlan?: {
+    sourceUuid: string;
+    targetUuid: string;
+    sourceQuat: { x: number; y: number; z: number; w: number };
+    targetQuat: { x: number; y: number; z: number; w: number };
+  };
 };
 
 type Listener = () => void;
@@ -53,6 +71,12 @@ let state: AppState = {
     attitudeSphereTexture: '/images/textures/rLHbWVB.png',
     uiTheme: 'a',
   },
+  traces: {},
+  traceSettings: {
+    gradientEnabled: false,
+    gradientMode: 'velocity',
+    palette: 'turbo',
+  },
 };
 
 const listeners = new Set<Listener>();
@@ -70,6 +94,20 @@ export const store = {
   setState: (partial: Partial<AppState>) => {
     state = { ...state, ...partial } as AppState;
     emit();
+  },
+  // Imperative mutation helpers for large arrays (avoid object churn)
+  appendTraceSample: (spacecraftId: string, sample: TraceSample) => {
+    const map = state.traces;
+    if (!map[spacecraftId]) map[spacecraftId] = [];
+    map[spacecraftId].push(sample);
+    // Emit without replacing the traces object to keep large arrays stable
+    emit();
+  },
+  clearTraceSamples: (spacecraftId: string) => {
+    if (state.traces[spacecraftId]) {
+      state.traces[spacecraftId] = [];
+      emit();
+    }
   },
 };
 
@@ -133,4 +171,24 @@ export function useSettings() {
 
 export function setUiTheme(theme: 'a' | 'b' | 'c') {
   setSettings({ uiTheme: theme });
+}
+
+// Trace settings helpers
+export function useTraceSettings() {
+  return useSyncExternalStore(
+    store.subscribe,
+    () => store.getState().traceSettings,
+    () => store.getState().traceSettings,
+  );
+}
+
+export function setTraceSettings(partial: Partial<TraceSettings>) {
+  const prev = store.getState().traceSettings;
+  store.setState({ traceSettings: { ...prev, ...partial } } as Partial<AppState>);
+}
+
+// Docking plan helpers (shared between controllers/UIs)
+export function setDockingPlan(plan: AppState['dockingPlan'] | null) {
+  if (plan) store.setState({ dockingPlan: plan } as Partial<AppState>);
+  else store.setState({ dockingPlan: undefined } as Partial<AppState>);
 }

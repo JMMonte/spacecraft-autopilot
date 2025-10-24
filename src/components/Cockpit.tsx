@@ -78,6 +78,33 @@ interface CameraWindowState {
     size: { width?: number; height?: number };
 }
 
+const defaultWindowSize = { width: 280, height: 240 };
+// Rough footprint hints so we can keep new windows from stacking on top of one another
+const windowSizeHints: Record<WindowKey, { width: number; height: number }> = {
+    telemetry: { width: 280, height: 260 },
+    horizon: { width: 280, height: 280 },
+    dimensions: { width: 280, height: 240 },
+    rcs: { width: 280, height: 240 },
+    arrows: { width: 260, height: 220 },
+    pid: { width: 320, height: 360 },
+    autopilot: { width: 340, height: 380 },
+    spacecraftList: { width: 320, height: 360 },
+    docking: { width: 340, height: 380 },
+    dockingCameras: { width: 320, height: 280 },
+    settings: { width: 300, height: 280 },
+};
+
+const rectanglesOverlap = (
+    aPos: WindowPosition,
+    aSize: { width: number; height: number },
+    bPos: WindowPosition,
+    bSize: { width: number; height: number }
+) =>
+    !(aPos.x + aSize.width <= bPos.x ||
+      aPos.x >= bPos.x + bSize.width ||
+      aPos.y + aSize.height <= bPos.y ||
+      aPos.y >= bPos.y + bSize.height);
+
 const calculateInitialPositions = (viewportWidth: number): WindowPositions => {
     const padding = 10;
     const topBarHeight = 10;
@@ -131,6 +158,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
         dockingCameras: false,
         settings: false,
     });
+    const horizonVisible = visibleWindows.horizon;
     const [windowPositions, setWindowPositions] = useState<WindowPositions>(calculateInitialPositions(typeof window !== 'undefined' ? window.innerWidth : 1024));
     const [telemetryValues, setTelemetryValues] = useState<TelemetryValues>({
         position: new THREE.Vector3(),
@@ -181,6 +209,41 @@ export const Cockpit: React.FC<CockpitProps> = ({
     const sphereMeshRef = useRef<THREE.Mesh | null>(null);
     const targetArrowRef = useRef<THREE.Mesh | null>(null);
 
+    const disposeHorizonResources = useCallback(() => {
+        if (horizonSceneRef.current) {
+            const disposeMaterial = (material: THREE.Material) => {
+                const matWithMap = material as THREE.Material & { map?: THREE.Texture | null };
+                matWithMap.map?.dispose?.();
+                material.dispose();
+            };
+
+            horizonSceneRef.current.traverse(obj => {
+                const mesh = obj as THREE.Mesh & { material?: THREE.Material | THREE.Material[]; geometry?: THREE.BufferGeometry };
+                const { geometry, material } = mesh;
+                if (geometry && typeof geometry.dispose === 'function') {
+                    geometry.dispose();
+                }
+                if (Array.isArray(material)) {
+                    material.forEach(disposeMaterial);
+                } else if (material) {
+                    disposeMaterial(material);
+                }
+            });
+            horizonSceneRef.current.clear();
+            horizonSceneRef.current = null;
+        }
+
+        if (horizonRendererRef.current) {
+            horizonRendererRef.current.dispose();
+            horizonRendererRef.current = null;
+        }
+
+        horizonCameraRef.current = null;
+        sphereMeshRef.current = null;
+        targetMarkerRef.current = null;
+        targetArrowRef.current = null;
+    }, []);
+
     // Reactful resize handling using ResizeObserver on the UI container
     const uiContainerRef = useRef<HTMLDivElement>(null);
     const { width: uiWidth } = useElementSize(uiContainerRef.current);
@@ -188,6 +251,81 @@ export const Cockpit: React.FC<CockpitProps> = ({
     useEffect(() => {
         if (uiWidth > 0) setWindowPositions(calculateInitialPositions(uiWidth));
     }, [uiWidth]);
+
+    const computeNonOverlappingPosition = useCallback(
+        (key: WindowKey, desired: WindowPosition, visible: WindowStates, currentPositions: WindowPositions): WindowPosition => {
+            const candidateSize = windowSizeHints[key] ?? defaultWindowSize;
+            const openWindows = (Object.entries(visible) as [WindowKey, boolean][]) 
+                .filter(([existingKey, isOpen]) => isOpen && existingKey !== key)
+                .map(([existingKey]) => {
+                    const pos = currentPositions[existingKey];
+                    if (!pos) return null;
+                    return {
+                        pos,
+                        size: windowSizeHints[existingKey] ?? defaultWindowSize,
+                    };
+                })
+                .filter((entry): entry is { pos: WindowPosition; size: { width: number; height: number } } => entry !== null);
+
+            const openCameraWindows = Object.values(cameraWindows)
+                .filter(w => w.open && w.position)
+                .map(w => ({
+                    pos: w.position,
+                    size: {
+                        width: w.size.width ?? defaultWindowSize.width,
+                        height: w.size.height ?? defaultWindowSize.height,
+                    },
+                }));
+
+            const others = [...openWindows, ...openCameraWindows];
+
+            const horizontalPadding = 20;
+            const topPadding = 60;
+            const viewportWidth = uiWidth > 0
+                ? uiWidth
+                : (typeof window !== 'undefined' ? window.innerWidth : 1024);
+            const viewportHeight = uiContainerRef.current?.getBoundingClientRect().height ??
+                (typeof window !== 'undefined' ? window.innerHeight : 768);
+
+            const clampPosition = (pos: WindowPosition): WindowPosition => ({
+                x: Math.min(
+                    Math.max(pos.x, horizontalPadding),
+                    Math.max(horizontalPadding, viewportWidth - candidateSize.width - horizontalPadding)
+                ),
+                y: Math.min(
+                    Math.max(pos.y, topPadding),
+                    Math.max(topPadding, viewportHeight - candidateSize.height - horizontalPadding)
+                ),
+            });
+
+            const fitsWithoutOverlap = (pos: WindowPosition) =>
+                !others.some(({ pos: otherPos, size }) => rectanglesOverlap(pos, candidateSize, otherPos, size));
+
+            let candidate = clampPosition(desired);
+            const step = 36;
+            const maxAttempts = 60;
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                if (fitsWithoutOverlap(candidate)) return candidate;
+
+                let nextX = candidate.x + step;
+                let nextY = candidate.y + step;
+
+                if (nextX + candidateSize.width > viewportWidth - horizontalPadding) {
+                    nextX = horizontalPadding;
+                }
+                if (nextY + candidateSize.height > viewportHeight - horizontalPadding) {
+                    nextY = topPadding;
+                }
+
+                candidate = clampPosition({ x: nextX, y: nextY });
+            }
+
+            return candidate;
+        },
+        [cameraWindows, uiWidth]
+    );
+
     const { attitudeSphereTexture, uiTheme } = useSettings();
     const themeAccentHex = uiTheme === 'b' ? '#94a3b8' : uiTheme === 'c' ? '#7dd3fc' : '#22d3ee';
     const crosshairBaseHex = uiTheme === 'b' ? '#ffffff' : '#ffffff';
@@ -411,20 +549,28 @@ export const Cockpit: React.FC<CockpitProps> = ({
 
     // Initialize horizon
     useEffect(() => {
-        const initializeHorizon = async () => {
-            try {
-                if (!horizonRef.current) return;
+        if (!horizonVisible) {
+            disposeHorizonResources();
+            return;
+        }
 
-                // Setup scene
+        let cancelled = false;
+
+        const initializeHorizon = async () => {
+            disposeHorizonResources();
+            const canvas = horizonRef.current;
+            if (!canvas) return;
+
+            try {
                 const scene = new THREE.Scene();
                 horizonSceneRef.current = scene;
 
-                // Setup camera
-                const flattenPerspective = true; // flatten the sphere perspective
+                const flattenPerspective = true;
+                let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
                 if (flattenPerspective) {
                     const aspect = 1;
-                    const size = 1; // match sphere radius for a tidy fit
-                    const camera = new THREE.OrthographicCamera(
+                    const size = 1;
+                    const orthoCamera = new THREE.OrthographicCamera(
                         -size * aspect,
                         size * aspect,
                         size,
@@ -432,31 +578,30 @@ export const Cockpit: React.FC<CockpitProps> = ({
                         0.1,
                         10
                     );
-                    camera.position.z = 1.2;
-                    horizonCameraRef.current = camera;
+                    orthoCamera.position.z = 1.2;
+                    camera = orthoCamera;
                 } else {
-                    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
-                    camera.position.z = 1.2;
-                    horizonCameraRef.current = camera;
+                    const perspectiveCamera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+                    perspectiveCamera.position.z = 1.2;
+                    camera = perspectiveCamera;
                 }
+                horizonCameraRef.current = camera;
 
-                // Initialize renderer
                 const renderer = new THREE.WebGLRenderer({
-                    canvas: horizonRef.current,
+                    canvas,
                     alpha: true,
                     antialias: true,
                     logarithmicDepthBuffer: true
                 });
-                // Size to current canvas CSS box
-                const cw = Math.max(1, Math.floor(horizonRef.current.clientWidth || 200));
-                const ch = Math.max(1, Math.floor(horizonRef.current.clientHeight || 200));
+                horizonRendererRef.current = renderer;
+
+                const cw = Math.max(1, Math.floor(canvas.clientWidth || 200));
+                const ch = Math.max(1, Math.floor(canvas.clientHeight || 200));
                 const dpr = Math.min(window.devicePixelRatio || 1, 2);
                 renderer.setPixelRatio(dpr);
                 renderer.setSize(cw, ch, false);
                 renderer.setClearColor(0x000000, 0.2);
-                horizonRendererRef.current = renderer;
 
-                // Create sphere with texture
                 const textureLoader = new THREE.TextureLoader();
                 const texture = await new Promise<THREE.Texture>((resolve, reject) => {
                     textureLoader.load(
@@ -467,15 +612,17 @@ export const Cockpit: React.FC<CockpitProps> = ({
                     );
                 });
 
+                if (cancelled) {
+                    texture.dispose();
+                    renderer.dispose();
+                    return;
+                }
+
                 texture.mapping = THREE.EquirectangularReflectionMapping;
                 texture.minFilter = THREE.LinearMipmapLinearFilter;
                 texture.magFilter = THREE.LinearFilter;
-
-                // Add anisotropic filtering
                 const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
                 texture.anisotropy = maxAnisotropy;
-
-                // Flip the texture horizontally to match original orientation
                 texture.repeat.x = -1;
                 texture.offset.x = 1;
 
@@ -486,22 +633,18 @@ export const Cockpit: React.FC<CockpitProps> = ({
                     transparent: true,
                     opacity: 1
                 });
-
-                // Create and add sphere
                 const sphereMesh = new THREE.Mesh(sphereGeometry, sphereMaterial);
                 sphereMesh.rotation.y = Math.PI;
-                sphereMeshRef.current = sphereMesh;
                 scene.add(sphereMesh);
+                sphereMeshRef.current = sphereMesh;
 
-                // Create target crosshair
                 const crosshairGroup = new THREE.Group();
 
-                // Main crosshair lines
                 const mainLineSize = 0.15;
-                const mainLineWidth = 10; // Even thicker center cross
+                const mainLineWidth = 10;
                 const mainVertices = new Float32Array([
-                    -mainLineSize, 0, 0, mainLineSize, 0, 0,  // Horizontal line
-                    0, -mainLineSize, 0, 0, mainLineSize, 0   // Vertical line
+                    -mainLineSize, 0, 0, mainLineSize, 0, 0,
+                    0, -mainLineSize, 0, 0, mainLineSize, 0
                 ]);
                 const mainGeometry = new THREE.BufferGeometry();
                 mainGeometry.setAttribute('position', new THREE.BufferAttribute(mainVertices, 3));
@@ -514,7 +657,6 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 const mainCrosshair = new THREE.LineSegments(mainGeometry, mainMaterial);
                 crosshairGroup.add(mainCrosshair);
 
-                // Small dot in the center
                 const dotGeometry = new THREE.CircleGeometry(0.005, 32);
                 const dotMaterial = new THREE.MeshBasicMaterial({
                     color: new THREE.Color(crosshairBaseHex),
@@ -524,16 +666,11 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 const dot = new THREE.Mesh(dotGeometry, dotMaterial);
                 crosshairGroup.add(dot);
 
-                // Small tick marks
                 const tickSize = 0.05;
                 const tickVertices = new Float32Array([
-                    // Left tick
                     -mainLineSize - tickSize, 0, 0, -mainLineSize, 0, 0,
-                    // Right tick
                     mainLineSize, 0, 0, mainLineSize + tickSize, 0, 0,
-                    // Top tick
                     0, mainLineSize, 0, 0, mainLineSize + tickSize, 0,
-                    // Bottom tick
                     0, -mainLineSize - tickSize, 0, 0, -mainLineSize, 0
                 ]);
                 const tickGeometry = new THREE.BufferGeometry();
@@ -547,11 +684,9 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 const ticks = new THREE.LineSegments(tickGeometry, tickMaterial);
                 crosshairGroup.add(ticks);
 
-                // Create target marker as a red X (initially hidden)
                 const targetMarkerSize = 0.08;
                 const targetMarkerGeometry = new THREE.BufferGeometry();
                 const targetMarkerVertices = new Float32Array([
-                    // X shape: two diagonals
                     -targetMarkerSize, -targetMarkerSize, 0,  targetMarkerSize,  targetMarkerSize, 0,
                      targetMarkerSize, -targetMarkerSize, 0, -targetMarkerSize,  targetMarkerSize, 0,
                 ]);
@@ -566,15 +701,13 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 const targetMarker = new THREE.LineSegments(targetMarkerGeometry, targetMarkerMaterial);
                 targetMarker.position.z = 0.4;
                 targetMarker.visible = false;
-                targetMarkerRef.current = targetMarker;
                 scene.add(targetMarker);
+                targetMarkerRef.current = targetMarker;
 
-                // Create out-of-bounds arrow (initially hidden)
                 const arrowLength = 0.12;
                 const arrowWidth = 0.08;
                 const arrowGeometry = new THREE.BufferGeometry();
                 const arrowVertices = new Float32Array([
-                    // Triangle pointing along +X with tip at origin
                     0, 0, 0,
                     -arrowLength,  arrowWidth / 2, 0,
                     -arrowLength, -arrowWidth / 2, 0,
@@ -586,24 +719,33 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 const arrowMesh = new THREE.Mesh(arrowGeometry, arrowMaterial);
                 arrowMesh.position.z = 0.49;
                 arrowMesh.visible = false;
-                targetArrowRef.current = arrowMesh;
                 scene.add(arrowMesh);
+                targetArrowRef.current = arrowMesh;
 
-                // Position the entire crosshair group
                 crosshairGroup.position.z = 0.5;
                 scene.add(crosshairGroup);
 
-                // Save crosshair materials for theming updates
                 (crosshairGroup as any)._mainMat = mainMaterial;
                 (crosshairGroup as any)._dotMat = dotMaterial;
                 (crosshairGroup as any)._tickMat = tickMaterial;
+
+                if (cancelled) {
+                    texture.dispose();
+                    return;
+                }
             } catch (error) {
                 console.error('Error initializing horizon:', error);
+                disposeHorizonResources();
             }
         };
 
         initializeHorizon();
-    }, []);
+
+        return () => {
+            cancelled = true;
+            disposeHorizonResources();
+        };
+    }, [horizonVisible, disposeHorizonResources]);
 
     // Update sphere texture when selection changes after initialization
     useEffect(() => {
@@ -676,9 +818,16 @@ export const Cockpit: React.FC<CockpitProps> = ({
     const toggleWindow = (windowName: string) => {
         setVisibleWindows(prev => {
             const key = windowName as WindowKey;
-            const next = !prev[key];
-            if (next) bringWindowToFront(key);
-            return { ...prev, [windowName]: next } as WindowStates;
+            const opening = !prev[key];
+            if (opening) {
+                bringWindowToFront(key);
+                setWindowPositions(previousPositions => {
+                    const desired = previousPositions[key] ?? { x: 20, y: 20 };
+                    const adjusted = computeNonOverlappingPosition(key, desired, prev, previousPositions);
+                    return { ...previousPositions, [key]: adjusted };
+                });
+            }
+            return { ...prev, [windowName]: opening } as WindowStates;
         });
     };
 

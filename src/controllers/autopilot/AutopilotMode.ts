@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
+import type { ThrusterGroups } from '../../config/spacecraftConfig';
 
 export interface AutopilotConfig {
     pid: {
@@ -26,7 +27,7 @@ export interface AutopilotConfig {
 export abstract class AutopilotMode {
     protected spacecraft: Spacecraft;
     protected config: AutopilotConfig;
-    protected thrusterGroups: any;
+    protected thrusterGroups: ThrusterGroups;
     protected thrust: number;
     protected thrusterMax: number[] = new Array(24).fill(0);
     protected pidController: PIDController;
@@ -38,6 +39,8 @@ export abstract class AutopilotMode {
     protected lastLinCmd: THREE.Vector3 = new THREE.Vector3();
     protected rotSmoothAlpha: number = 0.4; // lower alpha => more responsive rotation
     protected linSmoothAlpha: number = 0.5;
+    // Per-mode allocation scale (0..1) to arbitrate shared thruster budget across modes
+    private allocationScale: number = 1.0;
     // Scratch vectors to reduce allocations
     protected tmpVecA: THREE.Vector3 = new THREE.Vector3();
     protected tmpVecB: THREE.Vector3 = new THREE.Vector3();
@@ -58,7 +61,7 @@ export abstract class AutopilotMode {
     constructor(
         spacecraft: Spacecraft,
         config: AutopilotConfig,
-        thrusterGroups: any,
+        thrusterGroups: ThrusterGroups,
         thrust: number,
         pidController: PIDController,
         thrusterMax?: number[]
@@ -72,8 +75,14 @@ export abstract class AutopilotMode {
         this.thrusterMax = (thrusterMax && thrusterMax.length === 24) ? thrusterMax.slice(0, 24) : new Array(24).fill(thrust);
     }
 
+    // Update the scalar thrust budget used by allocation helpers
+    public setThrust(value: number): void {
+        this.thrust = value;
+        this.capsCache = undefined;
+    }
+
     // Update grouping dynamically (e.g., when RCS transforms change)
-    public setThrusterGroups(groups: any): void {
+    public setThrusterGroups(groups: ThrusterGroups): void {
         this.thrusterGroups = groups;
         this.capsCache = undefined;
     }
@@ -102,6 +111,11 @@ export abstract class AutopilotMode {
         }
     }
 
+
+    public setAllocationScale(scale: number): void {
+        this.allocationScale = THREE.MathUtils.clamp(scale, 0, 1);
+    }
+
     protected applyPIDOutputToThrusters(pidOutput: THREE.Vector3): number[] {
         const out = Array(24).fill(0);
         this.applyPIDOutputToThrustersInPlace(pidOutput, out);
@@ -125,8 +139,11 @@ export abstract class AutopilotMode {
             const tauAxisMax = Math.max(1e-6, caps.angTorque.x);
             const tauCmd = Math.min(tauAxisMax, Math.abs(x) / Lcap * tauAxisMax);
             const group = this.thrusterGroups.pitch[x >= 0 ? 1 : 0];
-            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust);
-            group.forEach((idx: number) => { out[idx] += perThruster; });
+            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust) * this.allocationScale;
+            group.forEach((idx: number) => {
+                const cap = this.thrusterMax[idx] || this.thrust;
+                out[idx] += Math.min(cap, perThruster);
+            });
         }
 
         // Y axis (yaw)
@@ -135,8 +152,11 @@ export abstract class AutopilotMode {
             const tauAxisMax = Math.max(1e-6, caps.angTorque.y);
             const tauCmd = Math.min(tauAxisMax, Math.abs(y) / Lcap * tauAxisMax);
             const group = this.thrusterGroups.yaw[y >= 0 ? 0 : 1];
-            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust);
-            group.forEach((idx: number) => { out[idx] += perThruster; });
+            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust) * this.allocationScale;
+            group.forEach((idx: number) => {
+                const cap = this.thrusterMax[idx] || this.thrust;
+                out[idx] += Math.min(cap, perThruster);
+            });
         }
 
         // Z axis (roll)
@@ -145,8 +165,11 @@ export abstract class AutopilotMode {
             const tauAxisMax = Math.max(1e-6, caps.angTorque.z);
             const tauCmd = Math.min(tauAxisMax, Math.abs(z) / Lcap * tauAxisMax);
             const group = this.thrusterGroups.roll[z >= 0 ? 0 : 1];
-            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust);
-            group.forEach((idx: number) => { out[idx] += perThruster; });
+            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust) * this.allocationScale;
+            group.forEach((idx: number) => {
+                const cap = this.thrusterMax[idx] || this.thrust;
+                out[idx] += Math.min(cap, perThruster);
+            });
         }
     }
 
@@ -183,7 +206,7 @@ export abstract class AutopilotMode {
             thrusterGroup.forEach((index: number) => {
                 const cap = this.thrusterMax[index] || this.thrust;
                 const share = total * (cap / sumCap);
-                out[index] += Math.min(cap, share);
+                out[index] += Math.min(cap, share * this.allocationScale);
             });
         });
     }

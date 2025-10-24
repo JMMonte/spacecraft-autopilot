@@ -49,6 +49,7 @@ export interface PhysicsEngine {
       isSensor?: boolean;
       restitution?: number;
       friction?: number;
+      density?: number;
     }
   ): unknown;
 

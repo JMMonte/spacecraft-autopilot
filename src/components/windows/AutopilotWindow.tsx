@@ -142,6 +142,7 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                     point: autopilot.getPointToPositionTelemetry?.(),
                     orient: autopilot.getOrientationMatchTelemetry?.(),
                     goto: autopilot.getGoToPositionTelemetry?.(),
+                    path: autopilot.getPathFollowerTelemetry?.(),
                 });
             } catch {}
         }, 100);
@@ -419,6 +420,17 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
             {/* Autopilot Telemetry */}
             <div className="space-y-0.5">
                 <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Telemetry</h3>
+                {apTelemetry?.path && (
+                    <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
+                        <div className="text-cyan-300/90">Path Follower</div>
+                        <div>s: {apTelemetry.path.energy?.sCur?.toFixed?.(2)} / {apTelemetry.path.energy?.sStop?.toFixed?.(2)} m</div>
+                        <div>v∥: {apTelemetry.path.energy?.vAlong?.toFixed?.(2)} m/s → v_ref: {apTelemetry.path.vRefMag?.toFixed?.(2)} m/s</div>
+                        <div>v_feasible: {apTelemetry.path.energy?.vFeasible?.toFixed?.(2)} m/s (n: {apTelemetry.path.energy?.nSamples} / {apTelemetry.path.energy?.nCtrl})</div>
+                        <div>limits: v_lim={apTelemetry.path.energy?.vLimit?.toFixed?.(2)} v_fwd={apTelemetry.path.energy?.vFwd?.toFixed?.(2)} v_bwd={apTelemetry.path.energy?.vBwd?.toFixed?.(2)}</div>
+                        <div>κ: {apTelemetry.path.energy?.kappa?.toFixed?.(3)} a_tan: {apTelemetry.path.energy?.aTanMax?.toFixed?.(2)} a_lat: {apTelemetry.path.energy?.aLatMax?.toFixed?.(2)}</div>
+                        <div>done: {String(apTelemetry.path.energy?.done)}</div>
+                    </div>
+                )}
                 {apTelemetry?.modes?.pointToPosition && apTelemetry?.point && (
                     <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
                         <div className="text-cyan-300/90">Point To Position</div>

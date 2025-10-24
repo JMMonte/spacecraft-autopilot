@@ -6,7 +6,7 @@ interface TrajectorySegment {
     distance: number;
 }
 
-interface TrajectoryUpdate {
+export interface TrajectoryUpdate {
     position: THREE.Vector3 | null;
     velocity: THREE.Vector3 | null;
 }

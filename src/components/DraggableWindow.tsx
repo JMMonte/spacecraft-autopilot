@@ -35,7 +35,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
   isVisible = true, 
   onPositionChange, 
   style,
-  initiallyCollapsed = true,
+  initiallyCollapsed = false,
   resizable = true,
   minWidth = 200,
   minHeight = 120,

@@ -130,7 +130,8 @@ export class SpacecraftModel {
             this.boxDepth,
             dockingPortRadius,
             dockingPortLength,
-            dockingPortDepth
+            dockingPortDepth,
+            this.aluminumDensity
         );
         this.fuelTankManager = new FuelTankManager(
             this.boxWidth,
@@ -179,11 +180,14 @@ export class SpacecraftModel {
         
         this.scene.add(this.box);
 
-        const boxMass = this.calculateMass();
+        // Split mass between main chassis (box collider) and docking ports (their own colliders)
+        const totalMass = this.calculateMass();
+        const dockingMass = this.calculateDockingPortMass();
+        const baseMass = Math.max(totalMass - dockingMass, 1e-4);
         if (this.physics) {
             const rb = this.physics.createBoxBody(
                 { x: this.boxWidth / 2, y: this.boxHeight / 2, z: this.boxDepth / 2 },
-                boxMass
+                baseMass
             );
             rb.setDamping(0, 0);
             this.rigid = rb;
@@ -195,7 +199,7 @@ export class SpacecraftModel {
             quaternion: new THREE.Quaternion(),
             velocity: new THREE.Vector3(),
             angularVelocity: new THREE.Vector3(),
-            mass: boxMass,
+            mass: totalMass,
             shapes: [shape],
             updateBoundingRadius: () => {},
             updateMassProperties: () => {},
@@ -265,7 +269,7 @@ export class SpacecraftModel {
             this.trussRadius,
             this.dockingPortRadius
         );
-        this.dockingPortManager = new DockingPortManager(depth, this.dockingPortRadius, this.dockingPortLength, this.dockingPortDepth);
+        this.dockingPortManager = new DockingPortManager(depth, this.dockingPortRadius, this.dockingPortLength, this.dockingPortDepth, this.aluminumDensity);
         this.fuelTankManager = new FuelTankManager(width, height, depth, this.trussRadius, this.dockingPortDepth);
 
         // Update components
@@ -298,8 +302,11 @@ export class SpacecraftModel {
 
         // Update facade for dimensions and mass
         this.boxBody.shapes[0].halfExtents = { x: width / 2, y: height / 2, z: depth / 2 };
-        this.boxBody.mass = this.calculateMass();
-        if (this.rigid) this.rigid.setMass(this.boxBody.mass);
+        const totalMass = this.calculateMass();
+        const dockingMass = this.calculateDockingPortMass();
+        const baseMass = Math.max(totalMass - dockingMass, 1e-4);
+        this.boxBody.mass = totalMass;
+        if (this.rigid) this.rigid.setMass(baseMass);
 
         // Create new RCS visuals with fresh state
         const newRcsVisuals = this.rigid ? new RCSVisuals(this, this.rigid) : new RCSVisuals(this, {

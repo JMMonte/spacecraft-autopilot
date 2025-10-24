@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CSM } from 'three/examples/jsm/csm/CSM.js';
 // Nicer lens flare: custom shader-based full-screen effect
 import fragmentShader from '../shaders/lensFlare.frag?raw';
 import vertexShader from '../shaders/lensFlare.vert?raw';
@@ -8,9 +9,18 @@ import { calculateOcclusion, calculateDistanceOpacity, isSunVisible } from '../e
 export class SceneLights {
     private scene: THREE.Scene;
     private lights: THREE.Light[];
+    private csm: CSM | null = null;
     private sunLight!: THREE.DirectionalLight;
     private mainCamera: THREE.Camera;
     private shadowDistance: number = 100;
+    private cascadeFar: number = 0;
+    private readonly cascadeCount = 4;
+    private readonly cascadeBreakDistances = [80, 320, 1250];
+    private readonly cascadeMapSizes = [4096, 2048, 1024, 1024];
+    private readonly csmRescanInterval = 20;
+    private pendingMaterialRescan = true;
+    private readonly csmMaterialCache = new WeakSet<THREE.Material>();
+    private sunIntensity = 10.0;
 
     // Shader lens flare state
     private lensFlareMaterial: THREE.ShaderMaterial | null = null;
@@ -37,37 +47,53 @@ export class SceneLights {
     }
 
     private setupLights(): void {
-        // Scene-scale distances for lighting
         // Aim the sun toward the camera's default forward (-Z) so flares are visible
         const direction = new THREE.Vector3(1, 0.5, -1).normalize();
-        const SUN_DISTANCE = this.shadowDistance * 6; // ~600 units by default
-        const shadowSize = this.shadowDistance;
+        this.cascadeFar = this.shadowDistance * 22; // extended reach for far cascades
 
-        // Sun light (directional with lens flare)
-        this.sunLight = new THREE.DirectionalLight(0xffffff, 10.0);
-        this.sunLight.position.copy(direction.clone().multiplyScalar(SUN_DISTANCE));
+        // Cascaded shadow maps keep resolution high up close while covering distance
+        this.csm = new CSM({
+            camera: this.mainCamera,
+            parent: this.scene,
+            cascades: this.cascadeCount,
+            maxFar: this.cascadeFar,
+            mode: 'custom',
+            customSplitsCallback: (cascades: number, near: number, far: number, target: number[]) => {
+                const breakDistances = this.cascadeBreakDistances;
+                target.length = 0;
+                let previous = near / far;
+                for (let i = 0; i < cascades - 1; i++) {
+                    const cutoff = breakDistances[i] ?? far;
+                    const normalized = Math.min(Math.max(cutoff, near), far) / far;
+                    const clamped = Math.max(previous, normalized);
+                    target.push(clamped);
+                    previous = clamped;
+                }
+                target.push(1);
+            },
+            shadowMapSize: this.cascadeMapSizes[0],
+            shadowBias: -0.00008,
+            lightDirection: direction.clone(),
+            lightIntensity: this.sunIntensity,
+            lightNear: 1,
+            lightFar: this.cascadeFar,
+            lightMargin: this.shadowDistance * 3,
+        });
+        this.csm.fade = true;
+        this.sunLight = this.csm.lights[0];
 
-        // Balanced shadow settings
-        this.sunLight.castShadow = true;
-        this.sunLight.shadow.mapSize.width = 2048;
-        this.sunLight.shadow.mapSize.height = 2048;
-        this.sunLight.shadow.camera.near = 1;
-        this.sunLight.shadow.camera.far = this.shadowDistance * 8;
-        this.sunLight.shadow.camera.left = -shadowSize;
-        this.sunLight.shadow.camera.right = shadowSize;
-        this.sunLight.shadow.camera.top = shadowSize;
-        this.sunLight.shadow.camera.bottom = -shadowSize;
-        this.sunLight.shadow.bias = -0.0001;
-        this.sunLight.shadow.normalBias = 0.01;
-        this.sunLight.shadow.radius = 0.8;
-
-        this.scene.add(this.sunLight);
-        this.lights.push(this.sunLight);
-
-        // Removed bluish deep-space fill to keep neutral lighting
+        this.csm.lights.forEach((light, index) => {
+            const resolution = this.cascadeMapSizes[Math.min(index, this.cascadeMapSizes.length - 1)] ?? this.cascadeMapSizes[0];
+            light.castShadow = true;
+            light.shadow.mapSize.set(resolution, resolution);
+            light.shadow.bias = -0.00008;
+            light.shadow.normalBias = 0.01 + index * 0.006;
+            light.shadow.radius = index === 0 ? 1.2 : 1.0;
+        });
+        this.pendingMaterialRescan = true;
 
         // Add subtle ambient fill; reduced as environment IBL now provides ambient
-        const ambient = new THREE.AmbientLight(0xFFFFFF, 0.5);
+        const ambient = new THREE.AmbientLight(0xffffff, 0.5);
         this.scene.add(ambient);
         this.lights.push(ambient);
 
@@ -82,7 +108,6 @@ export class SceneLights {
         this.scene.add(this.sunMesh);
 
         // Nicer lens flare: add shader-based full-screen mesh
-        // Geometry spans clip-space (-1..1); vertex shader writes position directly
         const geometry = new THREE.PlaneGeometry(2, 2, 1, 1);
         this.lensFlareMaterial = new THREE.ShaderMaterial({
             uniforms: {
@@ -104,9 +129,7 @@ export class SceneLights {
         this.lensFlareMesh = new THREE.Mesh(geometry, this.lensFlareMaterial);
         this.lensFlareMesh.renderOrder = 1000;
         this.lensFlareMesh.frustumCulled = false; // screen-space quad
-        // Render only on the lens flare layer so auxiliary cameras can opt out
         this.lensFlareMesh.layers.set(LENS_FLARE_LAYER);
-        // Avoid accidental interactions
         (this.lensFlareMesh as any).raycast = () => {};
         this.scene.add(this.lensFlareMesh);
     }
@@ -115,56 +138,63 @@ export class SceneLights {
         return this.sunLight;
     }
 
-    public update(): void {
-        if (!this.mainCamera || !this.sunLight) return;
-        const cameraPos = (this.mainCamera as THREE.PerspectiveCamera).position;
+    public markMaterialsDirty(): void {
+        this.pendingMaterialRescan = true;
+    }
 
-        // Determine sun direction using actual sun position (if available)
+    public update(): void {
+        if (!this.mainCamera) return;
+        this.frameCounter++;
+
+        const cameraPos = (this.mainCamera as THREE.PerspectiveCamera).position;
         const fallbackDir = new THREE.Vector3(1, 0.5, -1).normalize();
         const sunWorldPos = this.sunMesh ? this.sunMesh.position : fallbackDir;
 
-        // Direction of light rays (from Sun toward the camera)
         const sunToCameraDir = new THREE.Vector3()
             .subVectors(cameraPos, sunWorldPos)
             .normalize();
 
-        // Keep the light a fixed distance behind the camera along the light direction
-        const FOLLOW_DISTANCE = this.shadowDistance * 6; // same scale as initial SUN_DISTANCE
-        this.sunLight.position.copy(cameraPos).sub(sunToCameraDir.clone().multiplyScalar(FOLLOW_DISTANCE));
-        this.sunLight.target.position.copy(cameraPos);
+        if (this.csm) {
+            if (this.csm.lights.length > 0) {
+                this.sunLight = this.csm.lights[0];
+            }
+            this.csm.lightDirection.copy(sunToCameraDir);
+            this.csm.maxFar = this.cascadeFar;
+            this.csm.update();
+        } else if (this.sunLight) {
+            const followDistance = this.shadowDistance * 6;
+            this.sunLight.position.copy(cameraPos).sub(sunToCameraDir.clone().multiplyScalar(followDistance));
+            this.sunLight.target.position.copy(cameraPos);
+            this.sunLight.updateMatrixWorld(false);
+            this.sunLight.target.updateMatrixWorld(false);
+            (this.sunLight.shadow.camera as THREE.OrthographicCamera).updateProjectionMatrix();
+        }
 
-        // Ensure matrices are current so shadow camera tracks correctly
-        this.sunLight.updateMatrixWorld(false);
-        this.sunLight.target.updateMatrixWorld(false);
-        (this.sunLight.shadow.camera as THREE.OrthographicCamera).updateProjectionMatrix();
+        if (this.pendingMaterialRescan || (this.csm && this.frameCounter % this.csmRescanInterval === 0)) {
+            this.refreshCSMMaterials(this.pendingMaterialRescan);
+            this.pendingMaterialRescan = false;
+        }
 
-        // Update physical Sun sphere position at 1 AU along a stable direction for visuals
         if (this.sunMesh) {
-            const visualDir = fallbackDir; // stable visual direction for the sun sphere
+            const visualDir = fallbackDir;
             this.sunMesh.position.copy(visualDir).multiplyScalar(this.AU);
             this.sunMesh.updateMatrixWorld(false);
         }
 
-        // Update lens flare shader uniforms
         if (this.lensFlareMaterial) {
-            this.frameCounter++;
             this.lensTime += 1 / 60; // approx; world has fixed dt
 
-            // Project Sun sphere position (fallback to light if missing)
             const sunPos = this.sunMesh ? this.sunMesh.position : this.sunLight.position;
             this.projectedPosition.copy(sunPos).project(this.mainCamera);
             const visible = isSunVisible(this.projectedPosition);
 
             if (visible) {
-                // Set lens position (NDC)
                 this.lensPosition.set(this.projectedPosition.x, this.projectedPosition.y);
 
-                // Distance-based effects (use scene scale)
                 const cam = this.mainCamera as THREE.PerspectiveCamera;
                 const sunDistance = cam.position.distanceTo(sunPos);
                 const distanceOpacity = calculateDistanceOpacity(sunDistance);
 
-                // Throttled occlusion testing
                 if (this.frameCounter % 3 === 0) {
                     this.screenCoords.set(this.projectedPosition.x, this.projectedPosition.y);
                     this.raycaster.setFromCamera(this.screenCoords, this.mainCamera as THREE.Camera);
@@ -176,42 +206,63 @@ export class SceneLights {
                         )),
                         true
                     );
-                    // Only real meshes should occlude; skip lines/helpers
                     intersects = intersects.filter(it => it.object instanceof THREE.Mesh);
                     this.lastOcclusionOpacity = intersects.length > 0 ? calculateOcclusion(intersects) : 0;
                 }
 
-                // Combine opacities (worst case)
                 const targetOpacity = Math.max(this.lastOcclusionOpacity, distanceOpacity);
 
-                // Smooth opacity interpolation
                 const currentOpacity = (this.lensFlareMaterial.uniforms.opacity.value as number) ?? 0;
                 this.internalOpacity = THREE.MathUtils.lerp(currentOpacity, targetOpacity, 0.1);
                 this.lensFlareMaterial.uniforms.opacity.value = this.internalOpacity;
 
-                // Screen-quad should remain unscaled
                 if (this.lensFlareMesh) this.lensFlareMesh.scale.setScalar(1);
             } else {
-                // Sun not visible
                 this.internalOpacity = 1.0;
                 this.lensFlareMaterial.uniforms.opacity.value = this.internalOpacity;
             }
 
-            // Always advance time and update toggles
             this.lensFlareMaterial.uniforms.iTime.value = this.lensTime;
             this.lensFlareMaterial.uniforms.enabled.value = true;
         }
     }
 
+    private refreshCSMMaterials(force: boolean): void {
+        if (!this.csm) return;
+        if (!force && this.frameCounter % this.csmRescanInterval !== 0) return;
+
+        this.scene.traverse((object) => {
+            if (!(object instanceof THREE.Mesh)) return;
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            materials.forEach((material) => {
+                if (!material || this.csmMaterialCache.has(material)) return;
+                this.csm?.setupMaterial(material);
+                this.csmMaterialCache.add(material);
+            });
+        });
+    }
+
     public cleanup(): void {
+        if (this.csm) {
+            this.csm.remove();
+            this.csm.dispose();
+            this.csm = null;
+        }
+
         this.lights.forEach(light => {
-            
             this.scene.remove(light);
             if ('dispose' in light) {
                 (light as any).dispose?.();
             }
         });
         this.lights = [];
+
+        if (this.sunMesh) {
+            this.scene.remove(this.sunMesh);
+            this.sunMesh.geometry.dispose();
+            (this.sunMesh.material as THREE.Material).dispose();
+            this.sunMesh = null;
+        }
 
         if (this.lensFlareMesh) {
             this.scene.remove(this.lensFlareMesh);
@@ -222,11 +273,15 @@ export class SceneLights {
         this.lensFlareMaterial = null;
     }
 
-    // Allow external resize hook to update shader resolution
+    // Allow external resize hook to update shader resolution and rebalance cascades
     public updateResolution(width: number, height: number): void {
         if (this.lensFlareMaterial) {
             const res = this.lensFlareMaterial.uniforms.iResolution.value as THREE.Vector2;
             res.set(width, height);
+        }
+        if (this.csm) {
+            this.csm.updateFrustums();
+            this.pendingMaterialRescan = true;
         }
     }
 }

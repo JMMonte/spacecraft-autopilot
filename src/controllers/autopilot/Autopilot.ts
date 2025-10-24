@@ -9,20 +9,22 @@ import { PointToPosition } from './PointToPosition';
 import { OrientationMatchAutopilot } from './OrientationMatchAutopilot';
 import { GoToPosition } from './GoToPosition';
 import { createLogger } from '../../utils/logger';
+// Path following handled by PathManager
+import type { ThrusterGroups } from '../../config/spacecraftConfig';
+import type { AutopilotMode as AutopilotModeBase } from './AutopilotMode';
+import type { AutopilotModes, AutopilotModeName, AutopilotState, AutopilotTelemetry, IAutopilot, TargetPoint } from './types';
+import { PathManager } from './PathManager';
+import { WorkerClient } from './WorkerClient';
+import { ModeRegistry } from './ModeRegistry';
+import { TargetTracker } from './TargetTracker';
+// AutoTuneUtils imports removed (now handled by AutoTuner)
+import { AutoTuner } from './AutoTuner';
 
-interface AutopilotModes {
-    orientationMatch: boolean;
-    cancelRotation: boolean;
-    cancelLinearMotion: boolean;
-    pointToPosition: boolean;
-    goToPosition: boolean;
-}
-
-export class Autopilot {
+export class Autopilot implements IAutopilot {
     private log = createLogger('controllers:Autopilot');
     private spacecraft: Spacecraft;
     private config: AutopilotConfig;
-    private thrusterGroups: any;
+    private thrusterGroups: ThrusterGroups;
     private thrust: number;
     private thrusterMax: number[];
     private isEnabled: boolean = false;
@@ -32,19 +34,17 @@ export class Autopilot {
     private targetObject: Spacecraft | null = null;
     private targetPoint: THREE.Vector3 = new THREE.Vector3();
     private referenceObject: Spacecraft | null = null;
+    private targetPointType: TargetPoint = 'center';
     // deprecated: auto-tune now only via PID window
     private useWorker: boolean = true;
-    private worker?: Worker;
-    private workerReady: boolean = false;
-    private workerTelemetry: { point?: any; orient?: any; goto?: any } = {};
+    private workerClient?: WorkerClient;
+    private workerTelemetry: AutopilotTelemetry = {};
     // Output buffer and scheduling
     private forcesBuffer: number[] = new Array(24).fill(0);
     private updateInterval: number = 1 / 30; // run autopilot at 30 Hz to reduce load
     private timeSinceUpdate: number = 0;
     // Scratch objects to avoid per-frame allocations
     private scratchDir = new THREE.Vector3();
-    private scratchForward = new THREE.Vector3();
-    private scratchQuat = new THREE.Quaternion();
 
     // Mode instances
     private cancelRotationMode!: CancelRotation;
@@ -52,17 +52,22 @@ export class Autopilot {
     private pointToPositionMode!: PointToPosition;
     private orientationMatchMode!: OrientationMatchAutopilot;
     private goToPositionMode!: GoToPosition;
+    // Path management
+    private pathManager!: PathManager;
+    private targetTracker!: TargetTracker;
+    private useFollowerNowFlag = false;
+    private _rotScaleRuntime: number | undefined;
 
     // PID Controllers
     private orientationPidController: PIDController;
     private rotationCancelPidController: PIDController;
     private linearPidController: PIDController;
     private momentumPidController: PIDController;
-    private onStateChange?: (state: { enabled: boolean; activeAutopilots: AutopilotModes }) => void;
+    private onStateChange?: (state: AutopilotState) => void;
 
     constructor(
         spacecraft: Spacecraft,
-        thrusterGroups: any,
+        thrusterGroups: ThrusterGroups,
         thrust: number,
         thrusterMax: number[],
         options: {
@@ -105,7 +110,7 @@ export class Autopilot {
                 epsilon: 0.01,
                 maxAngularMomentum: options.maxAngularMomentum ?? 1.0,
                 maxLinearMomentum: options.maxLinearMomentum ?? 10.0,
-                maxAngularVelocity:  options.pidGains?.orientation ? 1.0 : 1.2,
+                maxAngularVelocity: options.pidGains?.orientation ? 1.0 : 1.2,
                 maxAngularAcceleration: 5.0,
                 maxLinearVelocity: options.maxLinearMomentum ? (options.maxLinearMomentum / Math.max(this.spacecraft.getMass(), 1e-3)) * 4 : 8.0,
                 maxLinearAcceleration: 2.5,
@@ -142,7 +147,7 @@ export class Autopilot {
             this.config.pid.momentum.kd,
             'linearMomentum'
         );
-        
+
         // Configure additional PID parameters
         this.linearPidController.setMaxIntegral(0.1);      // Limit integral windup
         this.linearPidController.setDerivativeAlpha(0.95); // Smoother derivative
@@ -161,7 +166,32 @@ export class Autopilot {
 
         // Initialize modes (for local path)
         this.initializeModes();
+        // Path manager (after modes exist, to query caps)
+        this.pathManager = new PathManager(
+            () => this.goToPositionMode.getAxisLinearAccelCaps(),
+            () => this.config.limits.maxLinearVelocity ?? 8.0,
+            () => this.spacecraft.getMainBodyDimensions(),
+            () => this.targetObject,
+        );
+        this.targetTracker = new TargetTracker(this.spacecraft);
         // Defer worker creation until a mode is enabled to avoid idle workers
+    }
+
+    private forEachMode(fn: (m: AutopilotModeBase) => void): void {
+        try { fn(this.cancelRotationMode as unknown as AutopilotModeBase); } catch {}
+        try { fn(this.cancelLinearMotionMode as unknown as AutopilotModeBase); } catch {}
+        try { fn(this.pointToPositionMode as unknown as AutopilotModeBase); } catch {}
+        try { fn(this.orientationMatchMode as unknown as AutopilotModeBase); } catch {}
+        try { fn(this.goToPositionMode as unknown as AutopilotModeBase); } catch {}
+    }
+
+    private setRotationAllocationScale(scale: number): void {
+        const s = THREE.MathUtils.clamp(scale, 0, 1);
+        try { this.cancelRotationMode.setAllocationScale(s); } catch {}
+        try { this.orientationMatchMode.setAllocationScale(s); } catch {}
+        try { this.pointToPositionMode.setAllocationScale(s); } catch {}
+        try { this.cancelLinearMotionMode.setAllocationScale(1.0); } catch {}
+        try { this.goToPositionMode.setAllocationScale(1.0); } catch {}
     }
 
     private initializeModes(): void {
@@ -221,180 +251,66 @@ export class Autopilot {
         return this.config;
     }
 
+    // --- Curved path following --------------------------------------------
+    /**
+     * Provide a polyline path (world waypoints) to follow with continuous speed.
+     * GoToPosition will be driven by a moving carrot and reference velocity.
+     */
+    public setPathWaypoints(waypoints: THREE.Vector3[], opts?: {
+        sampleSpacing?: number;
+        maxSamples?: number;
+        lookaheadMin?: number;
+        lookaheadMax?: number;
+        lookaheadGain?: number;
+        lookaheadFraction?: number;
+        endClearanceAbs?: number;
+    }): void {
+        // Derive conservative accel caps from current thruster layout
+        this.pathManager.setWaypoints(waypoints, opts);
+        // Capture goal orientation at plan time for rotational rebase
+        try {
+            if (this.targetObject) this.pathManager.setGoalQuatSnapshot(this.targetObject.objects.box.quaternion);
+            else this.pathManager.setGoalQuatSnapshot(this.targetOrientation);
+        } catch { this.pathManager.setGoalQuatSnapshot(new THREE.Quaternion(0, 0, 0, 1)); }
+    }
+
+    public clearPath(): void { this.pathManager.clear(); }
+
+    public getPathSamples(): THREE.Vector3[] | null {
+        return this.pathManager.getSamples();
+    }
+
+    public getPathProgress(): { sCur: number; sRem: number; sTotal: number; idx: number; done: boolean } | null {
+        return this.pathManager.getProgress();
+    }
+
+    public getPathCarrot(): THREE.Vector3 | null {
+        return this.pathManager.getCarrot();
+    }
+
     // --- Auto-tune helpers -------------------------------------------------
-    private computeAxisInertia(): { x: number; y: number; z: number } {
-        const mass = this.spacecraft.getMass();
-        const size = this.spacecraft.getMainBodyDimensions();
-        const w = size.x, h = size.y, d = size.z;
-        const Ix = (1 / 12) * mass * (h * h + d * d);
-        const Iy = (1 / 12) * mass * (w * w + d * d);
-        const Iz = (1 / 12) * mass * (w * w + h * h);
-        return { x: Ix, y: Iy, z: Iz };
-    }
+    // Legacy helpers retained for compatibility; now unused after AutoTuner extraction
 
-    private fitTau(samples: Array<{ t: number; e: number }>): number {
-        const pts = samples.filter(s => s.e > 1e-6);
-        if (pts.length < 3) return 1.0; // fallback
-        let sumT = 0, sumY = 0, sumTT = 0, sumTY = 0;
-        for (const s of pts) {
-            const y = Math.log(s.e);
-            sumT += s.t; sumY += y; sumTT += s.t * s.t; sumTY += s.t * y;
-        }
-        const n = pts.length;
-        const denom = n * sumTT - sumT * sumT;
-        if (Math.abs(denom) < 1e-9) return 1.0;
-        const slope = (n * sumTY - sumT * sumY) / denom; // ln e = c + slope * t
-        const tau = slope < -1e-6 ? -1 / slope : 1.0;
-        return Math.max(0.05, Math.min(10.0, tau));
-    }
-
-    private clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+    // clamp helper no longer used; gain mapping moved into PIDController
 
     /**
      * Active auto-tune that excites the system and estimates gains from decay samples.
      * Runs on the main thread while the autopilot (main or worker) computes thrust.
      */
     public async autoTune(type: 'attitude' | 'rotCancel' | 'position' | 'linMomentum', durationMs: number = 1200): Promise<void> {
-        // Snapshot autopilot and references
-        const prevEnabled = this.isEnabled;
-        const prevModes = this.getActiveAutopilots();
-        const prevRef = this.referenceObject;
-
-        // Ensure enabled for tuning
-        this.setEnabled(true);
-        this.setReferenceObject(null);
-
-        const start = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-        const samples: Array<{ t: number; e: number }> = [];
-        const sample = () => {
-            const tNow = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-            const t = (tNow - start) / 1000;
-            let e = 0;
-            if (type === 'attitude') {
-                const q = this.spacecraft.getWorldOrientation();
-                const target = this.getTargetOrientation();
-                const qInv = q.clone().invert();
-                const errQ = qInv.multiply(target);
-                const wClamped = Math.max(-1, Math.min(1, errQ.w));
-                e = 2 * Math.acos(Math.abs(wClamped)); // radians
-            } else if (type === 'rotCancel') {
-                const w = this.spacecraft.getWorldAngularVelocity();
-                const I = this.computeAxisInertia();
-                const Lx = I.x * w.x, Ly = I.y * w.y, Lz = I.z * w.z;
-                e = Math.sqrt(Lx * Lx + Ly * Ly + Lz * Lz); // |L|
-            } else if (type === 'position') {
-                const p = this.spacecraft.getWorldPosition();
-                const tgt = this.getTargetPosition();
-                e = p.distanceTo(tgt);
-            } else if (type === 'linMomentum') {
-                const v = this.spacecraft.getWorldVelocity();
-                e = v.length();
-            }
-            samples.push({ t, e });
-        };
-
-        // Configure excitation and mode control
-        const q0 = this.spacecraft.getWorldOrientation();
-        const p0 = this.spacecraft.getWorldPosition();
-        try {
-            if (type === 'attitude') {
-                // Small deliberate angle step around world Y
-                const axis = new THREE.Vector3(0, 1, 0);
-                const angle = THREE.MathUtils.degToRad(12);
-                const dq = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-                const target = dq.multiply(q0.clone());
-                this.setTargetOrientation(target);
-                this.setMode('orientationMatch', true);
-            } else if (type === 'rotCancel') {
-                // Inject a small angular velocity then cancel
-                try {
-                    const rb: any = (this.spacecraft as any)?.objects?.rigid;
-                    if (rb) {
-                        const av = rb.getAngularVelocity?.() || { x: 0, y: 0, z: 0 };
-                        const nearZero = (Math.abs(av.y) + Math.abs(av.x) + Math.abs(av.z)) < 1e-3;
-                        if (nearZero && rb.setAngularVelocity) rb.setAngularVelocity({ x: 0, y: 0.4, z: 0 });
-                    }
-                } catch {}
-                this.setMode('cancelRotation', true);
-            } else if (type === 'position') {
-                // Position step in body-forward by ~0.8m
-                const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(q0);
-                const tgt = p0.clone().add(forward.multiplyScalar(0.8));
-                this.setTargetPosition(tgt);
-                this.setMode('goToPosition', true);
-            } else if (type === 'linMomentum') {
-                // Inject a small linear velocity then cancel
-                try {
-                    const rb: any = (this.spacecraft as any)?.objects?.rigid;
-                    if (rb) {
-                        const lv = rb.getLinearVelocity?.() || { x: 0, y: 0, z: 0 };
-                        const speed = Math.sqrt(lv.x * lv.x + lv.y * lv.y + lv.z * lv.z);
-                        if (speed < 0.1 && rb.setLinearVelocity) rb.setLinearVelocity({ x: 0.4, y: 0, z: 0 });
-                    }
-                } catch {}
-                this.setMode('cancelLinearMotion', true);
-            }
-
-            // Sample during the window
-            const end = start + durationMs;
-            await new Promise<void>((resolve) => {
-                const tick = () => {
-                    sample();
-                    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-                    if (now >= end) return resolve();
-                    (typeof requestAnimationFrame !== 'undefined') ? requestAnimationFrame(tick) : setTimeout(tick, 16);
-                };
-                tick();
-            });
-
-            // Fit tau and set conservative gains
-            const tau = this.fitTau(samples);
-            if (type === 'attitude') {
-                const kp = this.clamp(0.15 / tau, 0.05, 0.6);
-                const kd = this.clamp(0.08 * tau, 0.02, 0.25);
-                const ki = 0.0;
-                this.orientationPidController.setGain('Kp', kp);
-                this.orientationPidController.setGain('Kd', kd);
-                this.orientationPidController.setGain('Ki', ki);
-            } else if (type === 'rotCancel') {
-                const kp = this.clamp(0.35 / tau, 0.05, 1.2);
-                const kd = this.clamp(0.12 * tau, 0.02, 0.35);
-                const ki = 0.0;
-                this.rotationCancelPidController?.setGain('Kp', kp);
-                this.rotationCancelPidController?.setGain('Kd', kd);
-                this.rotationCancelPidController?.setGain('Ki', ki);
-            } else if (type === 'position') {
-                const kp = this.clamp(0.8 / tau, 0.05, 4.0);
-                const kd = this.clamp(0.35 * tau, 0.02, 2.5);
-                const ki = 0.0005; // gentle integral
-                this.linearPidController.setGain('Kp', kp);
-                this.linearPidController.setGain('Kd', kd);
-                this.linearPidController.setGain('Ki', ki);
-            } else if (type === 'linMomentum') {
-                const kp = this.clamp(1.1 / tau, 0.3, 6.0);
-                const kd = this.clamp(0.22 * tau, 0.02, 2.0);
-                const ki = 0.0;
-                this.momentumPidController.setGain('Kp', kp);
-                this.momentumPidController.setGain('Kd', kd);
-                this.momentumPidController.setGain('Ki', ki);
-            }
-            // Push to worker
-            this.syncPidGainsToWorker();
-        } finally {
-            // Restore previous autopilot config
-            this.setMode('goToPosition', !!prevModes.goToPosition);
-            this.setMode('orientationMatch', !!prevModes.orientationMatch);
-            this.setMode('cancelLinearMotion', !!prevModes.cancelLinearMotion);
-            this.setMode('cancelRotation', !!prevModes.cancelRotation);
-            this.setMode('pointToPosition', !!prevModes.pointToPosition);
-            if (prevRef) this.setReferenceObject(prevRef); else this.setReferenceObject(null);
-            if (!prevEnabled) this.setEnabled(false);
-        }
+        const tuner = new AutoTuner(this, this.spacecraft, {
+            orientation: this.orientationPidController,
+            rotationCancel: this.rotationCancelPidController,
+            position: this.linearPidController,
+            momentum: this.momentumPidController,
+        });
+        await tuner.run(type, durationMs);
+        this.syncPidGainsToWorker();
     }
 
     // Push current PID gains to worker (if running)
     public syncPidGainsToWorker(): void {
-        if (!(this.useWorker && this.worker && this.workerReady)) return;
+        if (!this.workerClient) return;
         try {
             const gains = {
                 orientation: {
@@ -418,8 +334,8 @@ export class Autopilot {
                     kd: this.momentumPidController.getGain('Kd'),
                 }
             };
-            this.worker!.postMessage({ type: 'setGains', gains });
-        } catch {}
+            this.workerClient.setGains(gains);
+        } catch { }
     }
 
     // Worker calibration is no longer used; tuning happens via PID window-triggered autoTune
@@ -428,28 +344,23 @@ export class Autopilot {
         const arr = (Array.isArray(max) && max.length === 24) ? max.slice(0, 24) : new Array(24).fill(this.thrust);
         this.thrusterMax = arr;
         // Update all mode instances
-        this.cancelRotationMode?.setThrusterMax(arr);
-        this.cancelLinearMotionMode?.setThrusterMax(arr);
-        this.pointToPositionMode?.setThrusterMax(arr);
-        this.orientationMatchMode?.setThrusterMax(arr);
-        this.goToPositionMode?.setThrusterMax(arr);
+        this.forEachMode((m) => m.setThrusterMax(arr));
         // Inform worker
-        if (this.useWorker && this.worker && this.workerReady) {
-            try { this.worker.postMessage({ type: 'setThrusterStrengths', strengths: arr }); } catch {}
-        }
+        try { this.workerClient?.setThrusterStrengths(arr); } catch { }
+    }
+
+    // Adjust the scalar thrust budget used by allocation helpers across all modes
+    public setThrust(value: number): void {
+        this.thrust = value;
+        this.forEachMode((m) => m.setThrust(value));
+        try { this.workerClient?.setThrust(value); } catch { }
     }
 
     // Dynamically update thruster grouping after geometry changes
-    public setThrusterGroups(groups: any): void {
+    public setThrusterGroups(groups: ThrusterGroups): void {
         this.thrusterGroups = groups;
-        try { this.cancelRotationMode.setThrusterGroups(groups); } catch {}
-        try { this.cancelLinearMotionMode.setThrusterGroups(groups); } catch {}
-        try { this.pointToPositionMode.setThrusterGroups(groups); } catch {}
-        try { this.orientationMatchMode.setThrusterGroups(groups); } catch {}
-        try { this.goToPositionMode.setThrusterGroups(groups); } catch {}
-        if (this.useWorker && this.worker && this.workerReady) {
-            try { this.worker.postMessage({ type: 'setThrusterGroups', groups }); } catch {}
-        }
+        this.forEachMode((m) => m.setThrusterGroups(groups));
+        try { this.workerClient?.setThrusterGroups(groups); } catch { }
     }
 
     // Push current thruster transforms (position+direction) to worker and clear caps caches
@@ -460,15 +371,9 @@ export class Autopilot {
                 direction: [t.direction.x, t.direction.y, t.direction.z] as [number, number, number],
             }));
             // Invalidate caps on all modes (thruster layout affects torque capacities)
-            this.cancelRotationMode.invalidateCaps();
-            this.cancelLinearMotionMode.invalidateCaps();
-            this.pointToPositionMode.invalidateCaps();
-            this.orientationMatchMode.invalidateCaps();
-            this.goToPositionMode.invalidateCaps();
-            if (this.useWorker && this.worker && this.workerReady) {
-                this.worker.postMessage({ type: 'setThrusters', thrusters });
-            }
-        } catch {}
+            this.forEachMode((m) => m.invalidateCaps());
+            try { this.workerClient?.setThrusters(thrusters); } catch { }
+        } catch { }
     }
 
     // Sets a moving reference for translation modes (relative motion)
@@ -486,88 +391,52 @@ export class Autopilot {
 
     private initWorker(): void {
         try {
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore: Vite worker URL
-            this.worker = new Worker(new URL('../../workers/autopilot.worker.ts', import.meta.url), { type: 'module' });
+            const dims = this.spacecraft.getMainBodyDimensions();
+            const thrusters = (this.spacecraft.getThrusterConfigs?.() || []).map((t: any) => ({
+                position: [t.position.x, t.position.y, t.position.z] as [number, number, number],
+                direction: [t.direction.x, t.direction.y, t.direction.z] as [number, number, number],
+            }));
+            this.workerClient = new WorkerClient({
+                onReady: () => { },
+                onForces: (forces, telemetry) => {
+                    for (let i = 0; i < 24; i++) this.forcesBuffer[i] = forces[i] || 0;
+                    this.workerTelemetry = telemetry || {};
+                },
+                onPlanPathResult: (_id, points) => {
+                    this.pathManager.completePlan(points);
+                },
+                onError: (err) => {
+                    this.log.warn('Failed to create autopilot worker; falling back to main thread.', err);
+                    this.useWorker = false;
+                },
+            });
+            this.workerClient.setUpdateRateHz(1 / this.updateInterval > 0 ? 1 / this.updateInterval : 30);
+            this.workerClient.init({
+                thrusterGroups: this.thrusterGroups,
+                thrust: this.thrust,
+                config: this.config,
+                mass: this.spacecraft.getMass(),
+                dims,
+                thrusters,
+                strengths: this.thrusterMax,
+                autoCalibrate: false,
+            });
         } catch (err) {
-            this.log.warn('Failed to create autopilot worker; falling back to main thread.', err);
+            this.log.warn('Failed to init worker client; falling back to main thread.', err);
             this.useWorker = false;
-            return;
         }
-
-        const dims = this.spacecraft.getMainBodyDimensions();
-        const thrusters = (this.spacecraft.getThrusterConfigs?.() || []).map((t: any) => ({
-            position: [t.position.x, t.position.y, t.position.z] as [number, number, number],
-            direction: [t.direction.x, t.direction.y, t.direction.z] as [number, number, number],
-        }));
-
-        this.worker.onmessage = (ev: MessageEvent<any>) => {
-            const data = ev.data;
-            if (data?.type === 'ready') {
-                this.workerReady = true;
-                return;
-            }
-            if (data?.type === 'forces' && data.forces) {
-                const arr: Float32Array = data.forces;
-                for (let i = 0; i < 24; i++) this.forcesBuffer[i] = arr[i] || 0;
-                // Snapshot telemetry from worker for UI polling
-                try {
-                    const t = data.telemetry || {};
-                    this.workerTelemetry.point = t.point || this.workerTelemetry.point;
-                    this.workerTelemetry.orient = t.orient || this.workerTelemetry.orient;
-                    this.workerTelemetry.goto = t.goto || this.workerTelemetry.goto;
-                } catch {}
-                return;
-            }
-        };
-
-        this.worker.postMessage({
-            type: 'init',
-            thrusterGroups: this.thrusterGroups,
-            thrust: this.thrust,
-            config: this.config,
-            mass: this.spacecraft.getMass(),
-            dims: [dims.x, dims.y, dims.z] as [number, number, number],
-            thrusterConfigs: thrusters,
-            thrusterStrengths: this.thrusterMax,
-            autoCalibrate: false,
-        });
-
-        // Randomize update phase to avoid spikes when many autopilots run
-        this.timeSinceUpdate = Math.random() * this.updateInterval;
     }
 
     public getTargetObject(): Spacecraft | null {
         return this.targetObject;
     }
 
-    public setTargetObject(target: Spacecraft | null, targetPoint: 'center' | 'front' | 'back'): void {
+    public setTargetObject(target: Spacecraft | null, targetPoint: TargetPoint): void {
         this.targetObject = target;
+        this.targetPointType = targetPoint || 'center';
         if (target) {
-            // Update target position and orientation based on the object
-            if (targetPoint === 'center') {
-                this.targetPosition.copy(target.objects.box.position);
-            } else {
-                const portPosition = target.getDockingPortWorldPosition(targetPoint);
-                if (portPosition) {
-                    this.targetPosition.copy(portPosition);
-                } else {
-                    this.targetPosition.copy(target.objects.box.position);
-                }
-            }
-            this.targetOrientation.copy(target.objects.box.quaternion);
-            
-            // Update target point based on the selected port
-            switch (targetPoint) {
-                case 'front':
-                    this.targetPoint.set(0, 0, 1);
-                    break;
-                case 'back':
-                    this.targetPoint.set(0, 0, -1);
-                    break;
-                default:
-                    this.targetPoint.set(0, 0, 0);
-            }
+            // Update pose and point vector from target
+            this.targetTracker.refreshPoseFromTarget(target, targetPoint, this.targetPosition, this.targetOrientation, this.targetPoint);
             // Default the moving reference to the selected target
             this.setReferenceObject(target);
         }
@@ -614,30 +483,23 @@ export class Autopilot {
         // Fast exit if globally disabled or no active modes
         const anyModeActive = this.activeAutopilots.orientationMatch || this.activeAutopilots.cancelRotation || this.activeAutopilots.cancelLinearMotion || this.activeAutopilots.pointToPosition || this.activeAutopilots.goToPosition;
         if (!this.isEnabled || !anyModeActive) {
-            // keep buffer but zero it to avoid stale forces
             this.forcesBuffer.fill(0);
             return this.forcesBuffer;
         }
 
-        // Continuously track target object's latest pose if present
-        if (this.targetObject) {
-            // Refresh target position/orientation every cycle
-            // Use docking port world position when targetPoint indicates one; otherwise center
-            const useFront = this.targetPoint.z === 1;
-            const useBack = this.targetPoint.z === -1;
-            if (useFront) {
-                const p = this.targetObject.getDockingPortWorldPosition('front');
-                if (p) this.targetPosition.copy(p);
-            } else if (useBack) {
-                const p = this.targetObject.getDockingPortWorldPosition('back');
-                if (p) this.targetPosition.copy(p);
-            } else {
-                this.targetPosition.copy(this.targetObject.objects.box.position);
-            }
-            this.targetOrientation.copy(this.targetObject.objects.box.quaternion);
-        }
+        this.stepUpdateTargetPoseAndReference();
+        this.stepPublishPointingOrientationIfNeeded();
+        this.stepUpdateRotationAllocationScale();
+        this.stepUpdatePathFollowing(dt);
 
-        // Keep relative motion reference in sync as well
+        if (this.stepPostToWorkerIfEnabled(dt)) return this.forcesBuffer;
+        return this.stepComputeLocally(dt);
+    }
+
+    private stepUpdateTargetPoseAndReference(): void {
+        if (this.targetObject) {
+            this.targetTracker.refreshPoseFromTarget(this.targetObject, this.targetPointType, this.targetPosition, this.targetOrientation, this.targetPoint);
+        }
         if (this.referenceObject) {
             const refVel = this.referenceObject.getWorldVelocity();
             this.cancelLinearMotionMode.setReferenceVelocityWorld(refVel);
@@ -646,50 +508,94 @@ export class Autopilot {
             this.cancelLinearMotionMode.setReferenceVelocityWorld(null);
             this.goToPositionMode.setReferenceVelocityWorld(null);
         }
+    }
 
-        // Publish/update live target orientation when pointing to a position (for UI arrows)
-        if (this.activeAutopilots.pointToPosition) {
-            const q = this.spacecraft.getWorldOrientationRef();
-            const pos = this.spacecraft.getWorldPositionRef();
-            this.scratchDir.copy(this.targetPosition).sub(pos);
-            if (this.scratchDir.lengthSq() > 1e-10) {
-                this.scratchDir.normalize();
-                this.scratchForward.set(0, 0, 1).applyQuaternion(q);
-                this.scratchQuat.setFromUnitVectors(this.scratchForward, this.scratchDir);
-                this.scratchQuat.multiply(q); // qTargetWorld = delta * q
-                this.setTargetOrientation(this.scratchQuat);
+    private stepPublishPointingOrientationIfNeeded(): void {
+        if (!this.activeAutopilots.pointToPosition) return;
+        const qTarget = this.targetTracker.computePointingOrientation(this.targetPosition);
+        if (qTarget) this.setTargetOrientation(qTarget);
+    }
+
+    private stepUpdateRotationAllocationScale(): void {
+        try {
+            const posNow = this.spacecraft.getWorldPositionRef();
+            const distNow = posNow.distanceTo(this.targetPosition);
+            const dims = this.spacecraft.getMainBodyDimensions();
+            const R = Math.max(1.5, Math.max(dims.x, dims.y, dims.z) * 3.0);
+            const near = THREE.MathUtils.clamp(distNow / Math.max(1e-6, R), 0, 1);
+            const rotScale = 0.25 + 0.75 * near;
+            this.setRotationAllocationScale(rotScale);
+            this._rotScaleRuntime = rotScale;
+        } catch {}
+    }
+
+    private stepUpdatePathFollowing(dt: number): void {
+        if (!(this.activeAutopilots.goToPosition && this.pathManager.getSamples())) return;
+        this.pathManager.tick(dt);
+        if (this.pathManager.isTimeToReplan()) {
+            const sNow = this.spacecraft.getWorldPositionRef();
+            const gNow = this.targetPosition;
+            if (this.pathManager.shouldReplan(this.spacecraft, sNow, gNow)) {
+                if (this.useWorker && this.workerClient && this.workerClient.isReady() && !this.pathManager.isPlanPending()) {
+                    const obstacles = this.pathManager.collectObstacles(this.spacecraft);
+                    const startArr: [number, number, number] = [sNow.x, sNow.y, sNow.z];
+                    const goalArr: [number, number, number] = [gNow.x, gNow.y, gNow.z];
+                    const obsPayload = obstacles.map(o => ({ pos: [o.position.x, o.position.y, o.position.z] as [number, number, number], size: [o.size.x, o.size.y, o.size.z] as [number, number, number], isTarget: o.isTarget }));
+                    const id = this.pathManager.beginPlan();
+                    this.workerClient.planPath(id, startArr, goalArr, obsPayload);
+                } else {
+                    const wps = this.pathManager.buildAvoidancePath(this.spacecraft, sNow.clone(), gNow.clone());
+                    this.setPathWaypoints(wps.length >= 2 ? wps : [sNow.clone(), gNow.clone()]);
+                }
+                this.pathManager.setLastStartGoal(sNow, gNow);
+                try {
+                    const qGoal = this.targetObject ? this.targetObject.objects.box.quaternion : this.targetOrientation;
+                    this.pathManager.setGoalQuatSnapshot(qGoal);
+                } catch {}
             }
         }
-
-        if (this.useWorker && this.worker && this.workerReady) {
-            // Worker path: throttle sends; hold last forces between updates
-            this.timeSinceUpdate += dt;
-            if (this.timeSinceUpdate >= this.updateInterval) {
-                this.timeSinceUpdate = 0;
-                const p = this.spacecraft.getWorldPositionRef();
-                const q = this.spacecraft.getWorldOrientationRef();
-                const lv = this.spacecraft.getWorldVelocityRef();
-                const av = this.spacecraft.getWorldAngularVelocityRef();
-                const active = { ...this.activeAutopilots };
-                const refVel = this.referenceObject ? this.referenceObject.getWorldVelocityRef() : this.scratchDir.set(0, 0, 0);
-                this.worker.postMessage({
-                    type: 'update',
-                    dt,
-                    snapshot: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], lv: [lv.x, lv.y, lv.z], av: [av.x, av.y, av.z] },
-                    active,
-                    targetPos: [this.targetPosition.x, this.targetPosition.y, this.targetPosition.z],
-                    targetQuat: [this.targetOrientation.x, this.targetOrientation.y, this.targetOrientation.z, this.targetOrientation.w],
-                    refVel: [refVel.x, refVel.y, refVel.z],
-                });
-            }
-            return this.forcesBuffer;
+        const qNow = (() => { try { return this.targetObject ? this.targetObject.objects.box.quaternion : this.targetOrientation; } catch { return this.targetOrientation; } })();
+        const vGoal = this.referenceObject ? this.referenceObject.getWorldVelocityRef() : null;
+        const { useFollower } = this.pathManager.updateFollowStep(this.spacecraft, this.targetPosition, qNow, vGoal);
+        this.useFollowerNowFlag = useFollower;
+        if (useFollower) {
+            const carrot = this.pathManager.getCarrot()!;
+            this.goToPositionMode.setTargetPosition(carrot);
+            this.goToPositionMode.setReferenceVelocityWorld(this.pathManager.getVRef());
+            this.goToPositionMode.setGuidanceMode('trackRef');
+        } else {
+            this.goToPositionMode.setTargetPosition(this.targetPosition);
+            if (this.referenceObject) this.goToPositionMode.setReferenceVelocityWorld(this.referenceObject.getWorldVelocityRef());
+            else this.goToPositionMode.setReferenceVelocityWorld(null);
+            this.goToPositionMode.setGuidanceMode('direct');
         }
+    }
 
-        // Local compute path with throttling
+    private stepPostToWorkerIfEnabled(dt: number): boolean {
+        if (!(this.useWorker && this.workerClient && this.workerClient.isReady())) return false;
+        const p = this.spacecraft.getWorldPositionRef();
+        const q = this.spacecraft.getWorldOrientationRef();
+        const lv = this.spacecraft.getWorldVelocityRef();
+        const av = this.spacecraft.getWorldAngularVelocityRef();
+        const active = { ...this.activeAutopilots };
+        const useFollower = !!(this.activeAutopilots.goToPosition && this.pathManager.getSamples() && this.useFollowerNowFlag);
+        const refVelV = useFollower ? this.pathManager.getVRef() : (this.referenceObject ? this.referenceObject.getWorldVelocityRef() : this.scratchDir.set(0, 0, 0));
+        const targetV = useFollower && this.pathManager.getCarrot() ? this.pathManager.getCarrot()! : this.targetPosition;
+        this.workerClient.maybeUpdate(dt, {
+            snapshot: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], lv: [lv.x, lv.y, lv.z], av: [av.x, av.y, av.z] },
+            active,
+            targetPos: [targetV.x, targetV.y, targetV.z],
+            targetQuat: [this.targetOrientation.x, this.targetOrientation.y, this.targetOrientation.z, this.targetOrientation.w],
+            refVel: [refVelV.x, refVelV.y, refVelV.z],
+            trackRef: useFollower,
+            rotScale: this._rotScaleRuntime ?? 1.0,
+        });
+        return true;
+    }
+
+    private stepComputeLocally(dt: number): number[] {
         this.timeSinceUpdate += dt;
-        if (this.timeSinceUpdate < this.updateInterval) {
-            return this.forcesBuffer;
-        }
+        if (this.timeSinceUpdate < this.updateInterval) return this.forcesBuffer;
         this.timeSinceUpdate = 0;
         for (let i = 0; i < 24; i++) this.forcesBuffer[i] = 0;
         if (this.activeAutopilots.cancelRotation) this.cancelRotationMode.calculateForces(dt, this.forcesBuffer);
@@ -697,31 +603,45 @@ export class Autopilot {
         if (this.activeAutopilots.pointToPosition) this.pointToPositionMode.calculateForces(dt, this.forcesBuffer);
         if (this.activeAutopilots.orientationMatch) this.orientationMatchMode.calculateForces(dt, this.forcesBuffer);
         if (this.activeAutopilots.goToPosition) this.goToPositionMode.calculateForces(dt, this.forcesBuffer);
+        for (let i = 0; i < 24; i++) {
+            const cap = this.thrusterMax[i] || this.thrust;
+            const v = this.forcesBuffer[i] || 0;
+            this.forcesBuffer[i] = Math.min(Math.max(0, v), cap);
+        }
         return this.forcesBuffer;
     }
 
-    public setMode(mode: keyof AutopilotModes, enabled: boolean = true): void {
+    public setMode(mode: AutopilotModeName, enabled: boolean = true): void {
         this.log.debug('setMode called:', mode, enabled);
-        const rotationModes = ['orientationMatch', 'cancelRotation', 'pointToPosition'];
-        const translationModes = ['cancelLinearMotion', 'goToPosition'];
-
-        if (enabled) {
-            // Turn off other modes in the same group
-            if (rotationModes.includes(mode)) {
-                rotationModes.forEach((m) => {
-                    if (m !== mode) this.activeAutopilots[m as keyof AutopilotModes] = false;
-                });
-            }
-            if (translationModes.includes(mode)) {
-                translationModes.forEach((m) => {
-                    if (m !== mode) this.activeAutopilots[m as keyof AutopilotModes] = false;
-                });
-            }
-        }
-
-        this.activeAutopilots[mode] = enabled;
+        this.activeAutopilots = ModeRegistry.exclusiveEnable(this.activeAutopilots, mode, enabled);
         this.updateAutopilotState();
+
+        // If enabling goToPosition and no path exists yet, seed a straight path for visualization/following
+        if (mode === 'goToPosition' && enabled && !this.pathManager.getSamples()) {
+            try {
+                const start = this.spacecraft.getWorldPositionRef().clone();
+                const goal = this.targetPosition.clone();
+                // Avoid degenerate identical points
+                if (start.distanceTo(goal) < 1e-3) goal.add(new THREE.Vector3(0, 0, 0.01));
+                if (this.useWorker && this.workerClient && this.workerClient.isReady() && !this.pathManager.isPlanPending()) {
+                    // Kick off async plan and use straight preview path until it returns
+                    this.setPathWaypoints([start, goal]);
+                    const obstacles = this.pathManager.collectObstacles(this.spacecraft);
+                    const startArr: [number, number, number] = [start.x, start.y, start.z];
+                    const goalArr: [number, number, number] = [goal.x, goal.y, goal.z];
+                    const obsPayload = obstacles.map(o => ({ pos: [o.position.x, o.position.y, o.position.z] as [number, number, number], size: [o.size.x, o.size.y, o.size.z] as [number, number, number], isTarget: o.isTarget }));
+                    const id = this.pathManager.beginPlan();
+                    this.workerClient.planPath(id, startArr, goalArr, obsPayload);
+                } else {
+                    const wps = this.pathManager.buildAvoidancePath(this.spacecraft, start, goal);
+                    this.setPathWaypoints(wps.length >= 2 ? wps : [start, goal]);
+                }
+                this.pathManager.setLastStartGoal(start, goal);
+            } catch { }
+        }
     }
+
+    // Removed local obstacle collector; PathManager handles obstacle collation
 
     private updateAutopilotState(): void {
         this.isEnabled = Object.values(this.activeAutopilots).some(v => v);
@@ -744,12 +664,11 @@ export class Autopilot {
 
         // Manage worker lifecycle lazily
         if (this.useWorker) {
-            if (this.isEnabled && !this.worker) {
+            if (this.isEnabled && !this.workerClient) {
                 this.initWorker();
-            } else if (!this.isEnabled && this.worker) {
-                try { this.worker.terminate(); } catch {}
-                this.worker = undefined;
-                this.workerReady = false;
+            } else if (!this.isEnabled && this.workerClient) {
+                try { this.workerClient.terminate(); } catch { }
+                this.workerClient = undefined;
             }
         }
     }
@@ -772,12 +691,11 @@ export class Autopilot {
             orientationMatch: false,
             goToPosition: false
         };
-        
+
         // Terminate worker if running to avoid leaks on React StrictMode remounts
-        if (this.worker) {
-            try { this.worker.terminate(); } catch {}
-            this.worker = undefined;
-            this.workerReady = false;
+        if (this.workerClient) {
+            try { this.workerClient.terminate(); } catch { }
+            this.workerClient = undefined;
         }
 
         // Clear references
@@ -835,21 +753,45 @@ export class Autopilot {
         });
     }
 
-    public setOnStateChange(cb: (state: { enabled: boolean; activeAutopilots: AutopilotModes }) => void): void {
+    public setOnStateChange(cb: (state: AutopilotState) => void): void {
         this.onStateChange = cb;
     }
 
     // Telemetry accessors for UI
     public getPointToPositionTelemetry(): any {
-        if (this.useWorker && this.worker) return this.workerTelemetry.point ?? (this.pointToPositionMode as any)?.getTelemetry?.();
-        return (this.pointToPositionMode as any)?.getTelemetry?.();
+        return this.getTelemetryHelper('point', () => (this.pointToPositionMode as any)?.getTelemetry?.());
     }
     public getOrientationMatchTelemetry(): any {
-        if (this.useWorker && this.worker) return this.workerTelemetry.orient ?? (this.orientationMatchMode as any)?.getTelemetry?.();
-        return (this.orientationMatchMode as any)?.getTelemetry?.();
+        return this.getTelemetryHelper('orient', () => (this.orientationMatchMode as any)?.getTelemetry?.());
     }
     public getGoToPositionTelemetry(): any {
-        if (this.useWorker && this.worker) return this.workerTelemetry.goto ?? (this.goToPositionMode as any)?.getTelemetry?.();
-        return (this.goToPositionMode as any)?.getTelemetry?.();
+        return this.getTelemetryHelper('goto', () => (this.goToPositionMode as any)?.getTelemetry?.());
+    }
+
+    private getTelemetryHelper<T extends keyof AutopilotTelemetry>(key: T, local: () => any): any {
+        if (this.useWorker && this.workerClient) {
+            const v = this.workerTelemetry[key];
+            if (v !== undefined && v !== null) return v;
+        }
+        try { return local?.(); } catch { return null; }
+    }
+
+    // Path follower telemetry for UI/debug
+    public getPathFollowerTelemetry(): any {
+        const prog = this.pathManager.getProgress();
+        if (!prog) return null;
+        try {
+            const tel = undefined;
+            const carrot = this.getPathCarrot();
+            const vRefMag = this.pathManager.getVRef().length();
+            return {
+                progress: prog,
+                energy: tel,
+                carrot: carrot ? { x: carrot.x, y: carrot.y, z: carrot.z } : null,
+                vRefMag,
+            };
+        } catch {
+            return null;
+        }
     }
 }

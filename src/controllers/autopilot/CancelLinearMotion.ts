@@ -1,12 +1,13 @@
 import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
 import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
+import type { ThrusterGroups } from '../../config/spacecraftConfig';
 
 export class CancelLinearMotion extends AutopilotMode {
     constructor(
         spacecraft: Spacecraft,
         config: AutopilotConfig,
-        thrusterGroups: any,
+        thrusterGroups: ThrusterGroups,
         thrust: number,
         momentumPidController: PIDController,
         thrusterMax?: number[]

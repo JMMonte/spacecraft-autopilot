@@ -2,6 +2,7 @@ import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
 import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import * as THREE from 'three';
+import type { ThrusterGroups } from '../../config/spacecraftConfig';
 
 export class OrientationMatchAutopilot extends AutopilotMode {
     private targetOrientation: THREE.Quaternion;
@@ -24,7 +25,7 @@ export class OrientationMatchAutopilot extends AutopilotMode {
     constructor(
         spacecraft: Spacecraft,
         config: AutopilotConfig,
-        thrusterGroups: any,
+        thrusterGroups: ThrusterGroups,
         thrust: number,
         pidController: PIDController,
         targetOrientation?: THREE.Quaternion,

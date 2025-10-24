@@ -11,6 +11,7 @@
     "check:ts": "tsc --noEmit --pretty false",
     "test:physics": "node tools/collision-check.mjs",
     "test:ap": "node --import tsx tools/tests/autopilot.test.ts",
+    "test:traj": "node --import tsx tools/tests/trajectory.test.ts",
     "list:unused": "node tools/list-unused.mjs"
   },
   "author": "Joao Montenegro",

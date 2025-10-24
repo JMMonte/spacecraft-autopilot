@@ -227,7 +227,7 @@ class RapierPhysics implements PhysicsEngine {
         const dens = vol > 0 ? newMass / vol : 1;
         col.setDensity(dens);
       },
-      getMass() { return col.mass(); },
+      getMass() { try { return rb.mass ? rb.mass() : col.mass(); } catch (_) { return col.mass(); } },
       setDamping: (linear: number, angular: number) => { const fn = () => { try { rb.setLinearDamping(linear); rb.setAngularDamping(angular); } catch (_) {} }; self.isStepping ? self.pendingOps.push(fn) : fn(); },
       applyForce: (force, worldPoint) => {
         const fn = () => { try { if (!isFiniteVec3(force)) return; if (worldPoint && !isFiniteVec3(worldPoint)) return; const f = clampVec3(force, 1e6); if (worldPoint) rb.addForceAtPoint(f, worldPoint, true); else rb.addForce(f, true); } catch (_) {} };
@@ -454,6 +454,7 @@ class RapierPhysics implements PhysicsEngine {
       isSensor?: boolean;
       restitution?: number;
       friction?: number;
+      density?: number;
     }
   ): unknown {
     try {
@@ -477,6 +478,7 @@ class RapierPhysics implements PhysicsEngine {
       if (typeof options?.isSensor === 'boolean') cd.setSensor(options.isSensor);
       if (typeof options?.restitution === 'number') cd.setRestitution(options.restitution);
       if (typeof options?.friction === 'number') cd.setFriction(options.friction);
+      if (typeof options?.density === 'number') cd.setDensity(options.density);
       const collider = this.world.createCollider(cd, rb);
       return collider;
     } catch (_) {
