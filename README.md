@@ -63,7 +63,7 @@ npm run tune:visualize
 - Measure safety metrics: collision counts, minimum distances, success rates
 - Compare parameter configurations objectively
 
-See `tools/autopilot-tuner/QUICK_START.md` for detailed guide.
+See `tools/autopilot-tuner/README.md` for detailed guide.
 
 ### Other Useful Scripts
 
