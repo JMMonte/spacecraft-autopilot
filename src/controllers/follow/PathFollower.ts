@@ -19,8 +19,9 @@ export class PathFollower {
       lookaheadMin: options.lookaheadMin ?? 1.5,
       lookaheadMax: options.lookaheadMax ?? 12.0,
       lookaheadGain: options.lookaheadGain ?? 1.0,
-      endClearanceAbs: Math.max(0, options.endClearanceAbs ?? 0.75),
+      endClearanceAbs: Math.max(0, options.endClearanceAbs ?? 0.05), // 5cm
       curved: options.curved ?? true,
+      maxBrakingAccel: Math.max(0.5, options.maxBrakingAccel ?? 2.0), // Default 2.0 m/s²
     };
     this.setWaypoints(waypoints);
   }
@@ -215,12 +216,15 @@ export class PathFollower {
     const sTarget = Math.min(sStop, proj.s + Math.min(remaining, lookahead));
     const { position: carrotPos, tangent } = this.interpolateAtS(sTarget);
 
+    // DYNAMIC VELOCITY PROFILE: v = sqrt(2*a*d)
+    // Simple physics - no thresholds, no cutoffs
+    const aBrake = this.opts.maxBrakingAccel;
+    const vTarget = Math.sqrt(2 * aBrake * Math.max(0, remaining));
+    const speed = Math.min(vTarget, this.opts.lookaheadMax);
+
     const carrot = carrotPos;
-    const aPlan = 2.0; // m/s^2 design accel
-    const speedPlanned = Math.sqrt(2 * aPlan * Math.max(0, remaining));
-    const speed = THREE.MathUtils.clamp(speedPlanned, 0.0, this.opts.lookaheadMax);
     const velocityRef = tangent.multiplyScalar(speed);
-    const done = (sStop - proj.s) <= Math.max(0.2, this.opts.endClearanceAbs * 0.8);
+    const done = remaining <= this.opts.endClearanceAbs;
 
     this.lastState = { carrot, velocityRef, done, sCur: proj.s, sTotal: this.totalS };
     return this.lastState;

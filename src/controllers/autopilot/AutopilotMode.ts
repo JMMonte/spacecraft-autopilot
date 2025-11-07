@@ -22,6 +22,10 @@ export interface AutopilotConfig {
     damping: {
         factor: number;
     };
+    // Optional custom inertia tensor (if known from CAD/physics)
+    customInertia?: { x: number; y: number; z: number };
+    // Inertia estimation mode for geometric approximation
+    inertiaMode?: 'solid' | 'hollow' | 'thin-shell';
 }
 
 export abstract class AutopilotMode {
@@ -128,18 +132,21 @@ export abstract class AutopilotMode {
         this.tmpVecA.copy(pidOutput).multiplyScalar(1 - this.rotSmoothAlpha);
         this.lastRotCmd.add(this.tmpVecA);
 
-        // Revert to proven torque fraction mapping: normalize momentum by Lcap, then scale by axis capability.
+        // Direct torque mapping: PID output directly commands thrust fraction
+        // No Lcap normalization - PID gains handle the scaling
         const eps = this.config.limits.epsilon * 2.0;
         const caps = this.getDynamicCaps();
-        const Lcap = Math.max(1e-6, this.config.limits.maxAngularMomentum);
 
         // X axis (pitch)
         const x = this.lastRotCmd.x;
         if (Math.abs(x) > eps) {
             const tauAxisMax = Math.max(1e-6, caps.angTorque.x);
-            const tauCmd = Math.min(tauAxisMax, Math.abs(x) / Lcap * tauAxisMax);
+            // Clamp to max torque capability, thrust fraction = min(1, pidOut/tauMax)
+            const thrustFraction = Math.min(1.0, Math.abs(x) / tauAxisMax);
+            // pitch[0] = pitch up (+X rotation), pitch[1] = pitch down (-X rotation)
+            // If PID says +X torque needed, use pitch[0] (pitch up)
             const group = this.thrusterGroups.pitch[x >= 0 ? 1 : 0];
-            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust) * this.allocationScale;
+            const perThruster = this.thrust * thrustFraction * this.allocationScale;
             group.forEach((idx: number) => {
                 const cap = this.thrusterMax[idx] || this.thrust;
                 out[idx] += Math.min(cap, perThruster);
@@ -150,9 +157,17 @@ export abstract class AutopilotMode {
         const y = this.lastRotCmd.y;
         if (Math.abs(y) > eps) {
             const tauAxisMax = Math.max(1e-6, caps.angTorque.y);
-            const tauCmd = Math.min(tauAxisMax, Math.abs(y) / Lcap * tauAxisMax);
+            const thrustFraction = Math.min(1.0, Math.abs(y) / tauAxisMax);
+            // yaw[0] = yaw left (+Y rotation), yaw[1] = yaw right (-Y rotation)
+            // If PID says +Y torque needed, use yaw[0] (yaw left)
             const group = this.thrusterGroups.yaw[y >= 0 ? 0 : 1];
-            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust) * this.allocationScale;
+            const perThruster = this.thrust * thrustFraction * this.allocationScale;
+            
+            // DEBUG
+            if (Math.abs(y) > 1.0) {
+                console.log(`[Alloc Y] pidOut=${y.toFixed(2)} tauMax=${tauAxisMax.toFixed(2)} frac=${thrustFraction.toFixed(3)} perThr=${perThruster.toFixed(2)} allocScale=${this.allocationScale.toFixed(2)}`);
+            }
+            
             group.forEach((idx: number) => {
                 const cap = this.thrusterMax[idx] || this.thrust;
                 out[idx] += Math.min(cap, perThruster);
@@ -163,9 +178,11 @@ export abstract class AutopilotMode {
         const z = this.lastRotCmd.z;
         if (Math.abs(z) > eps) {
             const tauAxisMax = Math.max(1e-6, caps.angTorque.z);
-            const tauCmd = Math.min(tauAxisMax, Math.abs(z) / Lcap * tauAxisMax);
+            const thrustFraction = Math.min(1.0, Math.abs(z) / tauAxisMax);
+            // roll[0] = roll right (+Z rotation), roll[1] = roll left (-Z rotation)
+            // If PID says +Z torque needed, use roll[0] (roll right)
             const group = this.thrusterGroups.roll[z >= 0 ? 0 : 1];
-            const perThruster = Math.min(this.thrust, (tauCmd / tauAxisMax) * this.thrust) * this.allocationScale;
+            const perThruster = this.thrust * thrustFraction * this.allocationScale;
             group.forEach((idx: number) => {
                 const cap = this.thrusterMax[idx] || this.thrust;
                 out[idx] += Math.min(cap, perThruster);
@@ -226,14 +243,35 @@ export abstract class AutopilotMode {
     }
 
     protected calculateMomentOfInertiaByAxis(): { x: number; y: number; z: number } {
+        // Use custom inertia if provided (from physics engine or CAD)
+        if (this.config.customInertia) {
+            return { ...this.config.customInertia };
+        }
+
+        // Otherwise calculate from geometry
         const mass = this.spacecraft.getMass();
         const size = this.spacecraft.getMainBodyDimensions();
         const w = size.x;
         const h = size.y;
         const d = size.z;
-        const Ix = (1 / 12) * mass * (h * h + d * d);
-        const Iy = (1 / 12) * mass * (w * w + d * d);
-        const Iz = (1 / 12) * mass * (w * w + h * h);
+
+        // Shape factor based on inertia mode
+        let k = 1 / 12; // solid box (default)
+        const mode = this.config.inertiaMode || 'solid';
+        
+        if (mode === 'hollow') {
+            // Hollow box approximation (walls have thickness, interior is empty)
+            // Assumes ~20% wall thickness, increases inertia by ~1.5x
+            k = 1 / 8;
+        } else if (mode === 'thin-shell') {
+            // Thin-walled box (negligible thickness)
+            // All mass at surface, increases inertia significantly
+            k = 1 / 6;
+        }
+
+        const Ix = k * mass * (h * h + d * d);
+        const Iy = k * mass * (w * w + d * d);
+        const Iz = k * mass * (w * w + h * h);
         return { x: Ix, y: Iy, z: Iz };
     }
 

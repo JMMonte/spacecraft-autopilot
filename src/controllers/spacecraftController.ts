@@ -92,11 +92,8 @@ export class SpacecraftController {
             this.thrust,
             this.thrusterMax,
             {
-                pidGains: {
-                    orientation: { kp: 0.05, ki: 0.0, kd: 0.02 },
-                    position: { kp: 3.0, ki: 0.0005, kd: 4.0 },
-                    momentum: { kp: 3.0, ki: 0.0, kd: 1.0 }
-                },
+                // Let autopilot use its procedural defaults - they're tuned for all spacecraft
+                // Only override if you have specific requirements
                 maxForce: this.thrust * 24,
                 dampingFactor: 1.5,
                 autoTune: false,
@@ -523,7 +520,7 @@ export class SpacecraftController {
         const linScale = this.thrust * 24; // large enough to reach clamp
         lin.multiplyScalar(linScale);
 
-        // 2) Build desired rotational command vector (use autopilot's momentum-domain scaling)
+        // 2) Build desired rotational command vector
         const rot = new THREE.Vector3(0, 0, 0);
         if (this.keysPressed['KeyW']) rot.x += 1; // pitch up
         if (this.keysPressed['KeyS']) rot.x -= 1; // pitch down
@@ -532,9 +529,9 @@ export class SpacecraftController {
         if (this.keysPressed['KeyQ']) rot.z += 1; // roll right
         if (this.keysPressed['KeyE']) rot.z -= 1; // roll left
 
-        // Use Lcap so a unit command saturates thrusters per axis inside allocator
-        const Lcap = Math.max(1e-6, this.autopilot.getConfig().limits.maxAngularMomentum);
-        rot.multiplyScalar(Lcap);
+        // Scale large enough to saturate thrusters (allocator clamps to tauAxisMax)
+        // Using a large value ensures full thrust authority
+        rot.multiplyScalar(100.0); // Large enough to reach full thrust on any axis
 
         // 3) Allocate using the same distribution rules as the autopilot
         // Translation first, then add rotation on top
@@ -566,8 +563,13 @@ export class SpacecraftController {
 
     public setThrust(value: number): void {
         this.thrust = value;
+        // Update per-thruster capacities to match new thrust
+        this.thrusterMax = new Array(24).fill(value);
+        
         try { this.autopilot?.setThrust?.(value); } catch {}
+        try { this.autopilot?.setThrusterStrengths?.(this.thrusterMax); } catch {}
         try { this.manualAllocator?.setThrust?.(value); } catch {}
+        try { this.manualAllocator?.setThrusterMax?.(this.thrusterMax); } catch {}
     }
 
     /**

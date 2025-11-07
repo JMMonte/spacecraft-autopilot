@@ -311,11 +311,19 @@ self.onmessage = async (ev: MessageEvent<WorkerInboundMsg>) => {
     if (!autopilot) return;
     try {
       (autopilot as any)['thrust'] = data.thrust;
+      // Update per-thruster capacities to match new thrust (consistent with main thread)
+      const newThrusterMax = new Array(24).fill(data.thrust);
+      (autopilot as any)['thrusterMax'] = newThrusterMax;
       (autopilot as any)['cancelRotationMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['cancelRotationMode']?.setThrusterMax?.(newThrusterMax);
       (autopilot as any)['cancelLinearMotionMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['cancelLinearMotionMode']?.setThrusterMax?.(newThrusterMax);
       (autopilot as any)['pointToPositionMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['pointToPositionMode']?.setThrusterMax?.(newThrusterMax);
       (autopilot as any)['orientationMatchMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['orientationMatchMode']?.setThrusterMax?.(newThrusterMax);
       (autopilot as any)['goToPositionMode']?.setThrust?.(data.thrust);
+      (autopilot as any)['goToPositionMode']?.setThrusterMax?.(newThrusterMax);
     } catch {}
     return;
   }

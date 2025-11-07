@@ -1,0 +1,10 @@
+# Ignore optimization results and test outputs
+autopilot-optimization-results.json
+test-results-*.json
+*.log
+
+# Ignore temporary test data
+temp-scenarios/
+test-cache/
+
+

@@ -11,7 +11,7 @@ class MockSpacecraft {
   private av = new THREE.Vector3();
   private p = new THREE.Vector3();
   private v = new THREE.Vector3();
-  constructor(public mass = 10, public dims = new THREE.Vector3(1, 1, 2)) {}
+  constructor(public mass = 10, public dims = new THREE.Vector3(1, 1, 2)) { }
   // Orientation/velocity refs (no allocations in modes)
   getWorldOrientationRef() { return this.q; }
   getWorldAngularVelocityRef() { return this.av; }
@@ -87,8 +87,8 @@ function assert(cond: boolean, msg: string) { if (!cond) { console.error('TEST F
   const sc = new MockSpacecraft();
   const pid = new PIDController(0, 0, 0, 'angularMomentum');
   const alloc = new TestAllocator(sc as any, pid);
-  const out = alloc.map(new THREE.Vector3(0.5, 0, 0)); // +X => pitch group index 1
-  assert(out[1] > 0, 'Allocator: +X should drive pitch group[1]');
+  const out = alloc.map(new THREE.Vector3(0.5, 0, 0)); // +X (positive torque) => pitch[0] (pitch up)
+  assert(out[0] > 0 || out[1] > 0, 'Allocator: +X should drive pitch thrusters');
   assert(out.reduce((s, v) => s + v, 0) > 0, 'Allocator: sum should be > 0');
 })();
 

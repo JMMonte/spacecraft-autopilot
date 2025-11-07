@@ -1,0 +1,16 @@
+{
+  "positionKp": 0.8,
+  "positionKi": 0.001,
+  "positionKd": 0.5,
+  "velocityKp": 2.0,
+  "velocityKi": 0.05,
+  "velocityKd": 0.8,
+  "maxApproachSpeed": 2.0,
+  "brakingMargin": 1.2,
+  "alignGateOnDeg": 15,
+  "alignGateOffDeg": 8,
+  "deviationThreshold": 2.5,
+  "replanInterval": 0.5
+}
+
+

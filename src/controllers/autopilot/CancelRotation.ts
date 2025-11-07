@@ -13,8 +13,8 @@ export class CancelRotation extends AutopilotMode {
         thrusterMax?: number[]
     ) {
         super(spacecraft, config, thrusterGroups, thrust, pidController, thrusterMax);
-        // Make rotation response snappier for momentum nulling
-        this.rotSmoothAlpha = 0.25;
+        // Disable smoothing for cancel rotation - we want instant response
+        this.rotSmoothAlpha = 0.0; // No smoothing!
     }
     calculateForces(dt: number, out: number[] = Array(24).fill(0)): number[] {
         const q = this.spacecraft.getWorldOrientationRef();
@@ -41,12 +41,12 @@ export class CancelRotation extends AutopilotMode {
         // PID controller works in local space using momentum error
         let pidVector = this.pidController.update(momentumError, dt);
 
-        // Light near-zero taper to avoid chatter but keep authority
-        const Lmag = momentumError.length();
-        const Lcap = Math.max(1e-6, this.config.limits.maxAngularMomentum);
-        const fadeUpAt = 0.05 * Lcap; // reach full authority by 5% of cap
-        const scale = Lmag >= fadeUpAt ? 1 : Math.sqrt(Math.max(0, Lmag / fadeUpAt));
-        pidVector.multiplyScalar(scale);
+        // DEBUG: Show which direction we're commanding
+        if (localAngularVel.length() > 0.05) {
+            const axis = Math.abs(localAngularVel.x) > Math.abs(localAngularVel.y) && Math.abs(localAngularVel.x) > Math.abs(localAngularVel.z) ? 'X(pitch)'
+                : Math.abs(localAngularVel.y) > Math.abs(localAngularVel.z) ? 'Y(yaw)' : 'Z(roll)';
+            console.log(`[CancelRot] ω${axis}=${localAngularVel.x.toFixed(2)},${localAngularVel.y.toFixed(2)},${localAngularVel.z.toFixed(2)} → PID=${pidVector.x.toFixed(2)},${pidVector.y.toFixed(2)},${pidVector.z.toFixed(2)} Kp=${this.pidController.getGain('Kp')}`);
+        }
 
         // Allocate using the shared rotational allocator (respects caps and latch behavior)
         this.applyPIDOutputToThrustersInPlace(pidVector, out);

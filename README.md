@@ -37,23 +37,57 @@ npm run dev
 npm run build
 ```
 
-Useful scripts
+## Testing & Tuning
+
+### Automated Autopilot Testing
+
+The project includes an automated testing and parameter optimization framework for the autopilot system.
+
+**Quick Start:**
+
+```bash
+# Test current autopilot parameters
+npm run tune
+
+# Optimize parameters (finds best settings automatically)
+npm run tune:optimize
+
+# Visualize optimization results
+npm run tune:visualize
+```
+
+**Why use this?**
+
+- Automatically test collision avoidance across 7 diverse scenarios
+- Find optimal PID and guidance parameters without manual trial-and-error
+- Measure safety metrics: collision counts, minimum distances, success rates
+- Compare parameter configurations objectively
+
+See `tools/autopilot-tuner/QUICK_START.md` for detailed guide.
+
+### Other Useful Scripts
+
 - `npm run check:ts` – TypeScript check
 - `npm run test:physics` – Rapier collision sanity test
+- `npm run test:ap` – Autopilot unit tests
+- `npm run test:traj` – Trajectory planner tests
 
 ## Controls
 
 Manual translation (local axes)
+
 - U/O: +Z forward / −Z backward
 - J/L: −X left / +X right
 - K/I: +Y up / −Y down
 
 Manual rotation
+
 - W/S: +pitch / −pitch
 - A/D: +yaw / −yaw
 - Q/E: +roll / −roll
 
 Autopilot toggles
+
 - T: Orientation Match
 - Y: Point To Position
 - R: Cancel Rotation
@@ -88,6 +122,7 @@ ISC
 ## Deployment
 
 Vercel (recommended)
+
 - Connect this GitHub repository to Vercel (New Project → Import Git Repository).
 - Framework Preset: Vite (auto-detected).
 - Build Command: `npm run build` (auto-detected).
@@ -95,12 +130,15 @@ Vercel (recommended)
 - Node.js Version: 22.x. Vercel respects the `engines.node` field in `package.json` and you can also set it in Project Settings → General → Node.js Version.
 
 Environment
+
 - No runtime env vars are required by default.
 - If you add any, configure them in Vercel Project Settings → Environment Variables.
 
 Production flow
+
 - Pushing to `main` triggers a production deployment.
 - Pull requests create preview deployments per-branch.
 
 Status badge (optional)
+
 - In Vercel Project → Settings → Git → Badges, enable and copy the Markdown to add a live status badge at the top of this README.

@@ -82,6 +82,9 @@ export class Autopilot implements IAutopilot {
             maxLinearMomentum?: number;
             autoTune?: boolean;
             useWorker?: boolean;
+            // Inertia configuration for improved procedural behavior
+            customInertia?: { x: number; y: number; z: number };
+            inertiaMode?: 'solid' | 'hollow' | 'thin-shell';
         } = {}
     ) {
         this.spacecraft = spacecraft;
@@ -94,11 +97,22 @@ export class Autopilot implements IAutopilot {
 
         // Initialize config with default values
         const defaultPidGains = {
-            orientation: { kp: 0.5, ki: 0.1, kd: 0.2 },    // For rotation control
+            orientation: { kp: 25.0, ki: 0.0, kd: 3.0 },   // For rotation control - high gain for fast response
             position: { kp: 0.1, ki: 0.001, kd: 0.5 },     // For GoToPosition - extremely gentle gains
             momentum: { kp: 6.0, ki: 0.2, kd: 2.0 }        // For CancelLinearMotion
         };
 
+        // PROCEDURAL EPSILON: minimum force threshold for thruster activation
+        // Set to 0.01% of per-thruster force to allow fine control while filtering noise
+        // This ensures small PID commands during final approach aren't discarded
+        const thrustPerThruster = thrust / 4.0; // Assume ~4 thrusters per axis group
+        const proceduralEpsilon = thrustPerThruster * 0.0001; // 0.01% threshold
+
+        // PROCEDURAL ANGULAR MOMENTUM LIMIT: use reasonable default that works for most spacecraft
+        // The PID gains now scale the response, not the limit
+        // Keep it simple - users can override if needed
+        const scaledMaxAngularMomentum = options.maxAngularMomentum ?? 2.0; // Default 2.0 works well
+        
         this.config = {
             pid: {
                 orientation: { ...defaultPidGains.orientation, ...options.pidGains?.orientation },
@@ -107,8 +121,8 @@ export class Autopilot implements IAutopilot {
             },
             limits: {
                 maxForce: options.maxForce ?? 1000,
-                epsilon: 0.01,
-                maxAngularMomentum: options.maxAngularMomentum ?? 1.0,
+                epsilon: proceduralEpsilon,
+                maxAngularMomentum: scaledMaxAngularMomentum,
                 maxLinearMomentum: options.maxLinearMomentum ?? 10.0,
                 maxAngularVelocity: options.pidGains?.orientation ? 1.0 : 1.2,
                 maxAngularAcceleration: 5.0,
@@ -118,6 +132,8 @@ export class Autopilot implements IAutopilot {
             damping: {
                 factor: options.dampingFactor ?? 8.0,       // Much higher damping
             },
+            customInertia: options.customInertia,
+            inertiaMode: options.inertiaMode,
         };
 
         // Initialize PID controllers
@@ -517,6 +533,17 @@ export class Autopilot implements IAutopilot {
     }
 
     private stepUpdateRotationAllocationScale(): void {
+        // Only reduce rotation authority when actively navigating to a position target
+        // Cancel rotation and orientation modes should have full authority
+        const isNavigating = this.activeAutopilots.goToPosition || this.activeAutopilots.pointToPosition;
+        
+        if (!isNavigating) {
+            // Full authority for pure rotation control
+            this.setRotationAllocationScale(1.0);
+            this._rotScaleRuntime = 1.0;
+            return;
+        }
+        
         try {
             const posNow = this.spacecraft.getWorldPositionRef();
             const distNow = posNow.distanceTo(this.targetPosition);
@@ -554,21 +581,17 @@ export class Autopilot implements IAutopilot {
                 } catch {}
             }
         }
+        // Update PathManager (always provides carrot + reference velocity)
         const qNow = (() => { try { return this.targetObject ? this.targetObject.objects.box.quaternion : this.targetOrientation; } catch { return this.targetOrientation; } })();
         const vGoal = this.referenceObject ? this.referenceObject.getWorldVelocityRef() : null;
         const { useFollower } = this.pathManager.updateFollowStep(this.spacecraft, this.targetPosition, qNow, vGoal);
         this.useFollowerNowFlag = useFollower;
-        if (useFollower) {
-            const carrot = this.pathManager.getCarrot()!;
-            this.goToPositionMode.setTargetPosition(carrot);
-            this.goToPositionMode.setReferenceVelocityWorld(this.pathManager.getVRef());
-            this.goToPositionMode.setGuidanceMode('trackRef');
-        } else {
-            this.goToPositionMode.setTargetPosition(this.targetPosition);
-            if (this.referenceObject) this.goToPositionMode.setReferenceVelocityWorld(this.referenceObject.getWorldVelocityRef());
-            else this.goToPositionMode.setReferenceVelocityWorld(null);
-            this.goToPositionMode.setGuidanceMode('direct');
-        }
+        
+        // Always use PathManager's guidance (it handles both path and direct modes)
+        const carrot = this.pathManager.getCarrot();
+        const vRef = this.pathManager.getVRef();
+        if (carrot) this.goToPositionMode.setTargetPosition(carrot);
+        this.goToPositionMode.setReferenceVelocityWorld(vRef);
     }
 
     private stepPostToWorkerIfEnabled(dt: number): boolean {

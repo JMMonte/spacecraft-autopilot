@@ -37,7 +37,7 @@ export class PathManager {
     private getMaxLinearVelocity: () => number,
     private getDims: DimsFn,
     private getTargetObject: TargetObjFn,
-  ) {}
+  ) { }
 
   public clear(): void { this.follower = null; }
   public getSamples(): THREE.Vector3[] | null { try { return this.follower?.getSamples() ?? null; } catch { return null; } }
@@ -65,6 +65,11 @@ export class PathManager {
     const endClearanceAbs = THREE.MathUtils.clamp(opts?.endClearanceAbs ?? nominalClear, 0.5, 1.5);
 
     const vMax = this.getMaxLinearVelocity();
+
+    // Get actual spacecraft braking capability (minimum axis acceleration)
+    const caps = this.getAxisLinearAccelCaps();
+    const maxBrakingAccel = Math.min(caps.x, caps.y, caps.z);
+
     const followerOpts: PathFollowerOptions = {
       sampleSpacing: opts?.sampleSpacing,
       maxSamples: opts?.maxSamples,
@@ -73,6 +78,7 @@ export class PathManager {
       lookaheadGain: opts?.lookaheadGain ?? 1.0,
       endClearanceAbs,
       curved: !this.hasMultiSegmentPath,
+      maxBrakingAccel: opts?.maxBrakingAccel ?? maxBrakingAccel, // Use actual spacecraft capability
     };
 
     this.follower = new PathFollower(waypoints, followerOpts);
@@ -109,21 +115,32 @@ export class PathManager {
       try {
         const ast = world?.getAsteroidObstacles?.() || [];
         for (const a of ast) res.push({ position: a.position.clone(), size: a.size.clone(), isTarget: false });
-      } catch {}
-    } catch {}
+      } catch { }
+    } catch { }
     return res;
+  }
+
+  private getObstacleRadius(size: THREE.Vector3): number {
+    return Math.max(size.x, size.y, size.z);
+  }
+
+  private filterObstaclesNearSegment(obstacles: Obstacle[], start: THREE.Vector3, goal: THREE.Vector3, nearDist: number): Obstacle[] {
+    const seg = goal.clone().sub(start);
+    const segLen = Math.max(EPS, seg.length());
+    const segDir = seg.clone().multiplyScalar(1 / segLen);
+    return obstacles.filter(o => {
+      const w = o.position.clone().sub(start);
+      const u = THREE.MathUtils.clamp(w.dot(segDir), 0, segLen);
+      const closest = start.clone().add(segDir.clone().multiplyScalar(u));
+      const dist = closest.distanceTo(o.position);
+      const r = this.getObstacleRadius(o.size);
+      return dist <= (nearDist + r);
+    });
   }
 
   private haveObstaclesChangedNear(spacecraft: Spacecraft, start: THREE.Vector3, goal: THREE.Vector3): boolean {
     const curr = this.collectObstacles(spacecraft);
-    const seg = goal.clone().sub(start); const L = Math.max(EPS, seg.length()); const dir = seg.clone().multiplyScalar(1 / L);
-    const nearDist = 12.0;
-    const near = curr.filter(o => {
-      const u = THREE.MathUtils.clamp(o.position.clone().sub(start).dot(dir), 0, L);
-      const closest = start.clone().add(dir.clone().multiplyScalar(u));
-      const r = Math.max(o.size.x, o.size.y, o.size.z);
-      return closest.distanceTo(o.position) <= (nearDist + r);
-    });
+    const near = this.filterObstaclesNearSegment(curr, start, goal, 12.0);
     const prev = this.lastObsSnapshot; const movedThresh = 1.0;
     let changed = near.length !== prev.length;
     if (!changed) {
@@ -136,24 +153,24 @@ export class PathManager {
     return changed;
   }
 
+  private getSpacecraftRadius(): number {
+    try {
+      const d = this.getDims();
+      return this.getObstacleRadius(d);
+    } catch {
+      return 1.0;
+    }
+  }
+
   public buildAvoidancePath(spacecraft: Spacecraft, start: THREE.Vector3, goal: THREE.Vector3): THREE.Vector3[] {
     try {
       let objs = this.collectObstacles(spacecraft);
-      const craftR = (() => { try { const d = this.getDims(); return Math.max(d.x, d.y, d.z); } catch { return 1.0; } })();
+      const craftR = this.getSpacecraftRadius();
       const safetyBoxes = objs.map(o => TrajectoryPlanner.calculateSafetyBox(o.position, o.size, o.isTarget, craftR));
       const directBlocked = TrajectoryPlanner.doesLineIntersectAnySafetyBox(start, goal, safetyBoxes);
       if (!directBlocked) return [start, goal];
 
-      const seg = goal.clone().sub(start); const segLen = Math.max(EPS, seg.length()); const segDir = seg.clone().multiplyScalar(1 / segLen);
-      const nearDist = 12.0;
-      const nearObjs = objs.filter(o => {
-        const w = o.position.clone().sub(start);
-        const u = THREE.MathUtils.clamp(w.dot(segDir), 0, segLen);
-        const closest = start.clone().add(segDir.clone().multiplyScalar(u));
-        const dist = closest.distanceTo(o.position);
-        const r = Math.max(o.size.x, o.size.y, o.size.z);
-        return dist <= (nearDist + r);
-      });
+      const nearObjs = this.filterObstaclesNearSegment(objs, start, goal, 12.0);
       objs = nearObjs.length ? nearObjs : objs;
 
       const wps = TrajectoryPlanner.calculateAvoidanceWaypoints(start, goal, objs, craftR);
@@ -161,68 +178,34 @@ export class PathManager {
     } catch { return [start, goal]; }
   }
 
-  public updateFollowStep(spacecraft: Spacecraft, targetPosition: THREE.Vector3, targetOrientation: THREE.Quaternion, referenceVelocityWorld: THREE.Vector3 | null): { useFollower: boolean } {
-    if (!this.follower) return { useFollower: false };
+  public updateFollowStep(spacecraft: Spacecraft, targetPosition: THREE.Vector3, _targetOrientation: THREE.Quaternion, referenceVelocityWorld: THREE.Vector3 | null): { useFollower: boolean } {
     const p = spacecraft.getWorldPositionRef();
     const v = spacecraft.getWorldVelocityRef();
-    const gNow = targetPosition;
-    const qPlan = this.lastGoalQuat;
-    const qNow = targetOrientation;
-    const qDelta = new THREE.Quaternion().copy(qNow).multiply(new THREE.Quaternion().copy(qPlan).invert());
-    const qDeltaInv = new THREE.Quaternion().copy(qDelta).invert();
-    const relPosNow = new THREE.Vector3(p.x, p.y, p.z).sub(gNow);
-    const posPlanned = this.lastGoal.clone().add(relPosNow.applyQuaternion(qDeltaInv));
     const vGoal = referenceVelocityWorld || new THREE.Vector3(0, 0, 0);
-    const vRelNow = new THREE.Vector3().copy(v).sub(vGoal);
-    const vPlanned = vRelNow.applyQuaternion(qDeltaInv);
-    const followerState = this.follower.update(posPlanned, vPlanned);
-    const useFollowerNow = !followerState.done;
-    if (useFollowerNow) {
-      const desiredVelWorld = followerState.velocityRef.clone().applyQuaternion(qDelta).add(vGoal);
-      const progress = this.follower.getProgress();
-      const remaining = Math.max(0, progress?.sRem ?? 0);
 
-      const maxSpeed = Math.max(0.5, this.getMaxLinearVelocity());
-      if (desiredVelWorld.length() > maxSpeed) desiredVelWorld.setLength(maxSpeed);
-
-      const caps = this.getAxisLinearAccelCaps();
-      const maxAccel = Math.max(0.5, Math.min(caps.x, caps.y, caps.z));
-
-      const deltaV = desiredVelWorld.clone().sub(v);
-      const desiredSpeed = desiredVelWorld.length();
-      let alongDir = new THREE.Vector3();
-      if (desiredSpeed > 1e-3) alongDir.copy(desiredVelWorld).multiplyScalar(1 / desiredSpeed);
-      else if (remaining > 1e-3) alongDir.copy(targetPosition).sub(p).normalize();
-      const deltaAlong = deltaV.dot(alongDir);
-      const vAlongCurrent = alongDir.lengthSq() > 1e-6 ? v.dot(alongDir) : 0;
-
-      const minTime = 0.2;
-      const maxTime = 2.5;
-      let timeMag: number;
-      let preview: number;
-      if (deltaAlong < 0) {
-        const excessSpeed = Math.max(0, vAlongCurrent - desiredSpeed);
-        timeMag = Math.max(minTime, Math.min(maxTime, excessSpeed / Math.max(maxAccel, 1e-3)));
-        preview = -timeMag;
-      } else {
-        const denom = Math.max(desiredSpeed, 1e-3);
-        timeMag = Math.max(minTime, Math.min(maxTime, remaining / denom));
-        preview = timeMag;
-      }
-
-      let accelVector = deltaV.multiplyScalar(1 / Math.max(timeMag, 1e-3));
-      if (accelVector.length() > maxAccel) accelVector.setLength(maxAccel);
-
-      const previewPos = p.clone()
-        .add(v.clone().multiplyScalar(preview))
-        .add(accelVector.clone().multiplyScalar(0.5 * preview * preview));
-
-      this.carrot.copy(previewPos);
-      this.vRef.copy(desiredVelWorld);
-    } else {
-      this.vRef.set(0, 0, 0);
+    // No path: simple direct guidance with braking
+    if (!this.follower) {
       this.carrot.copy(targetPosition);
+      const toTarget = targetPosition.clone().sub(p);
+      const dist = toTarget.length();
+
+      // DYNAMIC VELOCITY PROFILE: v = sqrt(2*a*d)
+      // Simple physics - let PID handle everything
+      const caps = this.getAxisLinearAccelCaps();
+      const aBrake = Math.min(caps.x, caps.y, caps.z);
+      const dir = toTarget.clone().normalize();
+      const vTarget = Math.sqrt(2 * aBrake * dist);
+      const vMax = this.getMaxLinearVelocity();
+      const speed = Math.min(vMax, vTarget);
+      this.vRef.copy(dir).multiplyScalar(speed).add(vGoal);
+      return { useFollower: false };
     }
-    return { useFollower: useFollowerNow };
+
+    // Use PathFollower for guided trajectory
+    const followerState = this.follower.update(p, v);
+    this.carrot.copy(followerState.carrot);
+    this.vRef.copy(followerState.velocityRef).add(vGoal);
+
+    return { useFollower: !followerState.done };
   }
 }

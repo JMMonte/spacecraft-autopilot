@@ -12,7 +12,11 @@
     "test:physics": "node tools/collision-check.mjs",
     "test:ap": "node --import tsx tools/tests/autopilot.test.ts",
     "test:traj": "node --import tsx tools/tests/trajectory.test.ts",
-    "list:unused": "node tools/list-unused.mjs"
+    "list:unused": "node tools/list-unused.mjs",
+    "tune": "node --import tsx tools/autopilot-tuner/index.ts",
+    "tune:quick": "node --import tsx tools/autopilot-tuner/index.ts -- --mode test --scenarios corridor,slalom",
+    "tune:optimize": "node --import tsx tools/autopilot-tuner/index.ts -- --mode optimize --method adaptive --iterations 50 -v",
+    "tune:visualize": "node --import tsx tools/autopilot-tuner/visualize-results.ts"
   },
   "author": "Joao Montenegro",
   "license": "ISC",
