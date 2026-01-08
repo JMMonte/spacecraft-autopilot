@@ -33,7 +33,7 @@
     "mathjs": "^14.7.0",
     "ml-matrix": "^6.12.1",
     "postprocessing": "^6.37.7",
-    "react": "^19.1.1",
+    "react": "^19.2.3",
     "react-dom": "^19.1.1",
     "react-draggable": "^4.5.0",
     "stats.js": "^0.17.0",
