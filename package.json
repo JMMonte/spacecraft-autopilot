@@ -29,7 +29,7 @@
     "@react-three/drei": "^10.7.4",
     "@react-three/fiber": "^9.3.0",
     "@tailwindcss/postcss": "^4.1.13",
-    "lucide-react": "^0.542.0",
+    "lucide-react": "^0.561.0",
     "mathjs": "^14.7.0",
     "ml-matrix": "^6.12.1",
     "postprocessing": "^6.37.7",
