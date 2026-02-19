@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Spacecraft } from '../../core/spacecraft';
-import { setDockingPlan } from '../../state/store';
+import { emitDockingPlanChanged } from '../../domain/simulationEvents';
 import { canDockWithinThresholds, type DockingPortId, computeDesiredDockQuatFor, computeTargetOrientationQuaternion } from './DockingUtils';
 import { TrajectoryPlanner } from '../trajectory/TrajectoryPlanner';
 import { TrajectoryVisualizer } from '../visualization/TrajectoryVisualizer';
@@ -73,11 +73,13 @@ export class DockingController {
             const ourQuat = computeDesiredDockQuatFor(this.spacecraft, this._ourPortId!, this.targetSpacecraft, this._targetPortId!);
             const targQuat = computeDesiredDockQuatFor(this.targetSpacecraft, this._targetPortId!, this.spacecraft, this._ourPortId!);
             if (ourQuat && targQuat) {
-                setDockingPlan({
-                    sourceUuid: this.spacecraft.uuid,
-                    targetUuid: this.targetSpacecraft.uuid,
-                    sourceQuat: { x: ourQuat.x, y: ourQuat.y, z: ourQuat.z, w: ourQuat.w },
-                    targetQuat: { x: targQuat.x, y: targQuat.y, z: targQuat.z, w: targQuat.w },
+                emitDockingPlanChanged({
+                    plan: {
+                        sourceUuid: this.spacecraft.uuid,
+                        targetUuid: this.targetSpacecraft.uuid,
+                        sourceQuat: { x: ourQuat.x, y: ourQuat.y, z: ourQuat.z, w: ourQuat.w },
+                        targetQuat: { x: targQuat.x, y: targQuat.y, z: targQuat.z, w: targQuat.w },
+                    }
                 });
             }
         } catch {}
@@ -277,11 +279,13 @@ export class DockingController {
             const ourQuatNow = computeDesiredDockQuatFor(this.spacecraft, this._ourPortId, this.targetSpacecraft, this._targetPortId);
             const targQuatNow = computeDesiredDockQuatFor(this.targetSpacecraft, this._targetPortId, this.spacecraft, this._ourPortId);
             if (ourQuatNow && targQuatNow) {
-                setDockingPlan({
-                    sourceUuid: this.spacecraft.uuid,
-                    targetUuid: this.targetSpacecraft.uuid,
-                    sourceQuat: { x: ourQuatNow.x, y: ourQuatNow.y, z: ourQuatNow.z, w: ourQuatNow.w },
-                    targetQuat: { x: targQuatNow.x, y: targQuatNow.y, z: targQuatNow.z, w: targQuatNow.w },
+                emitDockingPlanChanged({
+                    plan: {
+                        sourceUuid: this.spacecraft.uuid,
+                        targetUuid: this.targetSpacecraft.uuid,
+                        sourceQuat: { x: ourQuatNow.x, y: ourQuatNow.y, z: ourQuatNow.z, w: ourQuatNow.w },
+                        targetQuat: { x: targQuatNow.x, y: targQuatNow.y, z: targQuatNow.z, w: targQuatNow.w },
+                    }
                 });
             }
         } catch {}
@@ -435,7 +439,7 @@ export class DockingController {
         if (this.spacecraft.dock(this.ourPortId, this.targetSpacecraft, this.targetPortId)) {
             this.phase = 'docked';
             this.trajectoryVisualizer.clearDebugObjects();
-            try { setDockingPlan(null); } catch {}
+            try { emitDockingPlanChanged({ plan: null }); } catch {}
             
             const autopilot = this.spacecraft.spacecraftController?.autopilot;
             if (autopilot) {

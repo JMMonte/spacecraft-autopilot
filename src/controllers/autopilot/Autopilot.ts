@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { setAutopilotState } from '../../state/store';
+import { emitAutopilotStateChanged } from '../../domain/simulationEvents';
 import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import { AutopilotConfig } from './AutopilotMode';
@@ -679,9 +679,12 @@ export class Autopilot implements IAutopilot {
         }
         // Push to global store for UI subscriptions
         try {
-            setAutopilotState(this.isEnabled, { ...this.activeAutopilots });
+            emitAutopilotStateChanged({
+                enabled: this.isEnabled,
+                activeAutopilots: { ...this.activeAutopilots },
+            });
         } catch (err) {
-            this.log.warn('Autopilot store update error:', err);
+            this.log.warn('Autopilot state event publish error:', err);
         }
         // Legacy DOM event removed; React store handles subscriptions
 

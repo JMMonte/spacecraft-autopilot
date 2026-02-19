@@ -13,7 +13,11 @@ import { AsteroidModel, AsteroidModelId } from '../objects/AsteroidModel';
 import { AsteroidSystem, AsteroidSystemConfig } from '../objects/AsteroidSystem';
 import { createLogger } from '../utils/logger';
 import { InfiniteGrid } from '../scenes/objects/InfiniteGrid';
-import { store, toggleCameraMode } from '../state/store';
+import { emitCameraModeToggleRequested } from '../domain/simulationEvents';
+import {
+    noopSimulationRuntimeStatePort,
+    SimulationRuntimeStatePort,
+} from '../domain/runtimeStatePort';
 
 interface WorldConfig {
     debug?: boolean;
@@ -77,10 +81,16 @@ export class BasicWorld {
     private running: boolean = false;
     private stats: Stats | null = null;
     private grid: InfiniteGrid | null = null;
+    private runtimeState: SimulationRuntimeStatePort;
 
-    constructor(config: WorldConfig = {}, canvas: HTMLCanvasElement) {
+    constructor(
+        config: WorldConfig = {},
+        canvas: HTMLCanvasElement,
+        runtimeState: SimulationRuntimeStatePort = noopSimulationRuntimeStatePort
+    ) {
         this.config = config;
         this.canvas = canvas;
+        this.runtimeState = runtimeState;
         this.spacecraft = [];
         this.spacecraftControllers = [];
         this.activeSpacecraft = null;
@@ -191,11 +201,10 @@ export class BasicWorld {
 
         // Initialize UI-driven camera/grid state and subscribe to changes
         try {
-            const ui = store.getState().ui ?? { gridVisible: true, cameraMode: 'follow' } as any;
+            const ui = this.runtimeState.getUiState();
             this.camera.setCameraMode(ui.cameraMode ?? 'follow');
             (this as any)._prevCamMode = ui.cameraMode ?? 'follow';
-            const unsubUi = store.subscribe(() => {
-                const uiNow = store.getState().ui ?? {} as any;
+            const unsubUi = this.runtimeState.subscribeUiState((uiNow) => {
                 const prevMode = (this as any)._prevCamMode;
                 if (this.camera && uiNow.cameraMode) {
                     // On transition to follow, snap target to active spacecraft without jumping
@@ -248,10 +257,10 @@ export class BasicWorld {
         this.grid.addTo(this.camera.scene);
         // Initialize grid visibility from global UI store and subscribe to changes
         try {
-            const initialVisible = (store.getState().ui?.gridVisible ?? true);
+            const initialVisible = this.runtimeState.getUiState().gridVisible ?? true;
             this.grid.mesh.visible = initialVisible;
-            const unsub = store.subscribe(() => {
-                const visible = (store.getState().ui?.gridVisible ?? true);
+            const unsub = this.runtimeState.subscribeUiState((ui) => {
+                const visible = (ui.gridVisible ?? true);
                 if (this.grid) this.grid.mesh.visible = visible;
             });
             (this as any)._storeUnsubs = (this as any)._storeUnsubs || [];
@@ -412,16 +421,17 @@ export class BasicWorld {
         initialConeVisibility: boolean = false,
         name: string = 'Spacecraft'
     ): Spacecraft {
-        const spacecraft = new Spacecraft(
-            {},
-            this.camera.scene as ThreeScene,
+            const spacecraft = new Spacecraft(
+                {},
+                this.camera.scene as ThreeScene,
             initialPosition,
             width,
             height,
-            depth,
-            this,
-            this.physics
-        );
+                depth,
+                this,
+                this.physics,
+                this.runtimeState
+            );
         spacecraft.name = name;
         
         if (initialConeVisibility) {
@@ -514,7 +524,7 @@ export class BasicWorld {
         this.keysPressed[event.code] = true;
         // Global hotkeys first
         if (event.code === 'KeyC') {
-            try { toggleCameraMode(); } catch {}
+            try { emitCameraModeToggleRequested('keyboard'); } catch {}
         }
         const activeController = this.spacecraftControllers.find(controller => controller.getIsActive());
         if (activeController) {
@@ -600,7 +610,7 @@ export class BasicWorld {
             this.performPassiveDocking();
 
             // Update camera to follow active spacecraft when in 'follow' mode
-            const ui = (store.getState().ui ?? { cameraMode: 'follow' }) as any;
+            const ui = this.runtimeState.getUiState();
             if (ui.cameraMode !== 'free') {
                 const activeSpacecraft = this.spacecraft.find(s => s.spacecraftController.getIsActive());
                 if (activeSpacecraft) {

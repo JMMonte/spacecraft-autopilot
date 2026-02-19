@@ -1,5 +1,9 @@
 import * as THREE from 'three';
-import { store } from '../state/store';
+import { emitTraceSampleAppended } from '../domain/simulationEvents';
+import {
+    noopSimulationRuntimeStatePort,
+    SimulationRuntimeStatePort,
+} from '../domain/runtimeStatePort';
 
 export class SceneHelpers {
     private scene: THREE.Scene;
@@ -40,9 +44,16 @@ export class SceneHelpers {
     private pathGeometry: THREE.BufferGeometry | null = null;
     private pathMaterial: THREE.LineBasicMaterial | null = null;
     public pathCarrot: THREE.Mesh | null = null;
+    private runtimeState: SimulationRuntimeStatePort;
 
-    constructor(scene: THREE.Scene, _light: THREE.Light, _camera: THREE.Camera) {
+    constructor(
+        scene: THREE.Scene,
+        _light: THREE.Light,
+        _camera: THREE.Camera,
+        runtimeState: SimulationRuntimeStatePort = noopSimulationRuntimeStatePort
+    ) {
         this.scene = scene;
+        this.runtimeState = runtimeState;
         this.initHelpers();
     }
 
@@ -165,8 +176,7 @@ export class SceneHelpers {
 
         // Subscribe to trace settings to handle gradient changes
         try {
-            this.storeUnsub = store.subscribe(() => {
-                const s = store.getState().traceSettings;
+            this.storeUnsub = this.runtimeState.subscribeTraceSettings((s) => {
                 const mode = s.gradientMode;
                 const justEnabled = s.gradientEnabled && !this.prevGradientEnabled;
                 const justDisabled = !s.gradientEnabled && this.prevGradientEnabled;
@@ -318,7 +328,7 @@ export class SceneHelpers {
             this.metricForceNet[this.traceCount] = forceNet;
         }
 
-        const s = store.getState().traceSettings;
+        const s = this.runtimeState.getTraceSettings();
         if (s.gradientEnabled) {
             const v = this.pickMetricValue(s.gradientMode, speed, accel, forceAbs, forceNet);
             let needsRecolorAll = false;
@@ -348,9 +358,12 @@ export class SceneHelpers {
         this.traceGeometry.setDrawRange(0, this.traceCount);
 
         try {
-            store.appendTraceSample(spacecraftId, {
-                t: performance.now(), x: pos.x, y: pos.y, z: pos.z,
-                speed, accel, forceAbs, forceNet,
+            emitTraceSampleAppended({
+                spacecraftId,
+                sample: {
+                    t: performance.now(), x: pos.x, y: pos.y, z: pos.z,
+                    speed, accel, forceAbs, forceNet,
+                },
             });
         } catch {}
     }
@@ -441,7 +454,7 @@ export class SceneHelpers {
 
     private recomputeColors(): void {
         if (!this.traceColors || this.traceCount === 0) return;
-        const s = store.getState().traceSettings;
+        const s = this.runtimeState.getTraceSettings();
         if (!s.gradientEnabled) { this.applyFlatColor(); return; }
         // Recompute min/max for selected metric
         let min = Infinity, max = -Infinity;

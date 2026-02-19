@@ -5,6 +5,7 @@ import { Spacecraft } from './core/spacecraft';
 import { Cockpit } from './components/Cockpit';
 import { useElementSize } from './hooks/useElementSize';
 import { createLogger } from './utils/logger';
+import { simulationRuntimeStatePort } from './state/simulationRuntimeStatePort';
 
 export function App() {
     const log = createLogger('ui:App');
@@ -37,7 +38,11 @@ export function App() {
             try {
                 if (!canvasRef.current) return;
 
-                const worldInstance = new BasicWorld(appConfig as any, canvasRef.current);
+                const worldInstance = new BasicWorld(
+                    appConfig as any,
+                    canvasRef.current,
+                    simulationRuntimeStatePort
+                );
 
                 // Set early so events (keydown/keyup) will target the most recent instance
                 worldRef.current = worldInstance;

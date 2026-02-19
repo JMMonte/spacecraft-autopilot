@@ -68,6 +68,10 @@ See `tools/autopilot-tuner/README.md` for detailed guide.
 ### Other Useful Scripts
 
 - `npm run check:ts` – TypeScript check
+- `npm run test` – Full test suite (unit + integration + architecture)
+- `npm run test:unit` – Unit tests (domain events/state bridge)
+- `npm run test:integration` – Integration tests (autopilot/trajectory regression scripts)
+- `npm run test:architecture` – Import-boundary checks
 - `npm run test:physics` – Rapier collision sanity test
 - `npm run test:ap` – Autopilot unit tests
 - `npm run test:traj` – Trajectory planner tests

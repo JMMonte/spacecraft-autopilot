@@ -6,7 +6,8 @@ import { SpacecraftController } from '../controllers/spacecraftController';
 import { DockingController } from '../controllers/docking/DockingController';
 import { BasicWorld } from './BasicWorld';
 import type { PhysicsEngine } from '../physics';
-import { store } from '../state/store';
+import { emitTraceSamplesCleared } from '../domain/simulationEvents';
+import type { SimulationRuntimeStatePort } from '../domain/runtimeStatePort';
 
 interface DockingPortInfo {
     position: THREE.Vector3;
@@ -50,7 +51,8 @@ export class Spacecraft {
         height: number = 1,
         depth: number = 2,
         basicWorld?: BasicWorld,
-        physics?: PhysicsEngine
+        physics?: PhysicsEngine,
+        runtimeState?: SimulationRuntimeStatePort
     ) {
         this.uuid = THREE.MathUtils.generateUUID();
         this.basicWorld = basicWorld as BasicWorld;
@@ -90,7 +92,7 @@ export class Spacecraft {
 
         // Get the camera from the scene
         const camera = scene.userData.camera;
-        this.helpers = new SceneHelpers(scene, scene.userData.light, camera);
+        this.helpers = new SceneHelpers(scene, scene.userData.light, camera, runtimeState);
         this.helpers.disableHelpers();
 
         this.spacecraftController = new SpacecraftController(this, this.objects.box, this.helpers);
@@ -363,7 +365,7 @@ export class Spacecraft {
         if (this.helpers) {
             this.helpers.resetTrace();
         }
-        try { store.clearTraceSamples(this.uuid); } catch {}
+        try { emitTraceSamplesCleared(this.uuid); } catch {}
     }
 
     public getVelocity(): THREE.Vector3 {
