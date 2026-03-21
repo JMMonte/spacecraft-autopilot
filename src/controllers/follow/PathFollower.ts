@@ -12,6 +12,19 @@ export class PathFollower {
   private lastIdx = 0;
   private lastState: PathFollowerState | null = null;
 
+  // Scratch vectors — reused every frame to avoid GC pressure
+  private _ab = new THREE.Vector3();
+  private _ap = new THREE.Vector3();
+  private _closest = new THREE.Vector3();
+  private _seg0 = new THREE.Vector3();
+  private _seg1 = new THREE.Vector3();
+  private _q0 = new THREE.Vector3();
+  private _q1 = new THREE.Vector3();
+  private _interpPos = new THREE.Vector3();
+  private _interpTan = new THREE.Vector3();
+  private _carrotOut = new THREE.Vector3();
+  private _velRefOut = new THREE.Vector3();
+
   constructor(waypoints: THREE.Vector3[], options: PathFollowerOptions = {}) {
     this.opts = {
       sampleSpacing: options.sampleSpacing ?? 0.4,
@@ -22,6 +35,7 @@ export class PathFollower {
       endClearanceAbs: Math.max(0, options.endClearanceAbs ?? 0.05), // 5cm
       curved: options.curved ?? true,
       maxBrakingAccel: Math.max(0.5, options.maxBrakingAccel ?? 2.0), // Default 2.0 m/s²
+      terminalSpeedGain: Math.max(0.1, options.terminalSpeedGain ?? 2.0),
     };
     this.setWaypoints(waypoints);
   }
@@ -53,10 +67,11 @@ export class PathFollower {
     for (let i = 0; i < this.samples.length - 1; i++) {
       const a = this.samples[i];
       const b = this.samples[i + 1];
-      const ab = b.clone().sub(a);
-      const t = THREE.MathUtils.clamp(pos.clone().sub(a).dot(ab) / Math.max(EPS, ab.lengthSq()), 0, 1);
-      const closest = a.clone().add(ab.multiplyScalar(t));
-      const d2 = pos.distanceToSquared(closest);
+      this._ab.subVectors(b, a);
+      this._ap.subVectors(pos, a);
+      const t = THREE.MathUtils.clamp(this._ap.dot(this._ab) / Math.max(EPS, this._ab.lengthSq()), 0, 1);
+      this._closest.copy(a).addScaledVector(this._ab, t);
+      const d2 = pos.distanceToSquared(this._closest);
       if (d2 < best) best = d2;
     }
     return Math.sqrt(best);
@@ -136,27 +151,31 @@ export class PathFollower {
     if (idx <= 0) {
       const a = this.samples[0];
       const b = this.samples[1];
-      const ab = b.clone().sub(a);
-      const t = THREE.MathUtils.clamp(pos.clone().sub(a).dot(ab) / Math.max(EPS, ab.lengthSq()), 0, 1);
+      this._ab.subVectors(b, a);
+      this._ap.subVectors(pos, a);
+      const t = THREE.MathUtils.clamp(this._ap.dot(this._ab) / Math.max(EPS, this._ab.lengthSq()), 0, 1);
       return { s: this.arc[0] + t * Math.max(EPS, this.arc[1] - this.arc[0]), index: 0 };
     }
     if (idx >= this.samples.length - 1) {
       const a = this.samples[this.samples.length - 2];
       const b = this.samples[this.samples.length - 1];
-      const ab = b.clone().sub(a);
-      const t = THREE.MathUtils.clamp(pos.clone().sub(a).dot(ab) / Math.max(EPS, ab.lengthSq()), 0, 1);
+      this._ab.subVectors(b, a);
+      this._ap.subVectors(pos, a);
+      const t = THREE.MathUtils.clamp(this._ap.dot(this._ab) / Math.max(EPS, this._ab.lengthSq()), 0, 1);
       return { s: this.arc[this.samples.length - 2] + t * Math.max(EPS, this.arc[this.samples.length - 1] - this.arc[this.samples.length - 2]), index: this.samples.length - 2 };
     }
     const prev = this.samples[idx - 1];
     const cur = this.samples[idx];
     const next = this.samples[idx + 1];
-    const seg0 = cur.clone().sub(prev);
-    const seg1 = next.clone().sub(cur);
-    const t0 = THREE.MathUtils.clamp(pos.clone().sub(prev).dot(seg0) / Math.max(EPS, seg0.lengthSq()), 0, 1);
-    const t1 = THREE.MathUtils.clamp(pos.clone().sub(cur).dot(seg1) / Math.max(EPS, seg1.lengthSq()), 0, 1);
-    const q0 = prev.clone().add(seg0.clone().multiplyScalar(t0));
-    const q1 = cur.clone().add(seg1.clone().multiplyScalar(t1));
-    if (pos.distanceToSquared(q0) <= pos.distanceToSquared(q1)) {
+    this._seg0.subVectors(cur, prev);
+    this._seg1.subVectors(next, cur);
+    this._ap.subVectors(pos, prev);
+    const t0 = THREE.MathUtils.clamp(this._ap.dot(this._seg0) / Math.max(EPS, this._seg0.lengthSq()), 0, 1);
+    this._ap.subVectors(pos, cur);
+    const t1 = THREE.MathUtils.clamp(this._ap.dot(this._seg1) / Math.max(EPS, this._seg1.lengthSq()), 0, 1);
+    this._q0.copy(prev).addScaledVector(this._seg0, t0);
+    this._q1.copy(cur).addScaledVector(this._seg1, t1);
+    if (pos.distanceToSquared(this._q0) <= pos.distanceToSquared(this._q1)) {
       return { s: this.arc[idx - 1] + t0 * Math.max(EPS, this.arc[idx] - this.arc[idx - 1]), index: idx - 1 };
     }
     return { s: this.arc[idx] + t1 * Math.max(EPS, this.arc[idx + 1] - this.arc[idx]), index: idx };
@@ -183,10 +202,22 @@ export class PathFollower {
     return bestIdx;
   }
 
-  private interpolateAtS(sTarget: number): { position: THREE.Vector3; tangent: THREE.Vector3 } {
-    if (this.samples.length === 0) return { position: new THREE.Vector3(), tangent: new THREE.Vector3(0, 0, 1) };
-    if (sTarget <= 0) return { position: this.samples[0].clone(), tangent: this.tangents[0].clone() };
-    if (sTarget >= this.totalS) return { position: this.samples[this.samples.length - 1].clone(), tangent: this.tangents[this.tangents.length - 1].clone() };
+  private interpolateAtS(sTarget: number): void {
+    if (this.samples.length === 0) {
+      this._interpPos.set(0, 0, 0);
+      this._interpTan.set(0, 0, 1);
+      return;
+    }
+    if (sTarget <= 0) {
+      this._interpPos.copy(this.samples[0]);
+      this._interpTan.copy(this.tangents[0]);
+      return;
+    }
+    if (sTarget >= this.totalS) {
+      this._interpPos.copy(this.samples[this.samples.length - 1]);
+      this._interpTan.copy(this.tangents[this.tangents.length - 1]);
+      return;
+    }
     let lo = 0, hi = this.arc.length - 1;
     while (lo + 1 < hi) {
       const mid = (lo + hi) >> 1;
@@ -195,16 +226,16 @@ export class PathFollower {
     const s0 = this.arc[lo];
     const s1 = this.arc[lo + 1];
     const u = THREE.MathUtils.clamp((sTarget - s0) / Math.max(EPS, s1 - s0), 0, 1);
-    const position = this.samples[lo].clone().lerp(this.samples[lo + 1], u);
-    const tangent = this.tangents[lo].clone().lerp(this.tangents[lo + 1], u).normalize();
-    return { position, tangent };
+    this._interpPos.copy(this.samples[lo]).lerp(this.samples[lo + 1], u);
+    this._interpTan.copy(this.tangents[lo]).lerp(this.tangents[lo + 1], u).normalize();
   }
 
   public update(position: THREE.Vector3, velocity: THREE.Vector3): PathFollowerState {
     if (this.samples.length < 2 || this.totalS <= 0) {
-      const fallback = this.samples.length ? this.samples[this.samples.length - 1].clone() : position.clone();
-      const zero = new THREE.Vector3();
-      this.lastState = { carrot: fallback, velocityRef: zero, done: true, sCur: 0, sTotal: this.totalS };
+      if (this.samples.length) this._carrotOut.copy(this.samples[this.samples.length - 1]);
+      else this._carrotOut.copy(position);
+      this._velRefOut.set(0, 0, 0);
+      this.lastState = { carrot: this._carrotOut, velocityRef: this._velRefOut, done: true, sCur: 0, sTotal: this.totalS };
       return this.lastState;
     }
 
@@ -214,19 +245,21 @@ export class PathFollower {
     const vMag = velocity.length();
     const lookahead = THREE.MathUtils.clamp(this.opts.lookaheadMin + this.opts.lookaheadGain * vMag, this.opts.lookaheadMin, this.opts.lookaheadMax);
     const sTarget = Math.min(sStop, proj.s + Math.min(remaining, lookahead));
-    const { position: carrotPos, tangent } = this.interpolateAtS(sTarget);
+    this.interpolateAtS(sTarget);
 
-    // DYNAMIC VELOCITY PROFILE: v = sqrt(2*a*d)
-    // Simple physics - no thresholds, no cutoffs
+    // Blended terminal profile:
+    // 1) braking bound: v <= sqrt(2*a*d)
+    // 2) linear capture bound: v <= k*d (critically damped near endpoint)
     const aBrake = this.opts.maxBrakingAccel;
-    const vTarget = Math.sqrt(2 * aBrake * Math.max(0, remaining));
-    const speed = Math.min(vTarget, this.opts.lookaheadMax);
+    const vTargetBrake = Math.sqrt(2 * aBrake * Math.max(0, remaining));
+    const vTargetLinear = this.opts.terminalSpeedGain * remaining;
+    const speed = Math.min(vTargetBrake, vTargetLinear, this.opts.lookaheadMax);
 
-    const carrot = carrotPos;
-    const velocityRef = tangent.multiplyScalar(speed);
+    this._carrotOut.copy(this._interpPos);
+    this._velRefOut.copy(this._interpTan).multiplyScalar(speed);
     const done = remaining <= this.opts.endClearanceAbs;
 
-    this.lastState = { carrot, velocityRef, done, sCur: proj.s, sTotal: this.totalS };
+    this.lastState = { carrot: this._carrotOut, velocityRef: this._velRefOut, done, sCur: proj.s, sTotal: this.totalS };
     return this.lastState;
   }
 }

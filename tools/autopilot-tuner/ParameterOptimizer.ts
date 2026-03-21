@@ -6,6 +6,16 @@
 import type { TestScenario, AutopilotParameters, SafetyMetrics } from './CollisionTester';
 import { CollisionTester } from './CollisionTester';
 
+interface ScenarioTester {
+  initialize(): Promise<void>;
+  runScenario(
+    scenario: TestScenario,
+    params: AutopilotParameters
+  ): Promise<SafetyMetrics>;
+}
+
+type ScoreFn = (metrics: SafetyMetrics, scenario: TestScenario) => number;
+
 export interface OptimizationConfig {
   scenarios: TestScenario[];
   parameterRanges: {
@@ -38,10 +48,15 @@ export interface OptimizationResult {
 }
 
 export class ParameterOptimizer {
-  private tester: CollisionTester;
+  private tester: ScenarioTester;
+  private scoreFn: ScoreFn;
 
-  constructor() {
-    this.tester = new CollisionTester();
+  constructor(
+    tester: ScenarioTester = new CollisionTester(),
+    scoreFn: ScoreFn = (metrics, scenario) => CollisionTester.calculateSafetyScore(metrics, scenario)
+  ) {
+    this.tester = tester;
+    this.scoreFn = scoreFn;
   }
 
   async initialize(): Promise<void> {
@@ -89,43 +104,13 @@ export class ParameterOptimizer {
         console.log(`Current best score: ${bestScore.toFixed(2)}`);
       }
 
-      // Test on all scenarios
-      const scenarioResults: OptimizationResult['allResults'][0]['scenarioResults'] = [];
-      let totalScore = 0;
-
-      for (const scenario of config.scenarios) {
-        try {
-          const metrics = await this.tester.runScenario(scenario, params);
-          const score = CollisionTester.calculateSafetyScore(metrics, scenario);
-
-          scenarioResults.push({
-            scenario: scenario.name,
-            metrics,
-            score
-          });
-
-          totalScore += score;
-        } catch (error) {
-          if (config.verbose) {
-            console.error(`Error testing scenario ${scenario.name}:`, error);
-          }
-          // Penalize failed tests
-          scenarioResults.push({
-            scenario: scenario.name,
-            metrics: this.getFailedMetrics(),
-            score: 0
-          });
-        }
-      }
-
       // Average score across all scenarios
-      const avgScore = totalScore / config.scenarios.length;
-
-      allResults.push({
-        parameters: params,
-        score: avgScore,
-        scenarioResults
-      });
+      const avgScore = await this.evaluateParameters(
+        params,
+        config.scenarios,
+        allResults,
+        config.parallelTests
+      );
 
       if (avgScore > bestScore) {
         bestScore = avgScore;
@@ -225,7 +210,7 @@ export class ParameterOptimizer {
       current[key] = (range.min + range.max) / 2;
     }
 
-    let currentScore = await this.evaluateParameters(current, config.scenarios, allResults);
+    let currentScore = await this.evaluateParameters(current, config.scenarios, allResults, config.parallelTests);
     let bestParameters = { ...current };
     let bestScore = currentScore;
 
@@ -255,12 +240,12 @@ export class ParameterOptimizer {
         // Try increasing
         const testUp = { ...current };
         testUp[key] = Math.min(range.max, current[key] + delta);
-        const scoreUp = await this.evaluateParameters(testUp, config.scenarios, allResults);
+        const scoreUp = await this.evaluateParameters(testUp, config.scenarios, allResults, config.parallelTests);
 
         // Try decreasing
         const testDown = { ...current };
         testDown[key] = Math.max(range.min, current[key] - delta);
-        const scoreDown = await this.evaluateParameters(testDown, config.scenarios, allResults);
+        const scoreDown = await this.evaluateParameters(testDown, config.scenarios, allResults, config.parallelTests);
 
         // Pick best direction
         if (scoreUp > currentScore || scoreDown > currentScore) {
@@ -321,31 +306,36 @@ export class ParameterOptimizer {
   private async evaluateParameters(
     params: AutopilotParameters,
     scenarios: TestScenario[],
-    allResults: OptimizationResult['allResults']
+    allResults: OptimizationResult['allResults'],
+    parallelTests?: number
   ): Promise<number> {
-    const scenarioResults: OptimizationResult['allResults'][0]['scenarioResults'] = [];
-    let totalScore = 0;
-
-    for (const scenario of scenarios) {
-      try {
-        const metrics = await this.tester.runScenario(scenario, params);
-        const score = CollisionTester.calculateSafetyScore(metrics, scenario);
-
-        scenarioResults.push({
-          scenario: scenario.name,
-          metrics,
-          score
-        });
-
-        totalScore += score;
-      } catch (error) {
-        scenarioResults.push({
-          scenario: scenario.name,
-          metrics: this.getFailedMetrics(),
-          score: 0
-        });
+    const concurrency = Math.max(1, Math.min(
+      Math.floor(parallelTests || 1),
+      scenarios.length || 1
+    ));
+    const scenarioResults = await this.mapWithConcurrency(
+      scenarios,
+      concurrency,
+      async (scenario) => {
+        try {
+          const metrics = await this.tester.runScenario(scenario, params);
+          const score = this.scoreFn(metrics, scenario);
+          return {
+            scenario: scenario.name,
+            metrics,
+            score
+          };
+        } catch {
+          return {
+            scenario: scenario.name,
+            metrics: this.getFailedMetrics(),
+            score: 0
+          };
+        }
       }
-    }
+    );
+
+    const totalScore = scenarioResults.reduce((sum, result) => sum + result.score, 0);
 
     const avgScore = totalScore / scenarios.length;
 
@@ -356,6 +346,28 @@ export class ParameterOptimizer {
     });
 
     return avgScore;
+  }
+
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    worker: (item: T, index: number) => Promise<R>
+  ): Promise<R[]> {
+    if (items.length === 0) return [];
+    const out: R[] = new Array(items.length);
+    let nextIndex = 0;
+    const poolSize = Math.max(1, Math.min(concurrency, items.length));
+
+    const runWorker = async () => {
+      while (true) {
+        const index = nextIndex++;
+        if (index >= items.length) break;
+        out[index] = await worker(items[index], index);
+      }
+    };
+
+    await Promise.all(Array.from({ length: poolSize }, () => runWorker()));
+    return out;
   }
 
   /**
@@ -413,7 +425,9 @@ export class ParameterOptimizer {
           score: s.score,
           success: s.metrics.success,
           collisions: s.metrics.collisions.length,
-          minDistance: s.metrics.minDistanceToObstacles
+          minDistance: s.metrics.minDistanceToObstacles,
+          fuelUsed: s.metrics.fuelUsed,
+          fuelBudgetExceeded: !!s.metrics.fuelBudgetExceeded,
         }))
       }))
     };
@@ -442,5 +456,3 @@ export class ParameterOptimizer {
     }
   }
 }
-
-

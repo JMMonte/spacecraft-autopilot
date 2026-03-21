@@ -6,6 +6,7 @@ import { Cockpit } from './components/Cockpit';
 import { useElementSize } from './hooks/useElementSize';
 import { createLogger } from './utils/logger';
 import { simulationRuntimeStatePort } from './state/simulationRuntimeStatePort';
+import { AutopilotLLMInterface } from './controllers/autopilot/AutopilotLLMInterface';
 
 export function App() {
     const log = createLogger('ui:App');
@@ -66,6 +67,12 @@ export function App() {
                 const initialSpacecraft = worldInstance.getActiveSpacecraft();
                 if (initialSpacecraft) {
                     setActiveSpacecraft(initialSpacecraft);
+                    // Expose LLM control interface on window for external tooling
+                    const llm = new AutopilotLLMInterface(
+                        initialSpacecraft.spacecraftController.autopilot,
+                        initialSpacecraft
+                    );
+                    (window as any).__autopilot = llm;
                 }
 
                 worldInstance.startRenderLoop();
@@ -93,6 +100,13 @@ export function App() {
 
         const onActiveSpacecraftChange = (spacecraft: Spacecraft) => {
             setActiveSpacecraft(spacecraft);
+            // Update LLM interface to track the newly active spacecraft
+            if (spacecraft?.spacecraftController?.autopilot) {
+                (window as any).__autopilot = new AutopilotLLMInterface(
+                    spacecraft.spacecraftController.autopilot,
+                    spacecraft
+                );
+            }
         };
 
         const onSpacecraftListChange = (version: number) => {

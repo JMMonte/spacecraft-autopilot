@@ -8,6 +8,7 @@ import { CancelLinearMotion } from './CancelLinearMotion';
 import { PointToPosition } from './PointToPosition';
 import { OrientationMatchAutopilot } from './OrientationMatchAutopilot';
 import { GoToPosition } from './GoToPosition';
+import type { GoToPositionTuning } from './GoToPosition';
 import { createLogger } from '../../utils/logger';
 // Path following handled by PathManager
 import type { ThrusterGroups } from '../../config/spacecraftConfig';
@@ -17,8 +18,10 @@ import { PathManager } from './PathManager';
 import { WorkerClient } from './WorkerClient';
 import { ModeRegistry } from './ModeRegistry';
 import { TargetTracker } from './TargetTracker';
+import { ControlScheduler } from './ControlScheduler';
 // AutoTuneUtils imports removed (now handled by AutoTuner)
 import { AutoTuner } from './AutoTuner';
+import { computeAvoidanceWaypoints, type Obstacle as AvoidanceObstacle } from './ObstacleAvoidance';
 
 export class Autopilot implements IAutopilot {
     private log = createLogger('controllers:Autopilot');
@@ -41,10 +44,16 @@ export class Autopilot implements IAutopilot {
     private workerTelemetry: AutopilotTelemetry = {};
     // Output buffer and scheduling
     private forcesBuffer: number[] = new Array(24).fill(0);
-    private updateInterval: number = 1 / 30; // run autopilot at 30 Hz to reduce load
-    private timeSinceUpdate: number = 0;
+    private localScheduler = new ControlScheduler(30);
     // Scratch objects to avoid per-frame allocations
     private scratchDir = new THREE.Vector3();
+    // Cached obstacle data for worker updates
+    private cachedObstacles: Array<{ pos: [number, number, number]; radius: number }> = [];
+    private cachedCraftRadius = 1.0;
+    // Waypoint queue for collision avoidance (managed here, not in GoToPosition,
+    // because GoToPosition runs in the worker and can't manage waypoints from main thread)
+    private avoidanceWaypoints: THREE.Vector3[] = [];
+    private currentWaypointIdx = 0;
 
     // Mode instances
     private cancelRotationMode!: CancelRotation;
@@ -55,7 +64,6 @@ export class Autopilot implements IAutopilot {
     // Path management
     private pathManager!: PathManager;
     private targetTracker!: TargetTracker;
-    private useFollowerNowFlag = false;
     private _rotScaleRuntime: number | undefined;
 
     // PID Controllers
@@ -102,16 +110,18 @@ export class Autopilot implements IAutopilot {
             momentum: { kp: 6.0, ki: 0.2, kd: 2.0 }        // For CancelLinearMotion
         };
 
-        // PROCEDURAL EPSILON: minimum force threshold for thruster activation
-        // Set to 0.01% of per-thruster force to allow fine control while filtering noise
-        // This ensures small PID commands during final approach aren't discarded
-        const thrustPerThruster = thrust / 4.0; // Assume ~4 thrusters per axis group
-        const proceduralEpsilon = thrustPerThruster * 0.0001; // 0.01% threshold
+        // PROCEDURAL EPSILON: angular deadband for attitude modes (radians).
+        // 0.5 degrees works well as a pointing precision floor — tight enough for
+        // docking alignment but wide enough to prevent thruster chatter.
+        const proceduralEpsilon = 0.5 * (Math.PI / 180); // 0.5° ≈ 0.00873 rad
 
-        // PROCEDURAL ANGULAR MOMENTUM LIMIT: use reasonable default that works for most spacecraft
-        // The PID gains now scale the response, not the limit
-        // Keep it simple - users can override if needed
-        const scaledMaxAngularMomentum = options.maxAngularMomentum ?? 2.0; // Default 2.0 works well
+        // PROCEDURAL ANGULAR MOMENTUM LIMIT: scale to spacecraft inertia so
+        // the controller can command meaningful rotation rates.
+        // Use a conservative angular velocity (0.5 rad/s) × estimated principal inertia.
+        const mass = this.spacecraft.getMass();
+        const dims = this.spacecraft.getMainBodyDimensions();
+        const Imax = (1 / 12) * mass * (dims.x * dims.x + dims.z * dims.z); // largest axis estimate
+        const scaledMaxAngularMomentum = options.maxAngularMomentum ?? Math.max(2.0, Imax * 0.5);
         
         this.config = {
             pid: {
@@ -405,6 +415,24 @@ export class Autopilot implements IAutopilot {
         }
     }
 
+    public setGoToPositionTuning(tuning: Partial<GoToPositionTuning>): void {
+        try { this.goToPositionMode.setTuning(tuning); } catch {}
+    }
+
+    public getGoToPositionTuning(): GoToPositionTuning | null {
+        try { return this.goToPositionMode.getTuning(); } catch { return null; }
+    }
+
+    public setPathTuning(tuning: { replanInterval?: number; deviationThreshold?: number }): void {
+        if (!tuning) return;
+        if (Number.isFinite(tuning.replanInterval as number)) {
+            this.pathManager.setReplanInterval(tuning.replanInterval as number);
+        }
+        if (Number.isFinite(tuning.deviationThreshold as number)) {
+            this.pathManager.setDeviationThreshold(tuning.deviationThreshold as number);
+        }
+    }
+
     private initWorker(): void {
         try {
             const dims = this.spacecraft.getMainBodyDimensions();
@@ -426,7 +454,7 @@ export class Autopilot implements IAutopilot {
                     this.useWorker = false;
                 },
             });
-            this.workerClient.setUpdateRateHz(1 / this.updateInterval > 0 ? 1 / this.updateInterval : 30);
+            this.workerClient.setUpdateRateHz(this.localScheduler.getRateHz());
             this.workerClient.init({
                 thrusterGroups: this.thrusterGroups,
                 thrust: this.thrust,
@@ -503,12 +531,23 @@ export class Autopilot implements IAutopilot {
             return this.forcesBuffer;
         }
 
+        // When using the worker, skip all prep work unless the scheduler says it's time.
+        // This avoids 60 Hz main-thread work for a 30 Hz worker cycle.
+        const controlDt = this.workerClient?.shouldUpdate(dt) ?? null;
+        if (this.workerClient?.isReady() && controlDt === null) {
+            // Not time yet — return last forces from worker
+            return this.forcesBuffer;
+        }
+
         this.stepUpdateTargetPoseAndReference();
         this.stepPublishPointingOrientationIfNeeded();
         this.stepUpdateRotationAllocationScale();
         this.stepUpdatePathFollowing(dt);
 
-        if (this.stepPostToWorkerIfEnabled(dt)) return this.forcesBuffer;
+        if (controlDt !== null) {
+            this.stepPostToWorker(controlDt);
+            return this.forcesBuffer;
+        }
         return this.stepComputeLocally(dt);
     }
 
@@ -557,75 +596,139 @@ export class Autopilot implements IAutopilot {
     }
 
     private stepUpdatePathFollowing(dt: number): void {
-        if (!(this.activeAutopilots.goToPosition && this.pathManager.getSamples())) return;
+        if (!this.activeAutopilots.goToPosition) return;
         this.pathManager.tick(dt);
+
+        // Periodic recheck: update obstacles and recompute avoidance waypoints if needed
         if (this.pathManager.isTimeToReplan()) {
             const sNow = this.spacecraft.getWorldPositionRef();
             const gNow = this.targetPosition;
+
+            // Update obstacle list for repulsive avoidance (main thread + cache for worker)
+            try {
+                const rawObs = this.pathManager.collectObstacles(this.spacecraft);
+                const dims = this.spacecraft.getMainBodyDimensions();
+                const craftR = Math.max(dims.x, dims.y, dims.z);
+                const obsData = rawObs.map(o => ({
+                    position: o.position,
+                    radius: Math.max(o.size.x, o.size.y, o.size.z),
+                }));
+                // Cache for worker updates
+                this.cachedObstacles = obsData.map(o => ({
+                    pos: [o.position.x, o.position.y, o.position.z] as [number, number, number],
+                    radius: o.radius,
+                }));
+                this.cachedCraftRadius = craftR;
+            } catch {}
+
             if (this.pathManager.shouldReplan(this.spacecraft, sNow, gNow)) {
-                if (this.useWorker && this.workerClient && this.workerClient.isReady() && !this.pathManager.isPlanPending()) {
-                    const obstacles = this.pathManager.collectObstacles(this.spacecraft);
-                    const startArr: [number, number, number] = [sNow.x, sNow.y, sNow.z];
-                    const goalArr: [number, number, number] = [gNow.x, gNow.y, gNow.z];
-                    const obsPayload = obstacles.map(o => ({ pos: [o.position.x, o.position.y, o.position.z] as [number, number, number], size: [o.size.x, o.size.y, o.size.z] as [number, number, number], isTarget: o.isTarget }));
-                    const id = this.pathManager.beginPlan();
-                    this.workerClient.planPath(id, startArr, goalArr, obsPayload);
-                } else {
-                    const wps = this.pathManager.buildAvoidancePath(this.spacecraft, sNow.clone(), gNow.clone());
-                    this.setPathWaypoints(wps.length >= 2 ? wps : [sNow.clone(), gNow.clone()]);
-                }
+                this.computeAndSetAvoidanceWaypoints();
                 this.pathManager.setLastStartGoal(sNow, gNow);
-                try {
-                    const qGoal = this.targetObject ? this.targetObject.objects.box.quaternion : this.targetOrientation;
-                    this.pathManager.setGoalQuatSnapshot(qGoal);
-                } catch {}
             }
         }
-        // Update PathManager (always provides carrot + reference velocity)
-        const qNow = (() => { try { return this.targetObject ? this.targetObject.objects.box.quaternion : this.targetOrientation; } catch { return this.targetOrientation; } })();
-        const vGoal = this.referenceObject ? this.referenceObject.getWorldVelocityRef() : null;
-        const { useFollower } = this.pathManager.updateFollowStep(this.spacecraft, this.targetPosition, qNow, vGoal);
-        this.useFollowerNowFlag = useFollower;
-        
-        // Always use PathManager's guidance (it handles both path and direct modes)
-        const carrot = this.pathManager.getCarrot();
-        const vRef = this.pathManager.getVRef();
-        if (carrot) this.goToPositionMode.setTargetPosition(carrot);
-        this.goToPositionMode.setReferenceVelocityWorld(vRef);
+
+        // Waypoint advancement: if we have avoidance waypoints, target the current one.
+        // When close enough to an intermediate waypoint, advance to the next.
+        if (this.avoidanceWaypoints.length > 1 && this.currentWaypointIdx < this.avoidanceWaypoints.length) {
+            const currentWp = this.avoidanceWaypoints[this.currentWaypointIdx];
+            const distToWp = this.spacecraft.getWorldPositionRef().distanceTo(currentWp);
+            const isLast = this.currentWaypointIdx >= this.avoidanceWaypoints.length - 1;
+
+            // Advance to next waypoint if close to intermediate one
+            if (!isLast && distToWp < 3.0) {
+                this.currentWaypointIdx++;
+            }
+
+            const activeWp = this.avoidanceWaypoints[this.currentWaypointIdx];
+            this.goToPositionMode.setTargetPosition(activeWp);
+            this.goToPositionMode.setFinalTarget(activeWp);
+        } else {
+            // No avoidance waypoints — direct to target
+            this.goToPositionMode.setTargetPosition(this.targetPosition);
+            this.goToPositionMode.setFinalTarget(this.targetPosition);
+        }
     }
 
-    private stepPostToWorkerIfEnabled(dt: number): boolean {
-        if (!(this.useWorker && this.workerClient && this.workerClient.isReady())) return false;
+    /** Compute tangent-point avoidance waypoints. Managed by Autopilot, not GoToPosition. */
+    private computeAndSetAvoidanceWaypoints(): void {
+        try {
+            const start = this.spacecraft.getWorldPositionRef().clone();
+            const goal = this.targetPosition.clone();
+            if (start.distanceTo(goal) < 1e-3) return;
+
+            const rawObs = this.pathManager.collectObstacles(this.spacecraft);
+            const dims = this.spacecraft.getMainBodyDimensions();
+            const craftR = Math.max(dims.x, dims.y, dims.z);
+
+            const obstacles: AvoidanceObstacle[] = rawObs.map(o => ({
+                position: o.position,
+                radius: Math.max(o.size.x, o.size.y, o.size.z),
+            }));
+
+            this.avoidanceWaypoints = computeAvoidanceWaypoints(start, goal, obstacles, craftR);
+            this.currentWaypointIdx = 0;
+            // Set path for visualization
+            this.setPathWaypoints(this.avoidanceWaypoints);
+
+            // Cache obstacles for worker updates
+            this.cachedObstacles = obstacles.map(o => ({
+                pos: [o.position.x, o.position.y, o.position.z] as [number, number, number],
+                radius: o.radius,
+            }));
+            this.cachedCraftRadius = craftR;
+        } catch (err) { console.error('[Autopilot] avoidance waypoint error:', err); }
+    }
+
+    // Reusable active-modes snapshot to avoid per-frame object spread
+    private workerActiveSnapshot: AutopilotModes = {
+        orientationMatch: false, cancelRotation: false, cancelLinearMotion: false,
+        pointToPosition: false, goToPosition: false,
+    };
+
+    private stepPostToWorker(controlDt: number): void {
         const p = this.spacecraft.getWorldPositionRef();
         const q = this.spacecraft.getWorldOrientationRef();
         const lv = this.spacecraft.getWorldVelocityRef();
         const av = this.spacecraft.getWorldAngularVelocityRef();
-        const active = { ...this.activeAutopilots };
-        const useFollower = !!(this.activeAutopilots.goToPosition && this.pathManager.getSamples() && this.useFollowerNowFlag);
-        const refVelV = useFollower ? this.pathManager.getVRef() : (this.referenceObject ? this.referenceObject.getWorldVelocityRef() : this.scratchDir.set(0, 0, 0));
-        const targetV = useFollower && this.pathManager.getCarrot() ? this.pathManager.getCarrot()! : this.targetPosition;
-        this.workerClient.maybeUpdate(dt, {
+        // Copy modes into reusable snapshot instead of spreading
+        const snap = this.workerActiveSnapshot;
+        snap.orientationMatch = this.activeAutopilots.orientationMatch;
+        snap.cancelRotation = this.activeAutopilots.cancelRotation;
+        snap.cancelLinearMotion = this.activeAutopilots.cancelLinearMotion;
+        snap.pointToPosition = this.activeAutopilots.pointToPosition;
+        snap.goToPosition = this.activeAutopilots.goToPosition;
+        // Send the CURRENT waypoint (or final target) to the worker.
+        // Waypoint advancement is managed by Autopilot on the main thread.
+        const refVelV = this.referenceObject
+            ? this.referenceObject.getWorldVelocityRef()
+            : this.scratchDir.set(0, 0, 0);
+        const activeWp = (this.avoidanceWaypoints.length > 0 && this.currentWaypointIdx < this.avoidanceWaypoints.length)
+            ? this.avoidanceWaypoints[this.currentWaypointIdx]
+            : this.targetPosition;
+        const targetV = activeWp;
+        this.workerClient!.postUpdate(controlDt, {
             snapshot: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], lv: [lv.x, lv.y, lv.z], av: [av.x, av.y, av.z] },
-            active,
+            active: snap,
             targetPos: [targetV.x, targetV.y, targetV.z],
             targetQuat: [this.targetOrientation.x, this.targetOrientation.y, this.targetOrientation.z, this.targetOrientation.w],
             refVel: [refVelV.x, refVelV.y, refVelV.z],
-            trackRef: useFollower,
+            finalTarget: [targetV.x, targetV.y, targetV.z],
+            obstacles: this.cachedObstacles.length > 0 ? this.cachedObstacles : undefined,
+            craftRadius: this.cachedCraftRadius,
+            trackRef: false,
             rotScale: this._rotScaleRuntime ?? 1.0,
         });
-        return true;
     }
 
     private stepComputeLocally(dt: number): number[] {
-        this.timeSinceUpdate += dt;
-        if (this.timeSinceUpdate < this.updateInterval) return this.forcesBuffer;
-        this.timeSinceUpdate = 0;
+        const controlDt = this.localScheduler.consume(dt);
+        if (controlDt === null) return this.forcesBuffer;
         for (let i = 0; i < 24; i++) this.forcesBuffer[i] = 0;
-        if (this.activeAutopilots.cancelRotation) this.cancelRotationMode.calculateForces(dt, this.forcesBuffer);
-        if (this.activeAutopilots.cancelLinearMotion) this.cancelLinearMotionMode.calculateForces(dt, this.forcesBuffer);
-        if (this.activeAutopilots.pointToPosition) this.pointToPositionMode.calculateForces(dt, this.forcesBuffer);
-        if (this.activeAutopilots.orientationMatch) this.orientationMatchMode.calculateForces(dt, this.forcesBuffer);
-        if (this.activeAutopilots.goToPosition) this.goToPositionMode.calculateForces(dt, this.forcesBuffer);
+        if (this.activeAutopilots.cancelRotation) this.cancelRotationMode.calculateForces(controlDt, this.forcesBuffer);
+        if (this.activeAutopilots.cancelLinearMotion) this.cancelLinearMotionMode.calculateForces(controlDt, this.forcesBuffer);
+        if (this.activeAutopilots.pointToPosition) this.pointToPositionMode.calculateForces(controlDt, this.forcesBuffer);
+        if (this.activeAutopilots.orientationMatch) this.orientationMatchMode.calculateForces(controlDt, this.forcesBuffer);
+        if (this.activeAutopilots.goToPosition) this.goToPositionMode.calculateForces(controlDt, this.forcesBuffer);
         for (let i = 0; i < 24; i++) {
             const cap = this.thrusterMax[i] || this.thrust;
             const v = this.forcesBuffer[i] || 0;
@@ -639,28 +742,10 @@ export class Autopilot implements IAutopilot {
         this.activeAutopilots = ModeRegistry.exclusiveEnable(this.activeAutopilots, mode, enabled);
         this.updateAutopilotState();
 
-        // If enabling goToPosition and no path exists yet, seed a straight path for visualization/following
-        if (mode === 'goToPosition' && enabled && !this.pathManager.getSamples()) {
-            try {
-                const start = this.spacecraft.getWorldPositionRef().clone();
-                const goal = this.targetPosition.clone();
-                // Avoid degenerate identical points
-                if (start.distanceTo(goal) < 1e-3) goal.add(new THREE.Vector3(0, 0, 0.01));
-                if (this.useWorker && this.workerClient && this.workerClient.isReady() && !this.pathManager.isPlanPending()) {
-                    // Kick off async plan and use straight preview path until it returns
-                    this.setPathWaypoints([start, goal]);
-                    const obstacles = this.pathManager.collectObstacles(this.spacecraft);
-                    const startArr: [number, number, number] = [start.x, start.y, start.z];
-                    const goalArr: [number, number, number] = [goal.x, goal.y, goal.z];
-                    const obsPayload = obstacles.map(o => ({ pos: [o.position.x, o.position.y, o.position.z] as [number, number, number], size: [o.size.x, o.size.y, o.size.z] as [number, number, number], isTarget: o.isTarget }));
-                    const id = this.pathManager.beginPlan();
-                    this.workerClient.planPath(id, startArr, goalArr, obsPayload);
-                } else {
-                    const wps = this.pathManager.buildAvoidancePath(this.spacecraft, start, goal);
-                    this.setPathWaypoints(wps.length >= 2 ? wps : [start, goal]);
-                }
-                this.pathManager.setLastStartGoal(start, goal);
-            } catch { }
+        // When goToPosition is activated, compute collision-free waypoints
+        if (mode === 'goToPosition' && enabled) {
+            this.goToPositionMode.setFinalTarget(this.targetPosition);
+            this.computeAndSetAvoidanceWaypoints();
         }
     }
 
@@ -753,8 +838,8 @@ export class Autopilot implements IAutopilot {
     public setAutoTune(_enabled: boolean): void { /* deprecated */ }
 
     public setUpdateRateHz(hz: number): void {
-        const clamped = Math.max(5, Math.min(120, hz));
-        this.updateInterval = 1 / clamped;
+        const clamped = this.localScheduler.setRateHz(hz);
+        this.workerClient?.setUpdateRateHz(clamped);
     }
 
     public setTargetPosition(position: THREE.Vector3): void {

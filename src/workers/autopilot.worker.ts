@@ -128,6 +128,14 @@ class WorkerAutopilot {
     this.goToPositionMode.setTargetPosition(this.targetPosition);
   }
 
+  setFinalTarget(pos: [number, number, number]) {
+    this.goToPositionMode.setFinalTarget(new THREE.Vector3(pos[0], pos[1], pos[2]));
+  }
+
+  setObstacles(_obstacles: Array<{ pos: [number, number, number]; radius: number }>, _craftRadius: number) {
+    // Obstacle avoidance is handled by waypoint routing in Autopilot, not repulsion in GoToPosition
+  }
+
   setReferenceVelocity(v: [number, number, number]) {
     this.referenceVelocityWorld.set(v[0], v[1], v[2]);
     this.cancelLinearMotionMode.setReferenceVelocityWorld(this.referenceVelocityWorld);
@@ -331,6 +339,8 @@ self.onmessage = async (ev: MessageEvent<WorkerInboundMsg>) => {
     if (!autopilot || !scAdapter) return;
     scAdapter.updateSnapshot(data.snapshot);
     autopilot.setTargets(data.targetPos, data.targetQuat);
+    if (data.finalTarget) autopilot.setFinalTarget(data.finalTarget);
+    if (data.obstacles) autopilot.setObstacles(data.obstacles, data.craftRadius ?? 1.0);
     autopilot.setReferenceVelocity(data.refVel);
     autopilot.setGuidanceModeTrackRef(!!data.trackRef);
     if (typeof data.rotScale === 'number') autopilot.setRotationAllocationScale(data.rotScale);

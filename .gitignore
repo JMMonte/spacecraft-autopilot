@@ -4,7 +4,8 @@ node_modules/
 dist/images/
 venv/
 compress_system.py
-compress.pynode_modules*
+compress.py
+package-lock.json
 dist/
 *.log
 npm-debug.log*

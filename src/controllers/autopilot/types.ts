@@ -34,6 +34,12 @@ export interface OrientationLikeTelemetry {
 export type PointToPositionTelemetry = OrientationLikeTelemetry;
 export type OrientationMatchTelemetry = OrientationLikeTelemetry;
 
+export interface Vec3Telemetry {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface GoToPositionTelemetry {
   distance: number;
   vAlong: number;
@@ -44,11 +50,24 @@ export interface GoToPositionTelemetry {
   alignGate: boolean;
   aMax: number;
   vMax: number;
-  aCmdLocal?: { x: number; y: number; z: number };
+  aCmdLocal?: Vec3Telemetry;
   targetType?: 'spacecraft' | 'static';
   vTargetMag?: number;
   vTargetAlong?: number;
   vRelMag?: number;
+  tGo?: number;
+  missMag?: number;
+  // Bang-coast-bang maneuver telemetry
+  maneuverPhase?: string;            // 'burn_accel' | 'coast' | 'burn_decel' | 'done' | 'idle'
+  maneuverTimeRemaining?: number;    // seconds remaining in current maneuver
+  thrusterDutyCycle?: number;        // 0-1, fraction of frames with thrusters firing
+  coastFraction?: number;            // 0-1, fraction of planned maneuver that is coast
+  // Legacy fields kept during telemetry migration.
+  vCmd?: Vec3Telemetry;
+  vActual?: Vec3Telemetry;
+  vError?: Vec3Telemetry;
+  aCmd?: Vec3Telemetry;
+  positionError?: Vec3Telemetry;
 }
 
 export interface AutopilotTelemetry {
@@ -132,6 +151,9 @@ export type WorkerUpdateMsg = {
   targetPos: [number, number, number];
   targetQuat: [number, number, number, number];
   refVel: [number, number, number];
+  finalTarget?: [number, number, number];
+  obstacles?: Array<{ pos: [number, number, number]; radius: number }>;
+  craftRadius?: number;
   trackRef?: boolean;
   rotScale?: number;
 };

@@ -14,9 +14,13 @@ interface CliOptions {
   scenarios?: string[]; // 'all' or specific scenario names
   method?: 'grid' | 'random' | 'adaptive';
   iterations?: number;
+  parallelTests?: number;
   output?: string;
   verbose?: boolean;
   parameters?: string; // path to JSON file with parameters to test/validate
+  engine?: 'simplified' | 'full';
+  objective?: 'balanced' | 'fuel';
+  fuelBudgetScale?: number;
 }
 
 /**
@@ -27,18 +31,22 @@ const DEFAULT_PARAMETER_RANGES = {
   positionKi: { min: 0.0, max: 0.01, steps: 3 },
   positionKd: { min: 0.2, max: 1.0, steps: 4 },
 
-  velocityKp: { min: 1.0, max: 4.0, steps: 4 },
+  velocityKp: { min: 0.1, max: 2.0, steps: 4 },
   velocityKi: { min: 0.0, max: 0.1, steps: 3 },
-  velocityKd: { min: 0.3, max: 1.5, steps: 4 },
+  velocityKd: { min: 0.0, max: 0.4, steps: 4 },
 
-  maxApproachSpeed: { min: 1.0, max: 3.0, steps: 3 },
+  maxApproachSpeed: { min: 0.5, max: 3.0, steps: 4 },
   brakingMargin: { min: 1.1, max: 1.5, steps: 3 },
 
   alignGateOnDeg: { min: 10, max: 20, steps: 3 },
   alignGateOffDeg: { min: 5, max: 12, steps: 3 },
 
   deviationThreshold: { min: 1.5, max: 4.0, steps: 3 },
-  replanInterval: { min: 0.3, max: 0.8, steps: 3 }
+  replanInterval: { min: 0.3, max: 0.8, steps: 3 },
+  thrustBudgetScale: { min: 0.1, max: 1.0, steps: 4 },
+  velocityDeadband: { min: 0.005, max: 0.08, steps: 4 },
+  stopDistance: { min: 0.02, max: 0.4, steps: 4 },
+  velocityFilterAlpha: { min: 0.1, max: 0.8, steps: 4 },
 };
 
 /**
@@ -60,20 +68,46 @@ const CURRENT_PARAMETERS: AutopilotParameters = {
   alignGateOffDeg: 8,
 
   deviationThreshold: 2.5,
-  replanInterval: 0.5
+  replanInterval: 0.5,
+  thrustBudgetScale: 0.6,
+  velocityDeadband: 0.015,
+  stopDistance: 0.06,
+  velocityFilterAlpha: 0.3,
 };
 
-class AutopilotTunerCLI {
-  private tester: CollisionTester;
-  private optimizer: ParameterOptimizer;
+type ScenarioLike = ReturnType<typeof ScenarioGenerator.getAllScenarios>[number];
+type MetricsLike = {
+  success: boolean;
+  collisions: Array<{ severity: 'minor' | 'major' | 'critical' }>;
+  minDistanceToObstacles: number;
+  timeToTarget: number;
+  finalDistance: number;
+  pathEfficiency: number;
+  averageSpeed: number;
+  maxSpeed: number;
+  fuelUsed: number;
+};
 
-  constructor() {
-    this.tester = new CollisionTester();
-    this.optimizer = new ParameterOptimizer();
-  }
+interface ScenarioTester {
+  initialize(): Promise<void>;
+  runScenario(
+    scenario: ScenarioLike,
+    params: AutopilotParameters,
+    onProgress?: (state: any, metrics: any) => void
+  ): Promise<MetricsLike>;
+}
+
+class AutopilotTunerCLI {
+  private tester!: ScenarioTester;
+  private optimizer!: ParameterOptimizer;
+  private scoreFn: (metrics: MetricsLike, scenario: ScenarioLike) => number =
+    (metrics, scenario) => CollisionTester.calculateSafetyScore(metrics as any, scenario as any);
+
+  constructor() {}
 
   async run(options: CliOptions): Promise<void> {
     console.log('🚀 Spacecraft Autopilot Tuner\n');
+    await this.configureEngine(options);
 
     // Initialize physics engine
     console.log('Initializing physics engine...');
@@ -82,7 +116,7 @@ class AutopilotTunerCLI {
     console.log('✓ Physics engine ready\n');
 
     // Get scenarios
-    const scenarios = this.getScenarios(options.scenarios);
+    const scenarios = this.getScenarios(options.scenarios, options.fuelBudgetScale);
     console.log(`Testing with ${scenarios.length} scenario(s):\n  - ${scenarios.map(s => s.name).join('\n  - ')}\n`);
 
     switch (options.mode) {
@@ -128,7 +162,12 @@ class AutopilotTunerCLI {
         console.log(); // New line after progress
       }
 
-      const score = CollisionTester.calculateSafetyScore(metrics, scenario);
+      const score = this.scoreFn(metrics, scenario);
+      const directDistance = Math.max(1e-6, scenario.startPosition.distanceTo(scenario.targetPosition));
+      const fuelPerMeter = metrics.fuelUsed / directDistance;
+      const hasBudget = Number.isFinite(scenario.fuelBudget as number);
+      const budget = hasBudget ? (scenario.fuelBudget as number) : null;
+      const budgetExceeded = hasBudget ? metrics.fuelUsed > (scenario.fuelBudget as number) : false;
 
       console.log('\nResults:');
       console.log(`  Success: ${metrics.success ? '✓' : '✗'}`);
@@ -142,12 +181,20 @@ class AutopilotTunerCLI {
       console.log(`  Time to Target: ${metrics.timeToTarget.toFixed(2)}s`);
       console.log(`  Path Efficiency: ${(metrics.pathEfficiency * 100).toFixed(1)}%`);
       console.log(`  Max Speed: ${metrics.maxSpeed.toFixed(2)}m/s`);
-      console.log(`  Safety Score: ${score.toFixed(2)}/100`);
+      console.log(`  Fuel Used (N*s): ${metrics.fuelUsed.toFixed(2)}`);
+      console.log(`  Fuel per Meter: ${fuelPerMeter.toFixed(2)}`);
+      if (hasBudget) {
+        console.log(`  Fuel Budget (N*s): ${budget?.toFixed(2)}`);
+        console.log(`  Fuel Budget Pass: ${budgetExceeded ? '✗' : '✓'}`);
+      }
+      console.log(`  Score: ${score.toFixed(2)}/100`);
 
       results.push({
         scenario: scenario.name,
         metrics,
-        score
+        score,
+        fuelBudget: budget,
+        fuelBudgetExceeded: budgetExceeded,
       });
     }
 
@@ -159,10 +206,17 @@ class AutopilotTunerCLI {
     const avgScore = results.reduce((sum, r) => sum + r.score, 0) / results.length;
     const successRate = (results.filter(r => r.metrics.success).length / results.length) * 100;
     const totalCollisions = results.reduce((sum, r) => sum + r.metrics.collisions.length, 0);
+    const avgFuel = results.reduce((sum, r) => sum + (r.metrics.fuelUsed || 0), 0) / Math.max(1, results.length);
+    const budgetBreaches = results.filter(r => r.fuelBudgetExceeded).length;
+    const budgetedRuns = results.filter(r => Number.isFinite(r.fuelBudget)).length;
 
     console.log(`Average Score: ${avgScore.toFixed(2)}/100`);
     console.log(`Success Rate: ${successRate.toFixed(1)}%`);
     console.log(`Total Collisions: ${totalCollisions}`);
+    console.log(`Average Fuel Used (N*s): ${avgFuel.toFixed(2)}`);
+    if (budgetedRuns > 0) {
+      console.log(`Fuel Budget Breaches: ${budgetBreaches}/${budgetedRuns}`);
+    }
 
     // Save results
     if (options.output) {
@@ -172,7 +226,10 @@ class AutopilotTunerCLI {
         summary: {
           avgScore,
           successRate,
-          totalCollisions
+          totalCollisions,
+          avgFuel,
+          budgetBreaches,
+          budgetedRuns,
         }
       };
       this.saveResults(outputData, options.output);
@@ -192,6 +249,7 @@ class AutopilotTunerCLI {
       parameterRanges: DEFAULT_PARAMETER_RANGES,
       method: options.method || 'adaptive',
       maxIterations: options.iterations || 100,
+      parallelTests: options.parallelTests || 1,
       verbose: options.verbose ?? true
     });
 
@@ -248,14 +306,19 @@ class AutopilotTunerCLI {
   /**
    * Get scenarios based on options
    */
-  private getScenarios(scenarioNames?: string[]): any[] {
+  private getScenarios(scenarioNames?: string[], fuelBudgetScale?: number): any[] {
     const allScenarios = ScenarioGenerator.getAllScenarios();
+    const scale = this.sanitizeFuelBudgetScale(fuelBudgetScale);
 
-    if (!scenarioNames || scenarioNames.includes('all')) {
-      return allScenarios;
-    }
+    const selected = (!scenarioNames || scenarioNames.includes('all'))
+      ? allScenarios
+      : allScenarios.filter(s => scenarioNames.includes(s.name));
 
-    return allScenarios.filter(s => scenarioNames.includes(s.name));
+    if (scale === 1) return selected;
+    return selected.map((s: any) => ({
+      ...s,
+      fuelBudget: Number.isFinite(s.fuelBudget) ? s.fuelBudget * scale : s.fuelBudget,
+    }));
   }
 
   /**
@@ -278,6 +341,32 @@ class AutopilotTunerCLI {
   private parametersEqual(a: AutopilotParameters, b: AutopilotParameters): boolean {
     const keys = Object.keys(a) as Array<keyof AutopilotParameters>;
     return keys.every(key => Math.abs(a[key] - b[key]) < 0.001);
+  }
+
+  private sanitizeFuelBudgetScale(scale?: number): number {
+    if (!Number.isFinite(scale as number)) return 1;
+    return Math.max(0.05, Math.min(10, scale as number));
+  }
+
+  private async configureEngine(options: CliOptions): Promise<void> {
+    const engine = options.engine || 'simplified';
+    const objective = options.objective || 'balanced';
+    const fuelBudgetScale = this.sanitizeFuelBudgetScale(options.fuelBudgetScale);
+    if (engine === 'full') {
+      const { FullSimulationTester } = await import('./FullSimulationTester');
+      this.tester = new FullSimulationTester();
+      this.scoreFn = objective === 'fuel'
+        ? (metrics, scenario) => FullSimulationTester.calculateFuelAwareScore(metrics as any, scenario as any)
+        : (metrics, scenario) => CollisionTester.calculateSafetyScore(metrics as any, scenario as any);
+    } else {
+      this.tester = new CollisionTester();
+      this.scoreFn = (metrics, scenario) => CollisionTester.calculateSafetyScore(metrics as any, scenario as any);
+    }
+    this.optimizer = new ParameterOptimizer(
+      this.tester as any,
+      (metrics, scenario) => this.scoreFn(metrics as any, scenario as any)
+    );
+    console.log(`Engine: ${engine} | Objective: ${objective} | Fuel Budget Scale: ${fuelBudgetScale.toFixed(2)}\n`);
   }
 
   /**
@@ -303,7 +392,10 @@ function parseArgs(): CliOptions {
   const args = process.argv.slice(2);
   const options: CliOptions = {
     mode: 'test',
-    verbose: false
+    verbose: false,
+    engine: 'simplified',
+    objective: 'balanced',
+    fuelBudgetScale: 1,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -325,6 +417,9 @@ function parseArgs(): CliOptions {
       case '-i':
         options.iterations = parseInt(args[++i]);
         break;
+      case '--parallel-tests':
+        options.parallelTests = parseInt(args[++i], 10);
+        break;
       case '--output':
       case '-o':
         options.output = args[++i];
@@ -336,6 +431,15 @@ function parseArgs(): CliOptions {
       case '--verbose':
       case '-v':
         options.verbose = true;
+        break;
+      case '--engine':
+        options.engine = args[++i] as CliOptions['engine'];
+        break;
+      case '--objective':
+        options.objective = args[++i] as CliOptions['objective'];
+        break;
+      case '--fuel-budget-scale':
+        options.fuelBudgetScale = parseFloat(args[++i]);
         break;
       case '--help':
       case '-h':
@@ -363,8 +467,12 @@ Options:
   -s, --scenarios <names>     Comma-separated scenario names or 'all' (default: all)
   --method <method>           Optimization method: grid, random, adaptive (default: adaptive)
   -i, --iterations <n>        Max iterations for optimization (default: 100)
+  --parallel-tests <n>        Scenarios evaluated concurrently per parameter set (default: 1)
   -o, --output <path>         Output file path for results
   -p, --parameters <path>     Path to JSON file with parameters to test
+  --engine <engine>           Simulation engine: simplified, full (default: simplified)
+  --objective <objective>     Scoring objective: balanced, fuel (default: balanced)
+  --fuel-budget-scale <x>     Multiply scenario fuel budgets (default: 1.0)
   -v, --verbose               Verbose output
   -h, --help                  Show this help
 
@@ -386,6 +494,12 @@ Examples:
 
   # Optimize parameters using adaptive search
   npm run tune -- --mode optimize --method adaptive --iterations 50
+
+  # Full-physics fuel-focused optimization with real autopilot
+  npm run tune -- --mode optimize --engine full --objective fuel --method adaptive --iterations 50
+
+  # Tighten fuel budgets by 20%
+  npm run tune -- --mode test --engine full --objective fuel --fuel-budget-scale 0.8
 
   # Quick grid search on specific scenarios
   npm run tune -- --mode optimize --method grid --scenarios corridor,slalom -i 20
@@ -413,4 +527,3 @@ if (isMainModule) {
 }
 
 export { AutopilotTunerCLI, CURRENT_PARAMETERS, DEFAULT_PARAMETER_RANGES };
-

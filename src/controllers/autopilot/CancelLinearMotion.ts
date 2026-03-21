@@ -21,6 +21,16 @@ export class CancelLinearMotion extends AutopilotMode {
         // Relative to reference (if provided)
         const refVel = this.referenceVelocityWorld || this.tmpVecC.set(0, 0, 0);
         const relVelocity = this.tmpVecA.copy(currentVelocity).sub(refVel);
+
+        // Dynamic deadband: minimum delta-v achievable in one physics frame
+        // based on actual thruster capability and mass.
+        const caps = this.getDynamicCaps();
+        const minAccel = Math.min(caps.linAccel.x, caps.linAccel.y, caps.linAccel.z);
+        const velocityDeadband = Math.max(0.002, minAccel * (1 / 60) * 2);
+        if (relVelocity.lengthSq() < velocityDeadband * velocityDeadband) {
+            return out;
+        }
+
         const qInv = this.tmpQuatA.copy(q).invert();
 
         // Convert global velocity to local space

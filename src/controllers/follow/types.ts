@@ -9,6 +9,7 @@ export interface PathFollowerOptions {
   endClearanceAbs?: number;
   curved?: boolean;
   maxBrakingAccel?: number; // Maximum deceleration capability (m/s²) for braking distance calc
+  terminalSpeedGain?: number; // v <= k*d near endpoint for smooth capture
 }
 
 export interface PathFollowerState {

@@ -21,6 +21,14 @@ export class CancelRotation extends AutopilotMode {
         const qInv = this.tmpQuatA.copy(q).invert();
         const worldAngularVel = this.spacecraft.getWorldAngularVelocityRef();
 
+        // Dynamic deadband: minimum angular velocity achievable in one physics frame
+        // based on actual torque capability and inertia.
+        const dyn = this.getDynamicAngularAccelCap();
+        const omegaDeadband = Math.max(0.0005, dyn.alphaMax * (1 / 60) * 2);
+        if (worldAngularVel.lengthSq() < omegaDeadband * omegaDeadband) {
+            return out;
+        }
+
         // Convert global angular velocity to local space (no allocations)
         const localAngularVel = this.tmpVecA.copy(worldAngularVel).applyQuaternion(qInv);
 
@@ -39,14 +47,7 @@ export class CancelRotation extends AutopilotMode {
         }
 
         // PID controller works in local space using momentum error
-        let pidVector = this.pidController.update(momentumError, dt);
-
-        // DEBUG: Show which direction we're commanding
-        if (localAngularVel.length() > 0.05) {
-            const axis = Math.abs(localAngularVel.x) > Math.abs(localAngularVel.y) && Math.abs(localAngularVel.x) > Math.abs(localAngularVel.z) ? 'X(pitch)'
-                : Math.abs(localAngularVel.y) > Math.abs(localAngularVel.z) ? 'Y(yaw)' : 'Z(roll)';
-            console.log(`[CancelRot] ω${axis}=${localAngularVel.x.toFixed(2)},${localAngularVel.y.toFixed(2)},${localAngularVel.z.toFixed(2)} → PID=${pidVector.x.toFixed(2)},${pidVector.y.toFixed(2)},${pidVector.z.toFixed(2)} Kp=${this.pidController.getGain('Kp')}`);
-        }
+        const pidVector = this.pidController.update(momentumError, dt);
 
         // Allocate using the shared rotational allocator (respects caps and latch behavior)
         this.applyPIDOutputToThrustersInPlace(pidVector, out);

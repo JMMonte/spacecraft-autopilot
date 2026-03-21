@@ -11,6 +11,13 @@ export class ScenarioGenerator {
   private static readonly DEFAULT_SPACECRAFT_HALF_EXTENTS = new THREE.Vector3(0.5, 0.5, 1.0);
   private static readonly DEFAULT_SPACECRAFT_MASS = 1000;
   private static readonly DEFAULT_SAFETY_MARGIN = 0.75; // meters clearance around obstacles
+  private static readonly FUEL_FACTOR_CORRIDOR = 0.24;
+  private static readonly FUEL_FACTOR_SLALOM = 0.28;
+  private static readonly FUEL_FACTOR_ASTEROID = 0.34;
+  private static readonly FUEL_FACTOR_DOCKING = 0.32;
+  private static readonly FUEL_FACTOR_NARROW_GAP = 0.30;
+  private static readonly FUEL_FACTOR_EMERGENCY = 0.36;
+  private static readonly FUEL_FACTOR_MAZE = 0.33;
 
   /**
    * Generate a simple corridor scenario with walls
@@ -41,7 +48,7 @@ export class ScenarioGenerator {
       });
     }
 
-    return {
+    return this.withFuelBudget({
       name: 'corridor',
       startPosition: new THREE.Vector3(0, 0, -length / 2 + 5),
       startOrientation: new THREE.Quaternion(),
@@ -52,7 +59,7 @@ export class ScenarioGenerator {
       maxSimulationTime: 120,
       successThreshold: 1.0,
       safetyMargin: this.DEFAULT_SAFETY_MARGIN
-    };
+    }, this.FUEL_FACTOR_CORRIDOR);
   }
 
   /**
@@ -73,7 +80,7 @@ export class ScenarioGenerator {
       });
     }
 
-    return {
+    return this.withFuelBudget({
       name: 'slalom',
       startPosition: new THREE.Vector3(0, 0, -10),
       startOrientation: new THREE.Quaternion(),
@@ -84,7 +91,7 @@ export class ScenarioGenerator {
       maxSimulationTime: 120,
       successThreshold: 1.0,
       safetyMargin: this.DEFAULT_SAFETY_MARGIN
-    };
+    }, this.FUEL_FACTOR_SLALOM);
   }
 
   /**
@@ -134,7 +141,7 @@ export class ScenarioGenerator {
       });
     }
 
-    return {
+    return this.withFuelBudget({
       name: 'asteroidField',
       startPosition: start.clone(),
       startOrientation: new THREE.Quaternion(),
@@ -145,7 +152,7 @@ export class ScenarioGenerator {
       maxSimulationTime: 180,
       successThreshold: 1.0,
       safetyMargin: this.DEFAULT_SAFETY_MARGIN
-    };
+    }, this.FUEL_FACTOR_ASTEROID);
   }
 
   /**
@@ -212,7 +219,7 @@ export class ScenarioGenerator {
       type: 'box'
     });
 
-    return {
+    return this.withFuelBudget({
       name: 'docking',
       startPosition: new THREE.Vector3(-approachDistance, 0, 0),
       startOrientation: new THREE.Quaternion(),
@@ -223,7 +230,7 @@ export class ScenarioGenerator {
       maxSimulationTime: 180,
       successThreshold: 0.5,
       safetyMargin: this.DEFAULT_SAFETY_MARGIN
-    };
+    }, this.FUEL_FACTOR_DOCKING);
   }
 
   /**
@@ -252,7 +259,7 @@ export class ScenarioGenerator {
       type: 'sphere'
     });
 
-    return {
+    return this.withFuelBudget({
       name: 'narrowGap',
       startPosition: new THREE.Vector3(0, 0, 0),
       startOrientation: new THREE.Quaternion(),
@@ -263,7 +270,7 @@ export class ScenarioGenerator {
       maxSimulationTime: 120,
       successThreshold: 1.0,
       safetyMargin: this.DEFAULT_SAFETY_MARGIN
-    };
+    }, this.FUEL_FACTOR_NARROW_GAP);
   }
 
   /**
@@ -280,7 +287,7 @@ export class ScenarioGenerator {
       type: 'sphere'
     });
 
-    return {
+    return this.withFuelBudget({
       name: 'emergencyAvoidance',
       startPosition: new THREE.Vector3(0, 0, 0),
       startOrientation: new THREE.Quaternion(),
@@ -291,7 +298,7 @@ export class ScenarioGenerator {
       maxSimulationTime: 90,
       successThreshold: 1.0,
       safetyMargin: this.DEFAULT_SAFETY_MARGIN
-    };
+    }, this.FUEL_FACTOR_EMERGENCY);
   }
 
   /**
@@ -317,7 +324,7 @@ export class ScenarioGenerator {
       });
     }
 
-    return {
+    return this.withFuelBudget({
       name: 'maze',
       startPosition: new THREE.Vector3(0, 0, 0),
       startOrientation: new THREE.Quaternion(),
@@ -328,7 +335,7 @@ export class ScenarioGenerator {
       maxSimulationTime: 150,
       successThreshold: 1.0,
       safetyMargin: this.DEFAULT_SAFETY_MARGIN
-    };
+    }, this.FUEL_FACTOR_MAZE);
   }
 
   /**
@@ -356,5 +363,13 @@ export class ScenarioGenerator {
       return state / 233280;
     };
   }
-}
 
+  private static withFuelBudget(scenario: TestScenario, fuelFactor: number): TestScenario {
+    const directDistance = scenario.startPosition.distanceTo(scenario.targetPosition);
+    const budget = Math.max(1, directDistance * scenario.spacecraftMass * fuelFactor);
+    return {
+      ...scenario,
+      fuelBudget: budget,
+    };
+  }
+}

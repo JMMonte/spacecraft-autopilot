@@ -10,7 +10,10 @@
   "alignGateOnDeg": 15,
   "alignGateOffDeg": 8,
   "deviationThreshold": 2.5,
-  "replanInterval": 0.5
+  "replanInterval": 0.5,
+  "thrustBudgetScale": 0.6,
+  "velocityDeadband": 0.015,
+  "stopDistance": 0.06,
+  "velocityFilterAlpha": 0.3
 }
-
 

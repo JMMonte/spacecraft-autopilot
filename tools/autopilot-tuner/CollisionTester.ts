@@ -21,6 +21,7 @@ export interface TestScenario {
   maxSimulationTime: number; // seconds
   successThreshold: number; // distance to target to consider success
   safetyMargin: number; // Additional clearance around obstacles (meters)
+  fuelBudget?: number; // N*s hard cap; runs over this should fail score
 }
 
 export interface CollisionEvent {
@@ -41,6 +42,7 @@ export interface SafetyMetrics {
   averageSpeed: number;
   maxSpeed: number;
   fuelUsed: number; // total thrust magnitude integrated over time
+  fuelBudgetExceeded?: boolean;
 }
 
 export interface AutopilotParameters {
@@ -65,6 +67,12 @@ export interface AutopilotParameters {
   // Path planning
   deviationThreshold: number;
   replanInterval: number;
+
+  // Fuel economy strategy (used by full simulation harness, optional here for compatibility)
+  thrustBudgetScale?: number;   // 0..1 multiplier on max thrust budget
+  velocityDeadband?: number;    // m/s command deadband
+  stopDistance?: number;        // meters
+  velocityFilterAlpha?: number; // 0..1
 }
 
 export interface SimulationState {
@@ -290,6 +298,10 @@ export class CollisionTester {
 
     world.free();
 
+    const fuelBudgetExceeded = Number.isFinite(scenario.fuelBudget as number)
+      ? totalThrustMagnitude > (scenario.fuelBudget as number)
+      : false;
+
     return {
       collisions,
       minDistanceToObstacles,
@@ -299,7 +311,8 @@ export class CollisionTester {
       pathEfficiency,
       averageSpeed,
       maxSpeed,
-      fuelUsed: totalThrustMagnitude
+      fuelUsed: totalThrustMagnitude,
+      fuelBudgetExceeded,
     };
   }
 
@@ -319,8 +332,8 @@ export class CollisionTester {
     // Position error
     const posError = new THREE.Vector3().subVectors(target, position);
     const distance = posError.length();
-
-    if (distance < 0.01) {
+    const stopDistance = Math.max(0.001, params.stopDistance ?? 0.01);
+    if (distance < stopDistance) {
       return { linear: new THREE.Vector3(), angular: new THREE.Vector3() };
     }
 
@@ -336,13 +349,17 @@ export class CollisionTester {
 
     // Velocity error
     const vError = new THREE.Vector3().subVectors(vCmdVec, velocity);
+    const cmdDeadband = Math.max(0.001, params.velocityDeadband ?? 0.01);
+    if (vCmdVec.length() < cmdDeadband && velocity.length() < cmdDeadband * 1.5) {
+      return { linear: new THREE.Vector3(), angular: new THREE.Vector3() };
+    }
 
     // PID control on velocity
     const accel = vError.clone().multiplyScalar(params.velocityKp);
     const force = accel.clone().multiplyScalar(mass);
 
     // Limit force
-    const maxForce = 100; // Newton
+    const maxForce = 100 * THREE.MathUtils.clamp(params.thrustBudgetScale ?? 1.0, 0.05, 1.0);
     if (force.length() > maxForce) {
       force.setLength(maxForce);
     }
@@ -361,6 +378,9 @@ export class CollisionTester {
 
     // Success is paramount
     if (!metrics.success) return 0;
+    if (Number.isFinite(scenario.fuelBudget as number) && metrics.fuelUsed > (scenario.fuelBudget as number)) {
+      return 0;
+    }
 
     score += 30; // base points for success
 
@@ -396,4 +416,3 @@ export class CollisionTester {
     return Math.max(0, Math.min(100, score));
   }
 }
-

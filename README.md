@@ -13,7 +13,7 @@ A Three.js + React cockpit simulator with a physics-backed spacecraft and modula
 ## Requirements
 
 - Node.js 22.12.0 (recommended). Vite supports 20.19+ or 22.12+.
-- npm 10+ (bundled with Node 22)
+- pnpm 10+ (recommended; enable via `corepack enable`)
 
 Use `nvm use` to match `.nvmrc`.
 
@@ -22,19 +22,19 @@ Use `nvm use` to match `.nvmrc`.
 1) Install dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
 2) Start dev server
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 3) Production build
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Testing & Tuning
@@ -47,13 +47,13 @@ The project includes an automated testing and parameter optimization framework f
 
 ```bash
 # Test current autopilot parameters
-npm run tune
+pnpm run tune
 
 # Optimize parameters (finds best settings automatically)
-npm run tune:optimize
+pnpm run tune:optimize
 
 # Visualize optimization results
-npm run tune:visualize
+pnpm run tune:visualize
 ```
 
 **Why use this?**
@@ -67,14 +67,14 @@ See `tools/autopilot-tuner/README.md` for detailed guide.
 
 ### Other Useful Scripts
 
-- `npm run check:ts` – TypeScript check
-- `npm run test` – Full test suite (unit + integration + architecture)
-- `npm run test:unit` – Unit tests (domain events/state bridge)
-- `npm run test:integration` – Integration tests (autopilot/trajectory regression scripts)
-- `npm run test:architecture` – Import-boundary checks
-- `npm run test:physics` – Rapier collision sanity test
-- `npm run test:ap` – Autopilot unit tests
-- `npm run test:traj` – Trajectory planner tests
+- `pnpm run check:ts` – TypeScript check
+- `pnpm run test` – Full test suite (unit + integration + architecture)
+- `pnpm run test:unit` – Unit tests (domain events/state bridge)
+- `pnpm run test:integration` – Integration tests (autopilot/trajectory regression scripts)
+- `pnpm run test:architecture` – Import-boundary checks
+- `pnpm run test:physics` – Rapier collision sanity test
+- `pnpm run test:ap` – Autopilot unit tests
+- `pnpm run test:traj` – Trajectory planner tests
 
 ## Controls
 
@@ -129,7 +129,7 @@ Vercel (recommended)
 
 - Connect this GitHub repository to Vercel (New Project → Import Git Repository).
 - Framework Preset: Vite (auto-detected).
-- Build Command: `npm run build` (auto-detected).
+- Build Command: `pnpm run build` (auto-detected).
 - Output Directory: `dist` (auto-detected).
 - Node.js Version: 22.x. Vercel respects the `engines.node` field in `package.json` and you can also set it in Project Settings → General → Node.js Version.
 

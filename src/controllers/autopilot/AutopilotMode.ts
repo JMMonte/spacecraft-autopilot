@@ -162,12 +162,6 @@ export abstract class AutopilotMode {
             // If PID says +Y torque needed, use yaw[0] (yaw left)
             const group = this.thrusterGroups.yaw[y >= 0 ? 0 : 1];
             const perThruster = this.thrust * thrustFraction * this.allocationScale;
-            
-            // DEBUG
-            if (Math.abs(y) > 1.0) {
-                console.log(`[Alloc Y] pidOut=${y.toFixed(2)} tauMax=${tauAxisMax.toFixed(2)} frac=${thrustFraction.toFixed(3)} perThr=${perThruster.toFixed(2)} allocScale=${this.allocationScale.toFixed(2)}`);
-            }
-            
             group.forEach((idx: number) => {
                 const cap = this.thrusterMax[idx] || this.thrust;
                 out[idx] += Math.min(cap, perThruster);

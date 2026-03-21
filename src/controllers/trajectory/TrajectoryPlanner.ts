@@ -222,10 +222,23 @@ export class TrajectoryPlanner {
         targetPos: THREE.Vector3,
         targetHalfExtents: THREE.Vector3,
         isTarget: boolean = false,
-        clearance: number = 0.75
+        craftRadius: number = 0.75
     ): SafetyBox {
-        // targetHalfExtents are half-dimensions (for craft) or radius (for asteroids)
-        // Expand by an absolute clearance instead of a large multiplicative factor.
+        // Scale-aware clearance: adapts to both spacecraft size and obstacle size.
+        // - Never less than the spacecraft's own bounding radius
+        // - For large obstacles (asteroids), add 10% of obstacle radius
+        // - Absolute floor of 1.0 for tiny objects
+        const obstacleRadius = Math.max(targetHalfExtents.x, targetHalfExtents.y, targetHalfExtents.z);
+        // Clearance must account for BOTH the obstacle size (already in halfExtents)
+        // AND the spacecraft's own body radius. Add 2× craftRadius so the spacecraft
+        // surface clears the obstacle surface with at least craftRadius margin.
+        const scaledClearance = Math.max(
+            craftRadius * 2,                // own body + margin
+            obstacleRadius * 0.15,          // 15% of obstacle radius for large objects
+            2.0                             // absolute floor (2m)
+        );
+        // For target spacecraft (docking approach), use tighter margin
+        const clearance = isTarget ? Math.max(craftRadius * 1.2, 2.0) : scaledClearance;
         const expand = new THREE.Vector3(
             targetHalfExtents.x + clearance,
             targetHalfExtents.y + clearance,

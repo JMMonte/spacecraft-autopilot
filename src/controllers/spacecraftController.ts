@@ -30,9 +30,9 @@ export class SpacecraftController {
     private thrusterOnLatch: boolean[] = new Array(24).fill(false);
     private thrusterLatchTimer: number[] = new Array(24).fill(0);
     private thrusterLatchedForce: number[] = new Array(24).fill(0);
-    private minPulseOn: number = 0.05;  // seconds
-    private minPulseOff: number = 0.05; // seconds
-    private activationThresholdFactor: number = 0.01; // as fraction of per-thruster thrust (ignite earlier)
+    private minPulseOn: number = 0.03;  // seconds
+    private minPulseOff: number = 0.03; // seconds
+    private activationThresholdFactor: number = 0.003; // as fraction of per-thruster thrust
     // Reusable buffers to avoid per-frame allocations
     private manualForcesBuffer: number[] = new Array(24).fill(0);
     private combinedForcesBuffer: number[] = new Array(24).fill(0);
@@ -430,14 +430,17 @@ export class SpacecraftController {
             // clamp desired force
             const cap = this.thrusterMax[i] || this.thrust;
             const desired = Math.min(Math.max(forces[i] || 0, 0), cap);
-            const activationThreshold = cap * activationThresholdBase;
-            const desiredOn = desired >= activationThreshold;
 
             // advance timer
             this.thrusterLatchTimer[i] += dt;
 
             // state transition with min pulse width hysteresis
             const stateOn = this.thrusterOnLatch[i];
+            const activationThresholdOn = cap * activationThresholdBase;
+            const activationThresholdOff = activationThresholdOn * 0.5;
+            const desiredOn = stateOn
+                ? desired >= activationThresholdOff
+                : desired >= activationThresholdOn;
             if (desiredOn !== stateOn) {
                 const minTime = stateOn ? this.minPulseOn : this.minPulseOff;
                 if (this.thrusterLatchTimer[i] >= minTime) {
@@ -457,7 +460,9 @@ export class SpacecraftController {
                 // update toward desired
                 const alpha = 0.8; // heavier smoothing
                 this.thrusterLatchedForce[i] = this.thrusterLatchedForce[i] * alpha + desired * (1 - alpha);
-                const f = Math.max(Math.min(this.thrusterLatchedForce[i], cap), activationThreshold);
+                // Do not force a minimum output once latched on; this avoids
+                // terminal overshoot oscillations from fixed-size pulses.
+                const f = Math.max(0, Math.min(this.thrusterLatchedForce[i], cap));
                 this.spacecraft.rcsVisuals.applyForce(i, f, dt);
                 visibility[i] = true;
                 appliedForces[i] = f;

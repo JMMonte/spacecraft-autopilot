@@ -90,19 +90,31 @@ export class PointToPosition extends AutopilotMode {
         const kW = 1.2; // rad/s per rad near-linear region (reduce overshoot)
         const wDesMag = withinDeadband ? 0 : Math.min(omegaMax, Math.sqrt(2 * alphaMax * angle), kW * angle);
 
-        // Work in angular momentum domain along the axis to create accelerate-then-brake profile
+        // Work in angular momentum domain: desired L along error axis, PLUS
+        // actively damp cross-axis angular velocity to prevent tumble-through.
+        const Iax = this.calculateMomentOfInertiaByAxis();
         const Ieff = this.getEffectiveInertiaAlongAxis(axis);
+
+        // Desired momentum along the pointing error axis
         const desiredL = this.tmpVecE.copy(axis).multiplyScalar(Ieff * wDesMag);
-        const wAlong = localAngularVelocity.dot(axis);
-        const currentLAlong = this.tmpVecB.copy(axis).multiplyScalar(Ieff * wAlong);
-        const angularMomentumError = desiredL.sub(currentLAlong);
+
+        // Current full angular momentum in local frame (all 3 axes)
+        const currentL = this.tmpVecB.set(
+            localAngularVelocity.x * Iax.x,
+            localAngularVelocity.y * Iax.y,
+            localAngularVelocity.z * Iax.z
+        );
+
+        // Momentum error = desired (along error axis) minus current (all axes).
+        // This naturally damps cross-axis spin: desired has zero cross-axis
+        // component, so the error drives cross-axis momentum toward zero.
+        const angularMomentumError = desiredL.sub(currentL);
+
         // Clamp by configured max |L|
         const maxL = this.config.limits.maxAngularMomentum;
         if (angularMomentumError.length() > maxL) {
             angularMomentumError.multiplyScalar(maxL / angularMomentumError.length());
         }
-
-        // angularMomentumError computed above
 
         // Update telemetry snapshot
         this.telemetry = {

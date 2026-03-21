@@ -11,6 +11,18 @@ npm run tune
 # Optimize (takes 10-15 min)
 npm run tune:optimize
 
+# Full-physics test with real autopilot (fuel-focused)
+npm run tune:full
+
+# Full-physics optimization (fuel-focused)
+npm run tune:optimize:full
+
+# Tighten all scenario fuel budgets by 20%
+npm run tune -- --engine full --objective fuel --fuel-budget-scale 0.8
+
+# Evaluate scenarios in parallel per candidate parameter set
+npm run tune -- --mode optimize --engine full --objective fuel --parallel-tests 4
+
 # Visualize results
 npm run tune:visualize
 ```
@@ -29,9 +41,12 @@ npm run tune:visualize
 
 1. **Scenarios** - 7 test scenarios with obstacles of varying sizes
 2. **Physics Sim** - Rapier headless simulation matches game physics exactly
-3. **Safety Margins** - Obstacles are inflated by `safetyMargin` (0.75m default) to test conservative navigation
-4. **Metrics** - Collisions, minimum clearance, success rate, time, fuel usage
-5. **Optimization** - Tries different parameter combinations, finds best scores
+3. **Full Mode** - Optional real `Autopilot` + real thruster mapping in the loop (`--engine full`)
+4. **Fuel Objective** - Optional fuel-prioritized scoring (`--objective fuel`)
+5. **Hard Fuel Budget Gate** - Each scenario has a fuel budget; runs over budget score as failure
+6. **Safety Margins** - Obstacles are inflated by `safetyMargin` (0.75m default) to test conservative navigation
+7. **Metrics** - Collisions, minimum clearance, success rate, time, fuel usage
+8. **Optimization** - Tries different parameter combinations, finds best scores
 
 ## Custom Spacecraft Sizes
 

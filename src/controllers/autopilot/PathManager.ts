@@ -32,6 +32,15 @@ export class PathManager {
   private deviationThreshold = 2.5;
   private hasMultiSegmentPath = false;
 
+  // Scratch vectors for per-frame math — avoid allocations
+  private _toTarget = new THREE.Vector3();
+  private _dir = new THREE.Vector3();
+  // Scratch vectors for obstacle filtering (called at replan interval, not every frame)
+  private _seg = new THREE.Vector3();
+  private _segDir = new THREE.Vector3();
+  private _w = new THREE.Vector3();
+  private _closestPt = new THREE.Vector3();
+
   constructor(
     private getAxisLinearAccelCaps: CapsFn,
     private getMaxLinearVelocity: () => number,
@@ -42,7 +51,7 @@ export class PathManager {
   public clear(): void { this.follower = null; }
   public getSamples(): THREE.Vector3[] | null { try { return this.follower?.getSamples() ?? null; } catch { return null; } }
   public getProgress(): { sCur: number; sRem: number; sTotal: number; idx: number; done: boolean } | null { try { return this.follower?.getProgress() ?? null; } catch { return null; } }
-  public getCarrot(): THREE.Vector3 | null { return this.follower ? this.carrot.clone() : null; }
+  public getCarrot(): THREE.Vector3 | null { return this.follower ? this.carrot : null; }
   public getVRef(): THREE.Vector3 { return this.vRef; }
 
   public setGoalQuatSnapshot(q: THREE.Quaternion): void { this.lastGoalQuat.copy(q); }
@@ -57,6 +66,14 @@ export class PathManager {
     }
   }
   public isPlanPending(): boolean { return this.planPending; }
+  public setReplanInterval(seconds: number): void {
+    if (!Number.isFinite(seconds)) return;
+    this.replanInterval = THREE.MathUtils.clamp(seconds, 0.1, 5.0);
+  }
+  public setDeviationThreshold(distance: number): void {
+    if (!Number.isFinite(distance)) return;
+    this.deviationThreshold = THREE.MathUtils.clamp(distance, 0.2, 20.0);
+  }
 
   public setWaypoints(waypoints: THREE.Vector3[], opts?: PathFollowerOptions): void {
     this.hasMultiSegmentPath = Array.isArray(waypoints) && waypoints.length > 2;
@@ -79,6 +96,7 @@ export class PathManager {
       endClearanceAbs,
       curved: !this.hasMultiSegmentPath,
       maxBrakingAccel: opts?.maxBrakingAccel ?? maxBrakingAccel, // Use actual spacecraft capability
+      terminalSpeedGain: opts?.terminalSpeedGain ?? 2.0,
     };
 
     this.follower = new PathFollower(waypoints, followerOpts);
@@ -125,14 +143,14 @@ export class PathManager {
   }
 
   private filterObstaclesNearSegment(obstacles: Obstacle[], start: THREE.Vector3, goal: THREE.Vector3, nearDist: number): Obstacle[] {
-    const seg = goal.clone().sub(start);
-    const segLen = Math.max(EPS, seg.length());
-    const segDir = seg.clone().multiplyScalar(1 / segLen);
+    this._seg.subVectors(goal, start);
+    const segLen = Math.max(EPS, this._seg.length());
+    this._segDir.copy(this._seg).multiplyScalar(1 / segLen);
     return obstacles.filter(o => {
-      const w = o.position.clone().sub(start);
-      const u = THREE.MathUtils.clamp(w.dot(segDir), 0, segLen);
-      const closest = start.clone().add(segDir.clone().multiplyScalar(u));
-      const dist = closest.distanceTo(o.position);
+      this._w.subVectors(o.position, start);
+      const u = THREE.MathUtils.clamp(this._w.dot(this._segDir), 0, segLen);
+      this._closestPt.copy(start).addScaledVector(this._segDir, u);
+      const dist = this._closestPt.distanceTo(o.position);
       const r = this.getObstacleRadius(o.size);
       return dist <= (nearDist + r);
     });
@@ -181,31 +199,49 @@ export class PathManager {
   public updateFollowStep(spacecraft: Spacecraft, targetPosition: THREE.Vector3, _targetOrientation: THREE.Quaternion, referenceVelocityWorld: THREE.Vector3 | null): { useFollower: boolean } {
     const p = spacecraft.getWorldPositionRef();
     const v = spacecraft.getWorldVelocityRef();
-    const vGoal = referenceVelocityWorld || new THREE.Vector3(0, 0, 0);
 
     // No path: simple direct guidance with braking
     if (!this.follower) {
-      this.carrot.copy(targetPosition);
-      const toTarget = targetPosition.clone().sub(p);
-      const dist = toTarget.length();
-
-      // DYNAMIC VELOCITY PROFILE: v = sqrt(2*a*d)
-      // Simple physics - let PID handle everything
-      const caps = this.getAxisLinearAccelCaps();
-      const aBrake = Math.min(caps.x, caps.y, caps.z);
-      const dir = toTarget.clone().normalize();
-      const vTarget = Math.sqrt(2 * aBrake * dist);
-      const vMax = this.getMaxLinearVelocity();
-      const speed = Math.min(vMax, vTarget);
-      this.vRef.copy(dir).multiplyScalar(speed).add(vGoal);
+      this.updateDirectGuidance(p, targetPosition, referenceVelocityWorld);
       return { useFollower: false };
     }
 
     // Use PathFollower for guided trajectory
     const followerState = this.follower.update(p, v);
+    if (followerState.done) {
+      // Smooth handoff: once the path follower is "done", continue directly to
+      // the true target so we do not hover/chatter at end-clearance offset.
+      this.updateDirectGuidance(p, targetPosition, referenceVelocityWorld);
+      return { useFollower: false };
+    }
     this.carrot.copy(followerState.carrot);
-    this.vRef.copy(followerState.velocityRef).add(vGoal);
+    this.vRef.copy(followerState.velocityRef);
+    if (referenceVelocityWorld) this.vRef.add(referenceVelocityWorld);
 
-    return { useFollower: !followerState.done };
+    return { useFollower: true };
+  }
+
+  private updateDirectGuidance(currentPosition: THREE.Vector3, targetPosition: THREE.Vector3, vGoal: THREE.Vector3 | null): void {
+    this.carrot.copy(targetPosition);
+    this._toTarget.subVectors(targetPosition, currentPosition);
+    const dist = this._toTarget.length();
+    if (dist <= EPS) {
+      if (vGoal) this.vRef.copy(vGoal);
+      else this.vRef.set(0, 0, 0);
+      return;
+    }
+
+    // Blended terminal profile to avoid endpoint limit cycles:
+    // v <= sqrt(2*a*d) and v <= k*d
+    const caps = this.getAxisLinearAccelCaps();
+    const aBrake = Math.max(EPS, Math.min(caps.x, caps.y, caps.z));
+    this._dir.copy(this._toTarget).multiplyScalar(1 / dist);
+    const vTargetBrake = Math.sqrt(2 * aBrake * dist);
+    // Terminal capture gain: v <= k*d. Lower k = more damped approach, less overshoot.
+    // 1.0 provides critically damped behavior for thruster-quantized systems.
+    const vTargetLinear = 1.0 * dist;
+    const speed = Math.min(this.getMaxLinearVelocity(), vTargetBrake, vTargetLinear);
+    this.vRef.copy(this._dir).multiplyScalar(speed);
+    if (vGoal) this.vRef.add(vGoal);
   }
 }
