@@ -362,7 +362,10 @@ export abstract class AutopilotMode {
     protected getDynamicAngularAccelCap(): { alphaMax: number; omegaMax: number } {
         const caps = this.getDynamicCaps();
         // Conservative scalar cap as min across axes with a safety factor (brake earlier)
-        const alphaDyn = Math.max(1e-4, Math.min(caps.angAccel.x, caps.angAccel.y, caps.angAccel.z)) * 0.6;
+        const angAccel = caps.angAccel;
+        const alphaDyn = angAccel
+            ? Math.max(1e-4, Math.min(angAccel.x, angAccel.y, angAccel.z)) * 0.6
+            : this.config.limits.maxAngularAcceleration * 0.6;
         const alphaMax = Math.min(this.config.limits.maxAngularAcceleration, alphaDyn);
         // Derive an omega cap from alpha (triangular rotate over ~0.5 rad)
         const omegaFromAlpha = Math.sqrt(2 * alphaMax * 0.5); // rad/s

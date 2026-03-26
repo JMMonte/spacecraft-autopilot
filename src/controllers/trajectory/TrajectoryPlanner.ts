@@ -443,9 +443,41 @@ export class TrajectoryPlanner {
             }
             return pt;
         })();
-        const directBlocked = this.doesLineIntersectAnySafetyBox(start, goalSafe, safetyBoxes);
+        // If start is inside or on the boundary of a safety box, push it outside so pathfinding
+        // has a valid free-space origin (the blocked voxel would otherwise prevent A* from expanding).
+        const startSafe = (() => {
+            const eps = Math.max(voxelSize * 3.0, clearanceUse * 2.0, 2.0);
+            let pt = start.clone();
+            for (let iter = 0; iter < 3; iter++) {
+                let adjusted = false;
+                for (const b of safetyBoxes) {
+                    if (pt.x >= b.min.x && pt.x <= b.max.x && pt.y >= b.min.y && pt.y <= b.max.y && pt.z >= b.min.z && pt.z <= b.max.z) {
+                        const dxMin = Math.abs(pt.x - b.min.x), dxMax = Math.abs(b.max.x - pt.x);
+                        const dyMin = Math.abs(pt.y - b.min.y), dyMax = Math.abs(b.max.y - pt.y);
+                        const dzMin = Math.abs(pt.z - b.min.z), dzMax = Math.abs(b.max.z - pt.z);
+                        const faces = [
+                            { axis: 'x' as const, dir: -1, dist: dxMin, bound: b.min.x },
+                            { axis: 'x' as const, dir: +1, dist: dxMax, bound: b.max.x },
+                            { axis: 'y' as const, dir: -1, dist: dyMin, bound: b.min.y },
+                            { axis: 'y' as const, dir: +1, dist: dyMax, bound: b.max.y },
+                            { axis: 'z' as const, dir: -1, dist: dzMin, bound: b.min.z },
+                            { axis: 'z' as const, dir: +1, dist: dzMax, bound: b.max.z },
+                        ];
+                        faces.sort((a, b2) => a.dist - b2.dist);
+                        const f = faces[0];
+                        if (f.axis === 'x') pt.x = f.bound + f.dir * eps;
+                        if (f.axis === 'y') pt.y = f.bound + f.dir * eps;
+                        if (f.axis === 'z') pt.z = f.bound + f.dir * eps;
+                        adjusted = true;
+                    }
+                }
+                if (!adjusted) break;
+            }
+            return pt;
+        })();
+        const directBlocked = this.doesLineIntersectAnySafetyBox(startSafe, goalSafe, safetyBoxes);
         if (directBlocked) {
-            const dir = new THREE.Vector3().subVectors(goalSafe, start);
+            const dir = new THREE.Vector3().subVectors(goalSafe, startSafe);
             const L = Math.max(1e-6, dir.length());
             const d = dir.clone().multiplyScalar(1 / L);
             // Approximate obstacles as spheres using padded AABBs
@@ -487,13 +519,13 @@ export class TrajectoryPlanner {
                 if (pathClear(candB)) return candB;
                 return null;
             };
-            const skirt = buildSkirt(start, goalSafe);
+            const skirt = buildSkirt(startSafe, goalSafe);
             if (skirt && skirt.length >= 2) {
                 return this.finalizePath(skirt, safetyBoxes, grid);
             }
 
             // Robust fallback: PRM graph around inflated boxes
-            const prm = this.planPathPRM(start, goalSafe, safetyBoxes, { maxNodes: 400, kNeighbors: 10 });
+            const prm = this.planPathPRM(startSafe, goalSafe, safetyBoxes, { maxNodes: 400, kNeighbors: 10 });
             if (prm.length >= 2) return this.finalizePath(prm, safetyBoxes, grid);
         }
 
@@ -506,16 +538,16 @@ export class TrajectoryPlanner {
             );
 
             // First find path to approach point
-            let pathToApproach = this.findPath(start, approachPoint, grid, false);
+            let pathToApproach = this.findPath(startSafe, approachPoint, grid, false);
             if (pathToApproach.length === 0) {
                 // If direct path fails, try intermediate points
-                pathToApproach = this.findPathWithIntermediatePoints(start, approachPoint, grid);
+                pathToApproach = this.findPathWithIntermediatePoints(startSafe, approachPoint, grid);
                 if (pathToApproach.length === 0) {
                     // Escalate bounds significantly and retry keeping resolution
                     const hugeBounds = this.expandBounds(baseBounds, Math.max(120, voxelSize * 20));
                     grid = new VoxelGrid(hugeBounds, voxelSize);
                     otherObjects.forEach(obj => grid.markSafetyBox(this.calculateSafetyBox(obj.position, obj.size, obj.isTarget)));
-                    pathToApproach = this.findPath(start, approachPoint, grid, false);
+                    pathToApproach = this.findPath(startSafe, approachPoint, grid, false);
                 }
             }
 
@@ -558,25 +590,25 @@ export class TrajectoryPlanner {
         }
 
         // If no target object, just find direct path
-        let path = this.findPath(start, goalSafe, grid, false);
+        let path = this.findPath(startSafe, goalSafe, grid, false);
         if (path.length === 0) {
             // Try intermediate points with increasingly large detours
-            path = this.findPathWithIntermediatePoints(start, goalSafe, grid);
+            path = this.findPathWithIntermediatePoints(startSafe, goalSafe, grid);
         }
         if (path.length === 0) {
             // Escalate search region while keeping resolution
             const hugeBounds = this.expandBounds(baseBounds, Math.max(120, voxelSize * 20));
             grid = new VoxelGrid(hugeBounds, voxelSize);
             otherObjects.forEach(obj => grid.markSafetyBox(this.calculateSafetyBox(obj.position, obj.size, obj.isTarget, clearanceUse)));
-            path = this.findPath(start, goalSafe, grid, false);
+            path = this.findPath(startSafe, goalSafe, grid, false);
         }
         if (path.length === 0) {
             // Special handling for goal right-behind obstacle: plan to an approach point, then refine locally
-            const dirToGoal = new THREE.Vector3().subVectors(goalSafe, start).normalize();
+            const dirToGoal = new THREE.Vector3().subVectors(goalSafe, startSafe).normalize();
             const approachPoint = goalSafe.clone().sub(dirToGoal.multiplyScalar(Math.max(this.APPROACH_DISTANCE, grid.getVoxelSize() * 2)));
-            let pathToApproach = this.findPath(start, approachPoint, grid, false);
+            let pathToApproach = this.findPath(startSafe, approachPoint, grid, false);
             if (pathToApproach.length === 0) {
-                pathToApproach = this.findPathWithIntermediatePoints(start, approachPoint, grid);
+                pathToApproach = this.findPathWithIntermediatePoints(startSafe, approachPoint, grid);
             }
             if (pathToApproach.length > 0) {
                 // Fine local grid near goal
