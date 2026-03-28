@@ -1038,7 +1038,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             zIndex={windowZ.settings}
                             onFocus={() => bringWindowToFront('settings')}
                         >
-                            <SettingsWindow />
+                            <SettingsWindow world={world} />
                         </DraggableWindow>
                     )}
                     {Object.values(cameraWindows).filter(w => w.open).map(w => {

@@ -114,6 +114,8 @@ export class RCSVisuals {
     private cones: Thruster[];
     private coneMeshes: THREE.Mesh[];
     private thrusterLights: THREE.PointLight[];
+    private thrusterLightsEnabled: boolean = true;
+    private thrusterParticlesEnabled: boolean = true;
     private thrusterGroups: THREE.Group[] = [];
     private thrusterVisibility: boolean[];
     private thrusterGeometry: ThrusterGeometry;
@@ -223,14 +225,14 @@ export class RCSVisuals {
             // Update per-thruster light to simulate plume glow
             const light = this.thrusterLights[index];
             if (light) {
-                light.visible = magnitude !== 0;
+                light.visible = this.thrusterLightsEnabled && magnitude !== 0;
                 const maxIntensity = 1.5; // keep subtle to avoid washing out scene
                 light.intensity = normalizedMagnitude * maxIntensity;
                 light.distance = 1.0 + normalizedMagnitude * 1.5; // 1.0 .. 2.5
             }
 
             // Emit particles proportional to thrust
-            if (dt > 0 && magnitude > 0) {
+            if (this.thrusterParticlesEnabled && dt > 0 && magnitude > 0) {
                 this.emitFromThruster(index, normalizedMagnitude, dt);
             }
         }
@@ -363,6 +365,35 @@ export class RCSVisuals {
         this.coneMeshes.forEach(mesh => {
             mesh.visible = false;
         });
+    }
+
+    public getThrusterLightsEnabled(): boolean {
+        return this.thrusterLightsEnabled;
+    }
+
+    public setThrusterLightsEnabled(enabled: boolean): void {
+        this.thrusterLightsEnabled = enabled;
+        if (!enabled) {
+            for (const light of this.thrusterLights) {
+                if (light) light.visible = false;
+            }
+        }
+    }
+
+    public getThrusterParticlesEnabled(): boolean {
+        return this.thrusterParticlesEnabled;
+    }
+
+    public setThrusterParticlesEnabled(enabled: boolean): void {
+        this.thrusterParticlesEnabled = enabled;
+        if (!enabled) {
+            // Recycle all active particles immediately
+            for (const p of this.activeParticles) {
+                p.sprite.parent?.remove(p.sprite);
+                this.particlePool.push(p.sprite);
+            }
+            this.activeParticles = [];
+        }
     }
 
     public getThrusterData(): ThrusterData[] {
