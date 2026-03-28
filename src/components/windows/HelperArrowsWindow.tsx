@@ -3,7 +3,7 @@ import { Spacecraft } from '../../core/spacecraft';
 import { BasicWorld } from '../../core/BasicWorld';
 import { setGridVisible, useUi, useTraceSettings, setTraceSettings } from '../../state/store';
 import type { TraceSettings } from '../../state/store';
-import { CHECKBOX, WINDOW_BODY, FIELD_LABEL, FIELD_ROW, SELECT_DISABLED } from '../ui/styles';
+import { CHECKBOX, WINDOW_BODY, FIELD_LABEL, FIELD_ROW, SELECT_DISABLED, BUTTON_GHOST } from '../ui/styles';
 
 interface HelperArrowsWindowProps {
   spacecraft: Spacecraft | null;
@@ -100,7 +100,7 @@ export const HelperArrowsWindow: React.FC<HelperArrowsWindowProps> = ({ spacecra
         <button
           onClick={() => spacecraft?.clearTraceLines?.()}
           disabled={!spacecraft || !spacecraft.showTraceLines}
-          className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed"
+          className={BUTTON_GHOST}
         >
           Clear Trace
         </button>

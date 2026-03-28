@@ -7,6 +7,7 @@ import { useElementSize } from './hooks/useElementSize';
 import { createLogger } from './utils/logger';
 import { simulationRuntimeStatePort } from './state/simulationRuntimeStatePort';
 import { AutopilotLLMInterface } from './controllers/autopilot/AutopilotLLMInterface';
+import { installDockingTestHarness } from './debug/DockingTestHarness';
 
 export function App() {
     const log = createLogger('ui:App');
@@ -25,6 +26,14 @@ export function App() {
         log.debug('Creating new spacecraft');
         world.setActiveSpacecraft(newSpacecraft);
         return newSpacecraft;
+    }, [world]);
+
+    const createNodeSpacecraft = useCallback((portCount?: 2 | 4 | 6) => {
+        if (!world) return;
+        const node = world.addNodeSpacecraft(undefined, portCount ?? 4);
+        log.debug('Creating new node spacecraft with', portCount ?? 4, 'ports');
+        world.setActiveSpacecraft(node);
+        return node;
     }, [world]);
 
     useEffect(() => {
@@ -74,6 +83,9 @@ export function App() {
                     );
                     (window as any).__autopilot = llm;
                 }
+
+                // Install docking test harness for text-based live testing
+                installDockingTestHarness(worldInstance);
 
                 worldInstance.startRenderLoop();
             } catch (error) {
@@ -201,6 +213,7 @@ export function App() {
                     loadingProgress={loadingProgress}
                     loadingStatus={loadingStatus}
                     onCreateNewSpacecraft={createNewSpacecraft}
+                    onCreateNodeSpacecraft={createNodeSpacecraft}
                     spacecraftListVersion={spacecraftListVersion}
                 />
             )}

@@ -19,6 +19,11 @@ export interface RigidBody {
   getAngularVelocity(): { x: number; y: number; z: number };
   setAngularVelocity(v: { x: number; y: number; z: number }): void;
   getNative<T = unknown>(): T;
+
+  // Compound body redirect: makes this body derive its pose from a host body + local offset
+  redirectTo?(host: RigidBody, localOffset: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number; w: number } }): void;
+  unredirect?(): void;
+  isRedirected?(): boolean;
 }
 
 export interface PhysicsEngine {
@@ -54,4 +59,21 @@ export interface PhysicsEngine {
   ): unknown;
 
   removeCollider?(handle: unknown): void;
+
+  // Attach a box collider to an existing rigid body
+  attachBoxCollider?(
+    body: RigidBody,
+    halfExtents: { x: number; y: number; z: number },
+    options?: {
+      translation?: { x: number; y: number; z: number };
+      rotation?: { x: number; y: number; z: number; w: number };
+      density?: number;
+      restitution?: number;
+      friction?: number;
+    }
+  ): unknown;
+
+  // Disable/enable a body (remove from simulation stepping)
+  disableBody?(body: RigidBody): void;
+  enableBody?(body: RigidBody): void;
 }

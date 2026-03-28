@@ -110,7 +110,7 @@ export const DockingCameraView: React.FC<DockingCameraViewProps> = ({ world, spa
   };
 
   return (
-    <div className="relative w-full h-full bg-black/50 rounded overflow-hidden border border-white/10 flex flex-col">
+    <div className="relative w-full h-full bg-black/40 rounded overflow-hidden border border-white/10 flex flex-col">
       {/* Viewport fills remaining space */}
       <div ref={viewportRef} className="relative flex-1 min-h-[120px]">
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
@@ -129,16 +129,16 @@ export const DockingCameraView: React.FC<DockingCameraViewProps> = ({ world, spa
       <div className="px-2 py-2 bg-black/60 border-t border-white/10">
         {/* Light toggle */}
         <div className="flex items-center justify-between mb-2">
-          <label className="flex items-center gap-1 text-[10px] text-white/80 font-mono">
+          <label className="flex items-center gap-1 text-[10px] text-white/70">
             <input
               type="checkbox"
               checked={!!spacecraft?.isDockingLightOn?.(portId)}
               onChange={handleLightToggle}
-              className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+              className="w-3 h-3 rounded border-white/20 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
             />
             Light
           </label>
-          <div className="text-[10px] text-white/50 font-mono">{portId === 'front' ? 'Front Port' : 'Back Port'}</div>
+          <div className="text-[10px] text-white/50">{portId === 'front' ? 'Front Port' : 'Back Port'}</div>
         </div>
 
         {/* Strength + Aperture */}

@@ -3,7 +3,7 @@ import { RCSVisuals } from './rcsVisuals';
 import { SceneObjectsConfig } from './types';
 import { MaterialManager } from './materials';
 import { TrussManager } from './truss';
-import { DockingPortManager } from './dockingPort';
+import { DockingPortManager, type PortConfig } from './dockingPort';
 import { FuelTankManager } from './fuelTank';
 import type { PhysicsEngine } from '../../physics';
 import type { RigidBody } from '../../physics/types';
@@ -19,6 +19,11 @@ type BoxBodyFacade = {
     updateMassProperties?: () => void;
 };
 
+export interface SpacecraftModelOptions {
+    includeThrusters?: boolean;
+    includeFuelTank?: boolean;
+}
+
 export class SpacecraftModel {
     public boxWidth: number;
     public boxHeight: number;
@@ -28,6 +33,7 @@ export class SpacecraftModel {
     public rigid?: RigidBody;
     public rcsVisuals!: RCSVisuals;
     public onRCSVisualsUpdate?: (newRcsVisuals: RCSVisuals) => void;
+    public modelOptions: SpacecraftModelOptions;
 
     private scene: THREE.Scene;
     // no direct physics world reference
@@ -62,11 +68,11 @@ export class SpacecraftModel {
         return this.dockingPortManager?.dockingPortDepth ?? this.defaultDockingPortDepth;
     }
 
-    public getDockingPortCamera(id: 'front' | 'back'): THREE.PerspectiveCamera | undefined {
+    public getDockingPortCamera(id: string): THREE.PerspectiveCamera | undefined {
         return this.dockingPortManager?.cameras?.[id];
     }
 
-    public getDockingPortCameras(): Partial<Record<'front' | 'back', THREE.PerspectiveCamera>> {
+    public getDockingPortCameras(): Record<string, THREE.PerspectiveCamera> {
         return this.dockingPortManager?.cameras ?? {};
     }
 
@@ -74,7 +80,7 @@ export class SpacecraftModel {
         this.dockingPortManager?.setDockingLightsEnabled(enabled);
     }
 
-    public setDockingLightEnabled(id: 'front' | 'back', enabled: boolean): void {
+    public setDockingLightEnabled(id: string, enabled: boolean): void {
         this.dockingPortManager?.setDockingLightEnabled(id, enabled);
     }
 
@@ -86,6 +92,35 @@ export class SpacecraftModel {
         this.dockingPortManager?.setDockingLightParams?.(params);
     }
 
+    /**
+     * Set custom docking port configurations and rebuild ports.
+     * Must be called after construction if non-default ports are desired.
+     */
+    public setPortConfigs(configs: PortConfig[]): void {
+        if (!this.dockingPortManager) return;
+        this.dockingPortManager.setPortConfigs(configs);
+        this.dockingPortManager.updateDockingPorts(
+            this.box,
+            this.boxBody,
+            this.materialManager.getMaterial('dockingPort'),
+            this.rigid ?? null,
+            this.physics ?? null
+        );
+        // Remove old front/back end-structure trusses and rebuild for all ports
+        this.trussManager.removeAllEndStructureTrusses(this.box);
+        this.trussManager.updateEndStructureForPorts(
+            this.box,
+            this.materialManager.getMaterial('endStructure'),
+            configs,
+            {
+                margin: 0.1,
+                structureDepth: this.dockingPortDepth,
+                endWidth: this.dockingPortRadius,
+                endHeight: this.dockingPortRadius
+            }
+        );
+    }
+
     constructor(
         scene: THREE.Scene,
         _world: unknown,
@@ -93,9 +128,14 @@ export class SpacecraftModel {
         height: number = 1,
         depth: number = 2,
         config?: SceneObjectsConfig,
-        physics?: PhysicsEngine
+        physics?: PhysicsEngine,
+        modelOptions?: SpacecraftModelOptions
     ) {
         this.scene = scene;
+        this.modelOptions = {
+            includeThrusters: modelOptions?.includeThrusters !== false,
+            includeFuelTank: modelOptions?.includeFuelTank !== false,
+        };
         // world unused; physics engine manages bodies
         this.boxWidth = width;
         this.boxHeight = height;
@@ -144,7 +184,9 @@ export class SpacecraftModel {
         // Initialize spacecraft components
         this.createBox();
         this.trussManager.addTrussToBox(this.box, this.materialManager.getMaterial('truss'));
-        this.fuelTankManager.manageFuelTank(this.box, this.materialManager.getMaterial('fuelTank'));
+        if (this.modelOptions.includeFuelTank) {
+            this.fuelTankManager.manageFuelTank(this.box, this.materialManager.getMaterial('fuelTank'));
+        }
         this.dockingPortManager.updateDockingPorts(
             this.box,
             this.boxBody,
@@ -282,12 +324,14 @@ export class SpacecraftModel {
             this.rigid ?? null,
             this.physics ?? null
         );
-        this.fuelTankManager.manageFuelTank(
-            this.box,
-            this.materialManager.getMaterial('fuelTank'),
-            Math.max(Math.min(width, height) / 2 - this.trussRadius - 0.01, 0.1),
-            Math.max(depth - 0.2, 0.1)
-        );
+        if (this.modelOptions.includeFuelTank) {
+            this.fuelTankManager.manageFuelTank(
+                this.box,
+                this.materialManager.getMaterial('fuelTank'),
+                Math.max(Math.min(width, height) / 2 - this.trussRadius - 0.01, 0.1),
+                Math.max(depth - 0.2, 0.1)
+            );
+        }
 
         this.trussManager.updateEndStructure(
             this.box,
@@ -308,39 +352,41 @@ export class SpacecraftModel {
         this.boxBody.mass = totalMass;
         if (this.rigid) this.rigid.setMass(baseMass);
 
-        // Create new RCS visuals with fresh state
-        const newRcsVisuals = this.rigid ? new RCSVisuals(this, this.rigid) : new RCSVisuals(this, {
-            setPosition: (x: number, y: number, z: number) => { this.boxBody.position.set(x, y, z); },
-            setQuaternion: (x: number, y: number, z: number, w: number) => { this.boxBody.quaternion.set(x, y, z, w); },
-            getPosition: () => this.boxBody.position as unknown as { x: number; y: number; z: number },
-            getQuaternion: () => this.boxBody.quaternion as unknown as { x: number; y: number; z: number; w: number },
-            setMass: (m: number) => { this.boxBody.mass = m; },
-            getMass: () => this.boxBody.mass,
-            setDamping: () => {},
-            applyForce: () => {},
-            applyImpulse: () => {},
-            getLinearVelocity: () => this.boxBody.velocity as unknown as { x: number; y: number; z: number },
-            setLinearVelocity: (v: { x: number; y: number; z: number }) => { this.boxBody.velocity.set(v.x, v.y, v.z); },
-            getAngularVelocity: () => this.boxBody.angularVelocity as unknown as { x: number; y: number; z: number },
-            setAngularVelocity: (v: { x: number; y: number; z: number }) => { this.boxBody.angularVelocity.set(v.x, v.y, v.z); },
-            getNative: <T>() => this.boxBody as unknown as T,
-        } as unknown as RigidBody);
-        
-        // Copy over any active thruster states from the old visuals if they exist
-        if (this.rcsVisuals) {
-            const oldThrusterStates = this.rcsVisuals.getConeMeshes().map(mesh => mesh?.visible || false);
-            oldThrusterStates.forEach((isActive, index) => {
-                if (isActive) {
-                    // Recreate visual effect without adding physics impulse
-                    newRcsVisuals.applyForce(index, 100, 0);
-                }
-            });
-        }
-        
-        this.rcsVisuals = newRcsVisuals;
-        
-        if (this.onRCSVisualsUpdate) {
-            this.onRCSVisualsUpdate(newRcsVisuals);
+        // Create new RCS visuals with fresh state (skip if thrusters disabled)
+        if (this.modelOptions.includeThrusters) {
+            const newRcsVisuals = this.rigid ? new RCSVisuals(this, this.rigid) : new RCSVisuals(this, {
+                setPosition: (x: number, y: number, z: number) => { this.boxBody.position.set(x, y, z); },
+                setQuaternion: (x: number, y: number, z: number, w: number) => { this.boxBody.quaternion.set(x, y, z, w); },
+                getPosition: () => this.boxBody.position as unknown as { x: number; y: number; z: number },
+                getQuaternion: () => this.boxBody.quaternion as unknown as { x: number; y: number; z: number; w: number },
+                setMass: (m: number) => { this.boxBody.mass = m; },
+                getMass: () => this.boxBody.mass,
+                setDamping: () => {},
+                applyForce: () => {},
+                applyImpulse: () => {},
+                getLinearVelocity: () => this.boxBody.velocity as unknown as { x: number; y: number; z: number },
+                setLinearVelocity: (v: { x: number; y: number; z: number }) => { this.boxBody.velocity.set(v.x, v.y, v.z); },
+                getAngularVelocity: () => this.boxBody.angularVelocity as unknown as { x: number; y: number; z: number },
+                setAngularVelocity: (v: { x: number; y: number; z: number }) => { this.boxBody.angularVelocity.set(v.x, v.y, v.z); },
+                getNative: <T>() => this.boxBody as unknown as T,
+            } as unknown as RigidBody);
+
+            // Copy over any active thruster states from the old visuals if they exist
+            if (this.rcsVisuals) {
+                const oldThrusterStates = this.rcsVisuals.getConeMeshes().map(mesh => mesh?.visible || false);
+                oldThrusterStates.forEach((isActive, index) => {
+                    if (isActive) {
+                        // Recreate visual effect without adding physics impulse
+                        newRcsVisuals.applyForce(index, 100, 0);
+                    }
+                });
+            }
+
+            this.rcsVisuals = newRcsVisuals;
+
+            if (this.onRCSVisualsUpdate) {
+                this.onRCSVisualsUpdate(newRcsVisuals);
+            }
         }
     }
 

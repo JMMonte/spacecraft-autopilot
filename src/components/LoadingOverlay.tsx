@@ -9,7 +9,7 @@ export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({ progress, status
   return (
     <div className="fixed inset-0 bg-black z-50 flex items-center justify-center">
       <div className="flex flex-col items-center gap-6 max-w-sm mx-auto px-4">
-        <div className="text-white/90 text-sm font-mono text-center drop-shadow-md">
+        <div className="text-white/90 text-xs text-center">
           {status}
         </div>
         <div className="w-full bg-white/10 rounded-full h-1 overflow-hidden">

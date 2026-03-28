@@ -2,11 +2,14 @@ import * as THREE from 'three';
 import type { Spacecraft } from '../../core/spacecraft';
 import type { ThrusterGroups } from '../../config/spacecraftConfig';
 
+/** Proportional-Integral-Derivative gain triplet shared across all PID controllers. */
+export type PIDGains = { kp: number; ki: number; kd: number };
+
 export interface AutopilotConfig {
     pid: {
-        orientation: { kp: number; ki: number; kd: number; };
-        position: { kp: number; ki: number; kd: number; };
-        momentum: { kp: number; ki: number; kd: number; };
+        orientation: PIDGains;
+        position: PIDGains;
+        momentum: PIDGains;
     };
     limits: {
         maxForce: number;
@@ -128,10 +131,10 @@ export type WorkerInitMsg = {
 export type WorkerSetGainsMsg = {
   type: 'setGains';
   gains: {
-    orientation: { kp: number; ki: number; kd: number };
-    rotationCancel?: { kp: number; ki: number; kd: number };
-    position: { kp: number; ki: number; kd: number };
-    momentum: { kp: number; ki: number; kd: number };
+    orientation: PIDGains;
+    rotationCancel?: PIDGains;
+    position: PIDGains;
+    momentum: PIDGains;
   };
 };
 
@@ -188,6 +191,11 @@ export type WorkerPlanPathMsg = {
   obstacles: Array<{ pos: [number, number, number]; size: [number, number, number]; isTarget: boolean }>;
 };
 
+export type WorkerSetSpeedLimitMsg = {
+  type: 'setSpeedLimit';
+  maxSpeed: number | null;
+};
+
 export type WorkerInboundMsg =
   | WorkerInitMsg
   | WorkerUpdateMsg
@@ -197,7 +205,8 @@ export type WorkerInboundMsg =
   | WorkerSetThrusterGroupsMsg
   | WorkerSetThrustersMsg
   | WorkerSetThrustMsg
-  | WorkerPlanPathMsg;
+  | WorkerPlanPathMsg
+  | WorkerSetSpeedLimitMsg;
 
 export type WorkerOutboundMsg =
   | { type: 'ready' }

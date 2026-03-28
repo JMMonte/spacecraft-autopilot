@@ -6,7 +6,7 @@ import { CancelLinearMotion } from '../controllers/autopilot/CancelLinearMotion'
 import { PointToPosition } from '../controllers/autopilot/PointToPosition';
 import { OrientationMatchAutopilot } from '../controllers/autopilot/OrientationMatchAutopilot';
 import { GoToPosition } from '../controllers/autopilot/GoToPosition';
-import type { AutopilotConfig } from '../controllers/autopilot/types';
+import type { AutopilotConfig, PIDGains } from '../controllers/autopilot/types';
 import { TrajectoryPlanner } from '../controllers/trajectory/TrajectoryPlanner';
 import type { ThrusterGroups } from '../config/spacecraftConfig';
 import type { WorkerInboundMsg } from '../controllers/autopilot/types';
@@ -184,7 +184,11 @@ class WorkerAutopilot {
     for (const m of this.allModes) m.invalidateCaps();
   }
 
-  setGains(gains: { orientation: { kp: number; ki: number; kd: number }; rotationCancel?: { kp: number; ki: number; kd: number }; position: { kp: number; ki: number; kd: number }; momentum: { kp: number; ki: number; kd: number } }): void {
+  setSpeedLimit(maxSpeed: number | null): void {
+    this.goToPositionMode.setSpeedLimit(maxSpeed);
+  }
+
+  setGains(gains: { orientation: PIDGains; rotationCancel?: PIDGains; position: PIDGains; momentum: PIDGains }): void {
     this.orientationPID.setGain('Kp', gains.orientation.kp);
     this.orientationPID.setGain('Ki', gains.orientation.ki);
     this.orientationPID.setGain('Kd', gains.orientation.kd);
@@ -328,6 +332,11 @@ self.onmessage = async (ev: MessageEvent<WorkerInboundMsg>) => {
   if (data.type === 'setThrust') {
     if (!autopilot) return;
     try { autopilot.setThrustAll(data.thrust); } catch {}
+    return;
+  }
+  if (data.type === 'setSpeedLimit') {
+    if (!autopilot) return;
+    try { autopilot.setSpeedLimit(data.maxSpeed); } catch {}
     return;
   }
   if (data.type === 'update') {

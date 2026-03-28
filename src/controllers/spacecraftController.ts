@@ -9,6 +9,7 @@ import type { ThrusterConfig } from '../utils/utils';
 import { ManualAllocator } from './autopilot/ManualAllocator';
 import { ThrusterPWM } from './ThrusterPWM';
 import type { VisualizationCallbacks } from './types';
+import { THRUST_FACTOR } from '../constants';
 
 interface KeyMap {
     [key: string]: boolean;
@@ -71,8 +72,7 @@ export class SpacecraftController {
 
         // Derive a "thrust per thruster"
         this.mass = spacecraft.getMass();
-        const thrustFactor = 5;
-        this.thrust = (this.mass / 24) * thrustFactor;
+        this.thrust = (this.mass / 24) * THRUST_FACTOR;
         this.baseThrust = this.thrust;
         // Default per-thruster capacities (N). Can be customized later via config.
         this.thrusterMax = new Array(24).fill(this.thrust);
@@ -150,7 +150,7 @@ export class SpacecraftController {
                 // Default: classify in craft-local frame about its origin
                 return computeThrusterGroups(thrusters);
             }
-        } catch {}
+        } catch (err) { this.log.warn('getThrusterGroups: failed to compute from configs, using basic groups', err); }
         return getBasicThrusterGroups();
     }
 
@@ -160,10 +160,10 @@ export class SpacecraftController {
      */
     public refreshThrusterGroups(): void {
         const groups = this.getThrusterGroups();
-        try { this.autopilot?.setThrusterGroups(groups); } catch {}
-        try { this.autopilot?.refreshThrusters?.(); } catch {}
-        try { this.manualAllocator?.setThrusterGroups(groups); } catch {}
-        try { this.manualAllocator?.invalidateCaps?.(); } catch {}
+        try { this.autopilot?.setThrusterGroups(groups); } catch (err) { this.log.warn('refreshThrusterGroups: autopilot setThrusterGroups failed', err); }
+        try { this.autopilot?.refreshThrusters?.(); } catch (err) { this.log.warn('refreshThrusterGroups: autopilot refreshThrusters failed', err); }
+        try { this.manualAllocator?.setThrusterGroups(groups); } catch (err) { this.log.warn('refreshThrusterGroups: manualAllocator setThrusterGroups failed', err); }
+        try { this.manualAllocator?.invalidateCaps?.(); } catch (err) { this.log.warn('refreshThrusterGroups: manualAllocator invalidateCaps failed', err); }
     }
 
     public handleKeyDown(event: KeyboardEvent): void {
@@ -174,23 +174,15 @@ export class SpacecraftController {
 
         this.keysPressed[event.code] = true;
 
-        // 1) Manual thruster logic
-        this.handleManualControl(event.code);
+        // Manual thruster forces are derived from keysPressed in calculateManualForces()
 
-        // 2) Autopilot toggles
+        // Autopilot toggles
         this.handleAutopilotControl(event.code);
     }
 
     public handleKeyUp(event: KeyboardEvent): void {
         if (!this.isActive) return;
         this.keysPressed[event.code] = false;
-    }
-
-    private handleManualControl(code: string): void {
-        // Just placeholders for your logic:
-        if (this.rotationKeys().includes(code) || this.translationKeys().includes(code)) {
-            // Thrusters keep firing while the key is down
-        }
     }
 
     private handleAutopilotControl(code: string): void {
@@ -452,14 +444,6 @@ export class SpacecraftController {
         return visibility;
     }
 
-    private rotationKeys(): string[] {
-        return ['KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyQ', 'KeyE'];
-    }
-
-    private translationKeys(): string[] {
-        return ['KeyU', 'KeyO', 'KeyK', 'KeyI', 'KeyJ', 'KeyL'];
-    }
-
     private calculateManualForces(): number[] {
         const out = this.manualForcesBuffer;
         for (let i = 0; i < 24; i++) out[i] = 0;
@@ -524,11 +508,11 @@ export class SpacecraftController {
         // Update per-thruster capacities to match new thrust
         this.thrusterMax = new Array(24).fill(value);
 
-        try { this.thrusterPWM?.setThrust(value); this.thrusterPWM?.setThrusterMax(this.thrusterMax); } catch {}
-        try { this.autopilot?.setThrust?.(value); } catch {}
-        try { this.autopilot?.setThrusterStrengths?.(this.thrusterMax); } catch {}
-        try { this.manualAllocator?.setThrust?.(value); } catch {}
-        try { this.manualAllocator?.setThrusterMax?.(this.thrusterMax); } catch {}
+        try { this.thrusterPWM?.setThrust(value); this.thrusterPWM?.setThrusterMax(this.thrusterMax); } catch (err) { this.log.warn('setThrust: PWM update failed', err); }
+        try { this.autopilot?.setThrust?.(value); } catch (err) { this.log.warn('setThrust: autopilot thrust update failed', err); }
+        try { this.autopilot?.setThrusterStrengths?.(this.thrusterMax); } catch (err) { this.log.warn('setThrust: autopilot strengths update failed', err); }
+        try { this.manualAllocator?.setThrust?.(value); } catch (err) { this.log.warn('setThrust: manualAllocator thrust update failed', err); }
+        try { this.manualAllocator?.setThrusterMax?.(this.thrusterMax); } catch (err) { this.log.warn('setThrust: manualAllocator max update failed', err); }
     }
 
     /**
@@ -538,9 +522,9 @@ export class SpacecraftController {
     public setThrusterStrengths(max: number[]): void {
         if (!Array.isArray(max) || max.length !== 24) return;
         this.thrusterMax = max.slice(0, 24);
-        try { this.thrusterPWM?.setThrusterMax(this.thrusterMax); } catch {}
-        try { this.autopilot?.setThrusterStrengths(this.thrusterMax); } catch {}
-        try { this.manualAllocator?.setThrusterMax(this.thrusterMax); } catch {}
+        try { this.thrusterPWM?.setThrusterMax(this.thrusterMax); } catch (err) { this.log.warn('setThrusterStrengths: PWM max update failed', err); }
+        try { this.autopilot?.setThrusterStrengths(this.thrusterMax); } catch (err) { this.log.warn('setThrusterStrengths: autopilot strengths update failed', err); }
+        try { this.manualAllocator?.setThrusterMax(this.thrusterMax); } catch (err) { this.log.warn('setThrusterStrengths: manualAllocator max update failed', err); }
     }
 
     /** Reset thrust to its pre-cluster value. */

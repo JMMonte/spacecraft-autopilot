@@ -30,7 +30,7 @@ export const RangeInput: React.FC<RangeInputProps> = ({
   
   return (
     <div className={className}>
-      <label className="text-[10px] text-white/70 font-mono block mb-0.5">
+      <label className="text-[10px] text-white/70 block mb-0.5">
         {label} {unit}
       </label>
       <input

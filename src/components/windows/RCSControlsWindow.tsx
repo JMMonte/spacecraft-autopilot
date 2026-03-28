@@ -23,7 +23,7 @@ export const RCSControlsWindow: React.FC<RCSControlsWindowProps> = ({ spacecraft
         min={0}
         max={1000}
         defaultValue={100}
-        className="text-[10px] font-mono"
+        className="text-[10px]"
       />
     </div>
   );

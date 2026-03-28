@@ -36,17 +36,17 @@ export const KeyboardShortcuts: React.FC<KeyboardShortcutsProps> = ({ isVisible,
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center px-2 py-1 border-b border-white/20">
-          <h3 className="text-white/90 text-sm font-medium drop-shadow-md">
+          <h3 className="text-white/90 text-[10px] font-medium">
             Keyboard Shortcuts
           </h3>
-          <button 
-            className="text-white/90 hover:text-white text-lg cursor-pointer drop-shadow-md"
+          <button
+            className="text-white/90 hover:text-white text-lg cursor-pointer"
             onClick={onClose}
           >
             ×
           </button>
         </div>
-        <div className="p-2 space-y-1 text-white/90 text-xs font-mono drop-shadow-md">
+        <div className="p-2 space-y-1 text-white/90 text-[10px]">
           {SHORTCUTS.map(({ key, description }) => (
             <div key={key}>
               <span className="text-cyan-300/90">{key}</span> - {description}

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: TypeScript Check
+        run: pnpm run check:ts
+      - name: Unit Tests
+        run: pnpm run test:unit
+      - name: Architecture Tests
+        run: pnpm run test:architecture
+      - name: Build
+        run: pnpm run build

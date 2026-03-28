@@ -17,9 +17,13 @@ export const WINDOWS: Windows = {
   spacecraftList: { label: 'Spacecraft Manager' },
   dockingCameras: { label: 'Dock Cameras & Lights' },
   settings: { label: 'Display Settings' },
+  chart: { label: 'Chart' },
 };
 
 export const INITIAL_WINDOW_STATE: { [key: string]: boolean } = Object.keys(WINDOWS).reduce((acc, key) => {
   acc[key] = true;
   return acc;
-}, {} as { [key: string]: boolean }); 
+}, {} as { [key: string]: boolean });
+
+/** Multiplier for per-thruster force: mass / 24_thrusters * THRUST_FACTOR */
+export const THRUST_FACTOR = 5;

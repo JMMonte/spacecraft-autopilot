@@ -5,7 +5,7 @@ import { SceneLights } from '../scenes/sceneLights';
 import { LENS_FLARE_LAYER } from '../effects/lensFlareConfig';
 import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
-import { Spacecraft } from './spacecraft';
+import { Spacecraft, type SpacecraftOptions } from './spacecraft';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { DockingOrchestrator } from './DockingOrchestrator';
 import { InputRouter } from './InputRouter';
@@ -463,6 +463,77 @@ export class BasicWorld implements SpacecraftRegistry {
             this.onSpacecraftListChange(this.spacecraftListVersion);
         }
         
+        return spacecraft;
+    }
+
+    /**
+     * Create a node module with 2, 4, or 6 docking ports and no thrusters.
+     * - 2 ports: front + back (inline coupler)
+     * - 4 ports: front + back + left + right (cross junction)
+     * - 6 ports: all faces (full hub)
+     */
+    public addNodeSpacecraft(position?: THREE.Vector3, portCount: 2 | 4 | 6 = 4): Spacecraft {
+        const size = 1;
+        // Random non-overlapping position if none provided (same logic as createNewSpacecraft)
+        let pos: THREE.Vector3;
+        if (position) {
+            pos = position;
+        } else {
+            const defaultRange = 20;
+            const maxAttempts = 50;
+            let attempt = 0;
+            do {
+                pos = new THREE.Vector3(
+                    (Math.random() - 0.5) * defaultRange,
+                    (Math.random() - 0.5) * defaultRange,
+                    (Math.random() - 0.5) * defaultRange,
+                );
+                attempt++;
+                if (attempt > maxAttempts) {
+                    const scale = 1 + (attempt - maxAttempts) / 10;
+                    pos.multiplyScalar(scale);
+                }
+            } while (this.isPositionOverlapping(pos, size, size, size) && attempt < maxAttempts * 2);
+        }
+        const d = size / 2;
+        const allPorts: Array<{ id: string; position: THREE.Vector3; direction: THREE.Vector3 }> = [
+            { id: 'front', position: new THREE.Vector3(0, 0, d), direction: new THREE.Vector3(0, 0, 1) },
+            { id: 'back', position: new THREE.Vector3(0, 0, -d), direction: new THREE.Vector3(0, 0, -1) },
+            { id: 'right', position: new THREE.Vector3(d, 0, 0), direction: new THREE.Vector3(1, 0, 0) },
+            { id: 'left', position: new THREE.Vector3(-d, 0, 0), direction: new THREE.Vector3(-1, 0, 0) },
+            { id: 'top', position: new THREE.Vector3(0, d, 0), direction: new THREE.Vector3(0, 1, 0) },
+            { id: 'bottom', position: new THREE.Vector3(0, -d, 0), direction: new THREE.Vector3(0, -1, 0) },
+        ];
+        const portConfigs = allPorts.slice(0, portCount);
+        const label = portCount === 2 ? 'Coupler' : portCount === 6 ? 'Hub' : 'Node';
+        const options: SpacecraftOptions = {
+            ports: portConfigs,
+            includeThrusters: false,
+            name: label,
+        };
+        const spacecraft = new Spacecraft(
+            {},
+            this.camera.scene as ThreeScene,
+            pos,
+            size, size, size,
+            this, this.physics, this.runtimeState,
+            options
+        );
+        spacecraft.registry = this;
+
+        this.spacecraft.push(spacecraft);
+        this.spacecraftControllers.push(spacecraft.spacecraftController);
+        this.markShadowMaterialsDirty();
+
+        if (!this.activeSpacecraft) {
+            this.setActiveSpacecraft(spacecraft);
+        }
+
+        this.spacecraftListVersion++;
+        if (this.onSpacecraftListChange) {
+            this.onSpacecraftListChange(this.spacecraftListVersion);
+        }
+
         return spacecraft;
     }
 

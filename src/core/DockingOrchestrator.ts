@@ -1,4 +1,4 @@
-import { canDockWithinThresholds } from '../controllers/docking/DockingUtils';
+import { canDockWithinThresholds, type DockingPortId } from '../controllers/docking/DockingUtils';
 import type { Spacecraft } from './spacecraft';
 
 /**
@@ -7,24 +7,25 @@ import type { Spacecraft } from './spacecraft';
  */
 export class DockingOrchestrator {
     performPassiveDocking(spacecraftList: ReadonlyArray<Spacecraft>): void {
-        const ports: Array<'front' | 'back'> = ['front', 'back'];
         const list = spacecraftList;
         const n = list.length;
         for (let i = 0; i < n; i++) {
             const a = list[i];
+            const aPorts = Object.keys(a.dockingPorts) as DockingPortId[];
             for (let j = i + 1; j < n; j++) {
                 const b = list[j];
+                const bPorts = Object.keys(b.dockingPorts) as DockingPortId[];
 
-                const alreadyConnected = (['front', 'back'] as const).some(
-                    p => a.dockingPorts[p].dockedTo?.spacecraft === b
+                const alreadyConnected = aPorts.some(
+                    p => a.dockingPorts[p]?.dockedTo?.spacecraft === b
                 );
                 if (alreadyConnected) continue;
 
                 let paired = false;
-                for (const aPort of ports) {
+                for (const aPort of aPorts) {
                     if (paired) break;
                     if (!a.dockingPorts[aPort] || a.dockingPorts[aPort].isOccupied) continue;
-                    for (const bPort of ports) {
+                    for (const bPort of bPorts) {
                         if (!b.dockingPorts[bPort] || b.dockingPorts[bPort].isOccupied) continue;
                         if (!canDockWithinThresholds(a, aPort, b, bPort)) continue;
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { INPUT_BASE, FIELD_LABEL } from './styles';
 
 interface NumberInputProps {
   label?: string;
@@ -8,17 +9,17 @@ interface NumberInputProps {
   className?: string;
 }
 
-export const NumberInput: React.FC<NumberInputProps> = ({ 
-  label, 
-  value, 
+export const NumberInput: React.FC<NumberInputProps> = ({
+  label,
+  value,
   onChange,
   step,
-  className = "" 
+  className = ""
 }) => {
   return (
     <div className={className}>
       {label && (
-        <label className="text-[10px] text-white/70 font-mono">
+        <label className={FIELD_LABEL}>
           {label}
         </label>
       )}
@@ -27,8 +28,7 @@ export const NumberInput: React.FC<NumberInputProps> = ({
         value={value}
         onChange={onChange}
         step={step}
-        className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 
-                  text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
+        className={INPUT_BASE}
       />
     </div>
   );

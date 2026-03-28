@@ -112,11 +112,11 @@ const ControllerSection: React.FC<ControllerSectionProps> = ({
             {isCalibrating && series.length > 0 && (
                 <div className="flex items-center gap-1 mb-0.5">
                     <Sparkline values={series} color={sparkColor} />
-                    <span className="text-[10px] text-white/60 font-mono">n={series.length}</span>
+                    <span className="text-[10px] text-white/50">n=<span className="font-mono">{series.length}</span></span>
                 </div>
             )}
             {isCalibrating && series.length === 0 && (
-                <div className="text-[10px] text-white/50 font-mono mb-0.5">Collecting samples…</div>
+                <div className="text-[10px] text-white/50 mb-0.5">Collecting samples…</div>
             )}
             <div className="space-y-0.5">
                 {GAIN_KEYS.map((key) => (
@@ -126,7 +126,7 @@ const ControllerSection: React.FC<ControllerSectionProps> = ({
                             value={gains[key]?.value ?? 0}
                             onChange={(e: ChangeEvent<HTMLInputElement>) => onGainChange(key, parseFloat(e.target.value))}
                             step={0.01}
-                            className={`w-16 ${gains[key]?.isChanged ? 'text-cyan-400' : ''}`}
+                            className={`w-16 ${gains[key]?.isChanged ? 'text-cyan-300/90' : ''}`}
                         />
                     </div>
                 ))}

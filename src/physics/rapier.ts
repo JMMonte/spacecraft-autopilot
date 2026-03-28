@@ -4,6 +4,56 @@ import type { PhysicsEngine, PhysicsInitOptions, RigidBody } from './types';
 
 type RapierModule = any; // Avoid type dependency; resolved at runtime via dynamic import
 
+// --- Quaternion / vector helpers for compound body redirect math ---
+
+/** Quaternion multiply: q1 * q2 */
+function quatMul(
+  q1: { x: number; y: number; z: number; w: number },
+  q2: { x: number; y: number; z: number; w: number },
+): { x: number; y: number; z: number; w: number } {
+  return {
+    x: q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y,
+    y: q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x,
+    z: q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w,
+    w: q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z,
+  };
+}
+
+/** Rotate vector by quaternion: q * v * q^-1 */
+function quatRotateVec3(
+  q: { x: number; y: number; z: number; w: number },
+  v: { x: number; y: number; z: number },
+): { x: number; y: number; z: number } {
+  const qv = { x: q.x, y: q.y, z: q.z };
+  const uv = {
+    x: qv.y * v.z - qv.z * v.y,
+    y: qv.z * v.x - qv.x * v.z,
+    z: qv.x * v.y - qv.y * v.x,
+  };
+  const uuv = {
+    x: qv.y * uv.z - qv.z * uv.y,
+    y: qv.z * uv.x - qv.x * uv.z,
+    z: qv.x * uv.y - qv.y * uv.x,
+  };
+  return {
+    x: v.x + 2 * (q.w * uv.x + uuv.x),
+    y: v.y + 2 * (q.w * uv.y + uuv.y),
+    z: v.z + 2 * (q.w * uv.z + uuv.z),
+  };
+}
+
+/** Cross product */
+function crossVec3(
+  a: { x: number; y: number; z: number },
+  b: { x: number; y: number; z: number },
+): { x: number; y: number; z: number } {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
 class RapierPhysics implements PhysicsEngine {
   private RAPIER!: RapierModule;
   private world: any;
@@ -203,49 +253,140 @@ class RapierPhysics implements PhysicsEngine {
       const n = Math.hypot(q.x, q.y, q.z, q.w) || 1;
       return { x: q.x / n, y: q.y / n, z: q.z / n, w: q.w / n };
     };
+    // --- Redirect state for compound body support ---
+    let _redirectHost: RigidBody | null = null;
+    let _localOffset: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number; w: number } } | null = null;
+
     const wrapper: RigidBody = {
       setPosition: (x, y, z) => {
+        if (_redirectHost) return; // No-op when redirected
         const fn = () => { try { if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) { const p = clampPos({ x, y, z }); rb.setTranslation(p, true); } } catch (_) {} };
         // Keep cache coherent even if we defer the native call
         entry.cache.p = { x, y, z };
         self.isStepping ? self.pendingOps.push(fn) : fn();
       },
       setQuaternion: (x, y, z, w) => {
+        if (_redirectHost) return; // No-op when redirected
         const fn = () => { try { if (isFiniteQuat({ x, y, z, w })) { const q = normalizeQuat({ x, y, z, w }); rb.setRotation(q, true); } } catch (_) {} };
         entry.cache.q = { x, y, z, w } as any;
         self.isStepping ? self.pendingOps.push(fn) : fn();
       },
       getPosition: () => {
+        if (_redirectHost && _localOffset) {
+          const hp = _redirectHost.getPosition();
+          const hq = _redirectHost.getQuaternion();
+          const rotatedOffset = quatRotateVec3(hq, _localOffset.position);
+          return { x: hp.x + rotatedOffset.x, y: hp.y + rotatedOffset.y, z: hp.z + rotatedOffset.z };
+        }
         // Always serve from cache to avoid re-entrancy into WASM during renders
         return { ...entry.cache.p };
       },
       getQuaternion: () => {
+        if (_redirectHost && _localOffset) {
+          const hq = _redirectHost.getQuaternion();
+          return quatMul(hq, _localOffset.rotation);
+        }
         return { ...entry.cache.q } as any;
       },
       setMass(newMass: number) {
+        // Always set on the original native body (for bookkeeping)
         const vol = 8 * halfExtents.x * halfExtents.y * halfExtents.z;
         const dens = vol > 0 ? newMass / vol : 1;
         col.setDensity(dens);
       },
-      getMass() { try { return rb.mass ? rb.mass() : col.mass(); } catch (_) { return col.mass(); } },
+      getMass() {
+        // Return ORIGINAL mass, not the host's mass
+        try { return rb.mass ? rb.mass() : col.mass(); } catch (_) { return col.mass(); }
+      },
       setDamping: (linear: number, angular: number) => { const fn = () => { try { rb.setLinearDamping(linear); rb.setAngularDamping(angular); } catch (_) {} }; self.isStepping ? self.pendingOps.push(fn) : fn(); },
       applyForce: (force, worldPoint) => {
+        if (_redirectHost) {
+          // Delegate to host — force at a world point is body-independent
+          _redirectHost.applyForce(force, worldPoint);
+          return;
+        }
         const fn = () => { try { if (!isFiniteVec3(force)) return; if (worldPoint && !isFiniteVec3(worldPoint)) return; const f = clampVec3(force, 1e6); if (worldPoint) rb.addForceAtPoint(f, worldPoint, true); else rb.addForce(f, true); } catch (_) {} };
         self.isStepping ? self.pendingOps.push(fn) : fn();
       },
       applyImpulse: (impulse, worldPoint) => {
+        if (_redirectHost) {
+          _redirectHost.applyImpulse(impulse, worldPoint);
+          return;
+        }
         const fn = () => { try { if (!isFiniteVec3(impulse)) return; if (worldPoint && !isFiniteVec3(worldPoint)) return; const J = clampVec3(impulse, 1e6); if (worldPoint) rb.applyImpulseAtPoint(J, worldPoint, true); else rb.applyImpulse(J, true); } catch (_) {} };
         self.isStepping ? self.pendingOps.push(fn) : fn();
       },
       getLinearVelocity: () => {
+        if (_redirectHost && _localOffset) {
+          const hlv = _redirectHost.getLinearVelocity();
+          const hav = _redirectHost.getAngularVelocity();
+          const hq = _redirectHost.getQuaternion();
+          const worldArm = quatRotateVec3(hq, _localOffset.position);
+          const rotContrib = crossVec3(hav, worldArm);
+          return { x: hlv.x + rotContrib.x, y: hlv.y + rotContrib.y, z: hlv.z + rotContrib.z };
+        }
         return { ...entry.cache.lv };
       },
-      setLinearVelocity: (v) => { entry.cache.lv = { ...v }; const fn = () => { try { if (isFiniteVec3(v)) { const vv = clampVec3(v); rb.setLinvel(vv, true); } } catch (_) {} }; self.isStepping ? self.pendingOps.push(fn) : fn(); },
+      setLinearVelocity: (v) => {
+        if (_redirectHost) {
+          _redirectHost.setLinearVelocity(v);
+          return;
+        }
+        entry.cache.lv = { ...v }; const fn = () => { try { if (isFiniteVec3(v)) { const vv = clampVec3(v); rb.setLinvel(vv, true); } } catch (_) {} }; self.isStepping ? self.pendingOps.push(fn) : fn();
+      },
       getAngularVelocity: () => {
+        if (_redirectHost) {
+          return _redirectHost.getAngularVelocity();
+        }
         return { ...entry.cache.av };
       },
-      setAngularVelocity: (v) => { entry.cache.av = { ...v }; const fn = () => { try { if (isFiniteVec3(v)) { const vv = clampVec3(v, 1e4); rb.setAngvel(vv, true); } } catch (_) {} }; self.isStepping ? self.pendingOps.push(fn) : fn(); },
-      getNative() { return rb; }
+      setAngularVelocity: (v) => {
+        if (_redirectHost) {
+          _redirectHost.setAngularVelocity(v);
+          return;
+        }
+        entry.cache.av = { ...v }; const fn = () => { try { if (isFiniteVec3(v)) { const vv = clampVec3(v, 1e4); rb.setAngvel(vv, true); } } catch (_) {} }; self.isStepping ? self.pendingOps.push(fn) : fn();
+      },
+      getNative() {
+        // When redirected, return the HOST's native body so any code accessing
+        // the native Rapier body operates on the compound body
+        if (_redirectHost) return _redirectHost.getNative();
+        return rb;
+      },
+
+      // --- Compound body redirect methods ---
+      redirectTo(host: RigidBody, localOffset: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number; w: number } }) {
+        _redirectHost = host;
+        _localOffset = localOffset;
+        // Remove from bodies set so step() cache refresh skips this body
+        self.bodies.delete(entry);
+        // Disable the native Rapier body
+        try { if (typeof rb.setEnabled === 'function') rb.setEnabled(false); } catch (_) {}
+      },
+      unredirect() {
+        // Re-enable the native Rapier body
+        try { if (typeof rb.setEnabled === 'function') rb.setEnabled(true); } catch (_) {}
+        // Sync cache from current derived position before re-adding
+        if (_redirectHost && _localOffset) {
+          const pos = wrapper.getPosition();
+          const quat = wrapper.getQuaternion();
+          entry.cache.p = { x: pos.x, y: pos.y, z: pos.z };
+          entry.cache.q = { x: quat.x, y: quat.y, z: quat.z, w: quat.w };
+          // Also set the native body to the derived position
+          try {
+            rb.setTranslation(entry.cache.p, true);
+            rb.setRotation(entry.cache.q, true);
+          } catch (_) {}
+        }
+        // Re-add entry to bodies set
+        self.bodies.add(entry);
+        // Clear redirect state
+        _redirectHost = null;
+        _localOffset = null;
+      },
+      isRedirected() {
+        return !!_redirectHost;
+      },
     };
     return wrapper;
   }
@@ -496,6 +637,81 @@ class RapierPhysics implements PhysicsEngine {
         (handle as any).parent?.removeCollider?.(handle);
       }
     } catch (_) {}
+  }
+
+  // Attach a box collider to an existing rigid body.
+  attachBoxCollider(
+    body: RigidBody,
+    halfExtents: { x: number; y: number; z: number },
+    options?: {
+      translation?: { x: number; y: number; z: number };
+      rotation?: { x: number; y: number; z: number; w: number };
+      density?: number;
+      restitution?: number;
+      friction?: number;
+    }
+  ): unknown {
+    try {
+      const rb = body.getNative<any>();
+      if (!rb) return undefined;
+      const R = this.RAPIER;
+      const hx = Math.max(1e-5, Math.abs(halfExtents.x));
+      const hy = Math.max(1e-5, Math.abs(halfExtents.y));
+      const hz = Math.max(1e-5, Math.abs(halfExtents.z));
+      const cd = R.ColliderDesc.cuboid(hx, hy, hz);
+      if (options?.translation) {
+        const tx = Number.isFinite(options.translation.x) ? options.translation.x : 0;
+        const ty = Number.isFinite(options.translation.y) ? options.translation.y : 0;
+        const tz = Number.isFinite(options.translation.z) ? options.translation.z : 0;
+        cd.setTranslation(tx, ty, tz);
+      }
+      if (options?.rotation) {
+        const r = options.rotation;
+        const rx = Number.isFinite(r.x) ? r.x : 0;
+        const ry = Number.isFinite(r.y) ? r.y : 0;
+        const rz = Number.isFinite(r.z) ? r.z : 0;
+        const rw = Number.isFinite(r.w) ? r.w : 1;
+        cd.setRotation({ x: rx, y: ry, z: rz, w: rw });
+      }
+      if (typeof options?.density === 'number') cd.setDensity(options.density);
+      if (typeof options?.restitution === 'number') cd.setRestitution(options.restitution);
+      if (typeof options?.friction === 'number') cd.setFriction(options.friction);
+      const collider = this.world.createCollider(cd, rb);
+      return collider?.handle ?? collider;
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  // Disable a body: remove from stepping cache and disable in Rapier
+  disableBody(body: RigidBody): void {
+    const rb = body.getNative<any>();
+    if (!rb) return;
+    try { if (typeof rb.setEnabled === 'function') rb.setEnabled(false); } catch (_) {}
+    // Remove from bodies set so step() cache refresh skips it
+    for (const entry of this.bodies) {
+      if (entry.rb === rb) { this.bodies.delete(entry); break; }
+    }
+  }
+
+  // Enable a body: re-enable in Rapier and re-add to stepping cache
+  enableBody(body: RigidBody): void {
+    const rb = body.getNative<any>();
+    if (!rb) return;
+    try { if (typeof rb.setEnabled === 'function') rb.setEnabled(true); } catch (_) {}
+    // Check if already in bodies set
+    for (const entry of this.bodies) {
+      if (entry.rb === rb) return; // Already tracked
+    }
+    // Re-add to bodies set with fresh cache
+    const cache = { p: { x: 0, y: 0, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 }, lv: { x: 0, y: 0, z: 0 }, av: { x: 0, y: 0, z: 0 } };
+    try {
+      const t = rb.translation(); cache.p = { x: t.x, y: t.y, z: t.z };
+      const r = rb.rotation(); cache.q = { x: r.x, y: r.y, z: r.z, w: r.w };
+      const lv = rb.linvel(); cache.lv = { x: lv.x, y: lv.y, z: lv.z };
+      const av = rb.angvel(); cache.av = { x: av.x, y: av.y, z: av.z };
+    } catch (_) {}
+    this.bodies.add({ rb, cache });
   }
 }
 

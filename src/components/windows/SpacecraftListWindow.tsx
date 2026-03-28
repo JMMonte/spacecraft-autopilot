@@ -1,78 +1,110 @@
-import { useMemo } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Plus, Trash2, Box } from 'lucide-react';
+import { EMPTY_STATE } from '../ui/styles';
 import { BasicWorld } from '../../core/BasicWorld';
 import { Spacecraft } from '../../core/spacecraft';
 
 interface SpacecraftListWindowProps {
   world: BasicWorld | null;
   activeSpacecraft: Spacecraft | null;
-  onCreateSpacecraft: () => void;
+  onCreateSpacecraft?: () => void;
+  onCreateNodeSpacecraft?: (portCount?: 2 | 4 | 6) => void;
   onSelectSpacecraft: (spacecraft: Spacecraft) => void;
   onDeleteSpacecraft: (spacecraft: Spacecraft) => void;
   version: number;
 }
 
-export function SpacecraftListWindow({ 
-  world, 
-  activeSpacecraft, 
-  onCreateSpacecraft, 
-  onSelectSpacecraft, 
-  onDeleteSpacecraft, 
-  version 
+const NODE_TYPES: Array<{ ports: 2 | 4 | 6; label: string; desc: string }> = [
+  { ports: 2, label: '2p', desc: 'Coupler' },
+  { ports: 4, label: '4p', desc: 'Node' },
+  { ports: 6, label: '6p', desc: 'Hub' },
+];
+
+export function SpacecraftListWindow({
+  world,
+  activeSpacecraft,
+  onCreateSpacecraft,
+  onCreateNodeSpacecraft,
+  onSelectSpacecraft,
+  onDeleteSpacecraft,
+  version
 }: SpacecraftListWindowProps) {
   const spacecraftList = useMemo(() => {
-    // Get spacecraft list from BasicWorld in creation order
     return world?.getSpacecraftList() ?? [];
   }, [world, version]);
 
-  return (
-    <div className="flex flex-col gap-2">
-      {/* Create New Spacecraft Button */}
-      <button
-        className="px-1 py-0.5 bg-cyan-500/30 text-white/90 text-[10px] rounded hover:bg-cyan-500/50 transition-colors duration-200 border border-cyan-500/50 flex items-center justify-center gap-1 font-mono drop-shadow-md"
-        onClick={onCreateSpacecraft}
-      >
-        <Plus size={14} />
-        New Spacecraft
-      </button>
+  const [nodeMenuOpen, setNodeMenuOpen] = useState(false);
 
-      {/* Spacecraft List */}
-      <div className="flex flex-col gap-1">
+  return (
+    <div className="flex flex-col gap-1 text-[10px]">
+      <div className="flex gap-1">
+        <button
+          className="flex-1 px-1 py-0.5 text-[10px] text-white/70 hover:text-white/90 hover:bg-white/10 rounded transition-colors flex items-center justify-center gap-1"
+          onClick={onCreateSpacecraft}
+          disabled={!onCreateSpacecraft}
+        >
+          <Plus size={12} />
+          Spacecraft
+        </button>
+        <div className="relative flex-1">
+          <button
+            className="w-full px-1 py-0.5 text-[10px] text-white/70 hover:text-white/90 hover:bg-white/10 rounded transition-colors flex items-center justify-center gap-1"
+            onClick={() => setNodeMenuOpen(!nodeMenuOpen)}
+            disabled={!onCreateNodeSpacecraft}
+          >
+            <Box size={12} />
+            Node
+          </button>
+          {nodeMenuOpen && (
+            <div className="absolute top-full left-0 right-0 mt-0.5 bg-black/90 border border-white/20 rounded z-50 overflow-hidden">
+              {NODE_TYPES.map(nt => (
+                <button
+                  key={nt.ports}
+                  className="w-full px-2 py-1 text-left text-[10px] text-white/70 hover:text-white hover:bg-white/10 transition-colors flex justify-between"
+                  onClick={() => { onCreateNodeSpacecraft?.(nt.ports); setNodeMenuOpen(false); }}
+                >
+                  <span>{nt.desc}</span>
+                  <span className="text-white/40">{nt.ports} ports</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col">
         {spacecraftList.length > 0 ? (
           spacecraftList.map((spacecraft: Spacecraft) => {
             const isActive = spacecraft === activeSpacecraft;
-            const containerClass = isActive
-              ? 'bg-cyan-500/30 border-cyan-500/50 text-white'
-              : 'bg-black/40 border-white/20 text-white/90 hover:bg-white/20';
+            const portCount = Object.keys(spacecraft.dockingPorts).length;
             return (
               <div
                 key={spacecraft.name}
-                className={`flex items-center gap-2 px-1 py-0.5 rounded border text-[10px] font-mono ${containerClass}`}
+                className={`flex items-center gap-2 px-1 py-0.5 rounded transition-colors ${
+                  isActive
+                    ? 'bg-accent-30 text-white'
+                    : 'text-white/90 hover:bg-white/10 cursor-pointer'
+                }`}
+                onClick={() => !isActive && onSelectSpacecraft(spacecraft)}
               >
-                {/* Spacecraft Name & Selection */}
-                <button
-                  className="flex-grow text-left"
-                  onClick={() => !isActive && onSelectSpacecraft(spacecraft)}
-                  disabled={isActive}
-                >
-                  {spacecraft.name}{isActive ? ' (Active)' : ''}
-                </button>
-
-                {/* Delete Button for non-active spacecraft */}
+                <span className="flex-grow">
+                  {spacecraft.name}
+                </span>
+                <span className="text-white/30">{portCount}p</span>
                 {!isActive && (
                   <button
-                    className="text-red-400/70 hover:text-red-400 transition-colors"
-                    onClick={() => onDeleteSpacecraft(spacecraft)}
-                    title="Delete Spacecraft"
+                    className="text-white/50 hover:text-red-400 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); onDeleteSpacecraft(spacecraft); }}
+                    title="Delete"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={12} />
                   </button>
                 )}
               </div>
             );
           })
         ) : (
-          <div className="text-white/50 italic text-center bg-black/40 p-1 rounded border border-white/10 text-[10px]">
+          <div className={EMPTY_STATE}>
             No spacecraft available
           </div>
         )}

@@ -5,6 +5,7 @@ import { Spacecraft } from '../../core/spacecraft';
 import { SpacecraftController } from '../../controllers/spacecraftController';
 import { DockingPhase } from '../../controllers/docking/DockingController';
 import { createLogger } from '../../utils/logger';
+import { EMPTY_STATE, INPUT_BASE } from '../ui/styles';
 import { BasicWorld } from '../../core/BasicWorld';
 
 interface DockingWindowProps {
@@ -34,8 +35,8 @@ interface DockingInfo {
 }
 
 interface PortSettings {
-    our: 'front' | 'back';
-    target: 'front' | 'back';
+    our: string;
+    target: string;
 }
 
 interface PortSettingsMap {
@@ -46,11 +47,11 @@ export interface DockingController {
     isDocking: () => boolean;
     getDockingPhase: () => string;
     cancelDocking: () => void;
-    startDocking: (target: Spacecraft, ourPort: 'front' | 'back', targetPort: 'front' | 'back') => void;
+    startDocking: (target: Spacecraft, ourPort: string, targetPort: string) => void;
     undock: () => boolean;
     targetSpacecraft: Spacecraft | null;
-    ourPortId: 'front' | 'back' | null;
-    targetPortId: 'front' | 'back' | null;
+    ourPortId: string | null;
+    targetPortId: string | null;
 }
 
 export interface AutopilotController {
@@ -90,8 +91,17 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
         }
     }, [otherSpacecraft, selectedTarget]);
 
+    // Get port IDs for a spacecraft
+    const getPortIds = (craft: Spacecraft | null): string[] => {
+        if (!craft?.dockingPorts) return [];
+        return Object.keys(craft.dockingPorts);
+    };
+
+    const ourPorts = useMemo(() => getPortIds(spacecraft), [spacecraft, version]);
+    const targetPorts = useMemo(() => getPortIds(selectedTarget), [selectedTarget, version]);
+
     // Check if port is available
-    const isPortAvailable = (craftId: 'our' | 'target', portId: 'front' | 'back'): boolean => {
+    const isPortAvailable = (craftId: 'our' | 'target', portId: string): boolean => {
         // Basic validation
         if (!spacecraft || !selectedTarget || spacecraft === selectedTarget) {
             return false;
@@ -142,13 +152,15 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
     // Load settings when spacecraft changes
     useEffect(() => {
         if (spacecraft?.name) {
+            const defaultOur = ourPorts[0] || 'front';
+            const defaultTarget = targetPorts.length > 1 ? targetPorts[1] : targetPorts[0] || 'back';
             const savedSettings = portSettings[spacecraft.name] || {
-                our: 'front',
-                target: 'back'
+                our: defaultOur,
+                target: defaultTarget,
             };
             setSelectedPorts(savedSettings);
         }
-    }, [spacecraft?.name, portSettings]);
+    }, [spacecraft?.name, portSettings, ourPorts, targetPorts]);
 
     // Save settings whenever they change
     const saveSettings = (newPorts: PortSettings) => {
@@ -164,7 +176,7 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
     };
 
     // Handle port selection
-    const handlePortSelect = (type: 'our' | 'target', port: 'front' | 'back') => {
+    const handlePortSelect = (type: 'our' | 'target', port: string) => {
         const newPorts = {
             ...selectedPorts,
             [type]: port
@@ -208,8 +220,8 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
             log.info('Starting docking with ports:', selectedPorts.our, selectedPorts.target);
             dockingController.startDocking(
                 selectedTarget as any,
-                selectedPorts.our,
-                selectedPorts.target
+                selectedPorts.our as any,
+                selectedPorts.target as any
             );
         }
     };
@@ -268,181 +280,143 @@ export function DockingWindow({ spacecraft, world, version }: DockingWindowProps
         return () => clearInterval(updateInterval);
     }, [spacecraft, selectedTarget, selectedPorts]);
 
+    const portLabel = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
+    const isDocked = (spacecraft?.getDockedSpacecrafts?.() || []).length > 0 || spacecraft?.dockingController?.getDockingPhase() === 'docked';
+    const isActive = spacecraft?.dockingController?.isDocking();
+
     return (
-        <div className="flex flex-col gap-0.5 p-1 font-mono text-[10px]">
-            <div className="grid grid-cols-3 gap-2 text-cyan-400">
-                <div className={`col-span-3 ${dockingInfo.phase === 'idle' ? 'text-white/50' : dockingInfo.phase === 'docked' ? 'text-green-400' : 'text-yellow-400'}`}>
-                    Phase: {dockingInfo.phase.toUpperCase()}
-                </div>
-                {dockingInfo.intent && (
-                    <div className="col-span-3 text-white/70">
-                        Intent: {dockingInfo.intent}
-                    </div>
+        <div className="flex flex-col gap-1.5 p-1 text-[10px]">
+            {/* Phase status */}
+            <div className={`font-medium ${dockingInfo.phase === 'idle' ? 'text-white/50' : dockingInfo.phase === 'docked' ? 'text-green-400' : 'text-yellow-400'}`}>
+                Phase: {dockingInfo.phase.toUpperCase()}
+                {dockingInfo.intent && <span className="ml-2 font-normal text-white/60">{dockingInfo.intent}</span>}
+            </div>
+
+            {/* === Setup: Target + Ports === */}
+            <div className="flex flex-col gap-1">
+                {/* Target spacecraft selector */}
+                {otherSpacecraft.length > 0 ? (
+                    <select
+                        className={INPUT_BASE}
+                        value={selectedTarget?.name || ''}
+                        onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                            const target = otherSpacecraft.find(s => s.name === e.target.value) || null;
+                            setSelectedTarget(target);
+                        }}
+                    >
+                        <option value="">Select target...</option>
+                        {otherSpacecraft.map(s => (
+                            <option key={s.name} value={s.name}>{s.name} ({Object.keys(s.dockingPorts).length}p)</option>
+                        ))}
+                    </select>
+                ) : (
+                    <div className={EMPTY_STATE}>No other spacecraft</div>
                 )}
-                
-                <div className={`${Math.abs(dockingInfo.closingSpeed) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
+
+                {/* Port selectors — compact dropdowns that scale to any port count */}
+                <div className="grid grid-cols-2 gap-1.5">
+                    <div>
+                        <div className="text-white/40 mb-0.5">Our port</div>
+                        <select
+                            className={INPUT_BASE}
+                            value={selectedPorts.our}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => handlePortSelect('our', e.target.value)}
+                        >
+                            {ourPorts.map(id => (
+                                <option key={id} value={id} disabled={!isPortAvailable('our', id)}>
+                                    {portLabel(id)}{!isPortAvailable('our', id) ? ' (used)' : ''}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <div className="text-white/40 mb-0.5">Target port</div>
+                        <select
+                            className={INPUT_BASE}
+                            value={selectedPorts.target}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => handlePortSelect('target', e.target.value)}
+                            disabled={!selectedTarget}
+                        >
+                            {targetPorts.length > 0 ? targetPorts.map(id => (
+                                <option key={id} value={id} disabled={!isPortAvailable('target', id)}>
+                                    {portLabel(id)}{!isPortAvailable('target', id) ? ' (used)' : ''}
+                                </option>
+                            )) : <option value="">--</option>}
+                        </select>
+                    </div>
+                </div>
+
+                {/* Dock / Cancel / Undock button */}
+                <button
+                    className={`w-full px-2 py-1 rounded border text-white/90 ${
+                        isDocked ? 'bg-green-500/30 border-green-500/50'
+                            : isActive ? 'bg-red-500/30 border-red-500/50'
+                            : 'bg-cyan-500/30 border-cyan-500/50'
+                    } ${!isActive && !canDock() && !isDocked ? 'opacity-50' : ''}`}
+                    onClick={handleDock}
+                    disabled={!isActive && !canDock() && !isDocked}
+                >
+                    {isDocked ? 'Undock' : isActive ? 'Cancel Docking' : 'Start Docking'}
+                </button>
+            </div>
+
+            {/* === Telemetry === */}
+            <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-cyan-300/90">
+                <div className={Math.abs(dockingInfo.closingSpeed) > 0.5 ? 'text-red-400' : ''}>
                     Range: {dockingInfo.range.toFixed(2)}m
                 </div>
-                <div className={`${Math.abs(dockingInfo.closingSpeed) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
-                    Speed: {dockingInfo.closingSpeed.toFixed(2)}m/s
+                <div className={Math.abs(dockingInfo.closingSpeed) > 0.5 ? 'text-red-400' : ''}>
+                    Spd: {dockingInfo.closingSpeed.toFixed(2)}m/s
                 </div>
-                <div className={`${Math.abs(dockingInfo.portAlignmentError || 0) > 5 ? 'text-red-400' : 'text-cyan-400'}`}>
-                    PERR: {(dockingInfo.portAlignmentError || 0).toFixed(1)}°
+                <div className={Math.abs(dockingInfo.portAlignmentError || 0) > 5 ? 'text-red-400' : ''}>
+                    Err: {(dockingInfo.portAlignmentError || 0).toFixed(1)}°
                 </div>
-
-                <div className={`${Math.abs(dockingInfo.pitchError || 0) > 5 ? 'text-red-400' : 'text-cyan-400'}`}>
-                    Pitch: {(dockingInfo.pitchError || 0).toFixed(1)}°
+                <div className={Math.abs(dockingInfo.pitchError || 0) > 5 ? 'text-red-400' : ''}>
+                    P: {(dockingInfo.pitchError || 0).toFixed(1)}°
                 </div>
-                <div className={`${Math.abs(dockingInfo.yawError || 0) > 5 ? 'text-red-400' : 'text-cyan-400'}`}>
-                    Yaw: {(dockingInfo.yawError || 0).toFixed(1)}°
+                <div className={Math.abs(dockingInfo.yawError || 0) > 5 ? 'text-red-400' : ''}>
+                    Y: {(dockingInfo.yawError || 0).toFixed(1)}°
                 </div>
-                <div className={`${Math.abs(dockingInfo.rollAlignmentError || 0) > 5 ? 'text-red-400' : 'text-cyan-400'}`}>
-                    Roll: {(dockingInfo.rollAlignmentError || 0).toFixed(1)}°
+                <div className={Math.abs(dockingInfo.rollAlignmentError || 0) > 5 ? 'text-red-400' : ''}>
+                    R: {(dockingInfo.rollAlignmentError || 0).toFixed(1)}°
                 </div>
-
-                <div className={`${Math.abs(dockingInfo.lateralOffset?.x || 0) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
-                    X-off: {(dockingInfo.lateralOffset?.x || 0).toFixed(2)}m
+                <div className={Math.abs(dockingInfo.lateralOffset?.x || 0) > 0.5 ? 'text-red-400' : ''}>
+                    Lx: {(dockingInfo.lateralOffset?.x || 0).toFixed(2)}m
                 </div>
-                <div className={`${Math.abs(dockingInfo.lateralOffset?.y || 0) > 0.5 ? 'text-red-400' : 'text-cyan-400'}`}>
-                    Y-off: {(dockingInfo.lateralOffset?.y || 0).toFixed(2)}m
+                <div className={Math.abs(dockingInfo.lateralOffset?.y || 0) > 0.5 ? 'text-red-400' : ''}>
+                    Ly: {(dockingInfo.lateralOffset?.y || 0).toFixed(2)}m
                 </div>
                 <div className="text-white/50">
                     WP: {dockingInfo.currentWaypoint !== undefined ? dockingInfo.currentWaypoint + 1 : '-'}/{dockingInfo.totalWaypoints || '-'}
                 </div>
             </div>
 
-            {/* Docking Port Lights toggles */}
-            <div className="mt-1 grid grid-cols-2 gap-2">
-                <div className="flex items-center justify-between gap-1">
-                    <label className="text-[10px] text-white/70 font-mono">Front Light</label>
-                    <input
-                        type="checkbox"
-                        checked={!!spacecraft?.isDockingLightOn?.('front')}
-                        onChange={(e) => spacecraft?.setDockingLight?.('front', e.target.checked)}
-                        className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
-                    />
-                </div>
-                <div className="flex items-center justify-between gap-1">
-                    <label className="text-[10px] text-white/70 font-mono">Back Light</label>
-                    <input
-                        type="checkbox"
-                        checked={!!spacecraft?.isDockingLightOn?.('back')}
-                        onChange={(e) => spacecraft?.setDockingLight?.('back', e.target.checked)}
-                        className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
-                    />
-                </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 mt-2">
-                <div className="flex flex-col gap-1">
-                    <div className="text-white/50">Our Port:</div>
-                    <div className="flex gap-1">
-                        <button
-                            className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.our === 'front' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
-                                isPortAvailable('our', 'front') ? '' : 'text-red-400'
-                            }`}
-                            onClick={() => handlePortSelect('our', 'front')}
-                        >
-                            Front
-                        </button>
-                        <button
-                            className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.our === 'back' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
-                                isPortAvailable('our', 'back') ? '' : 'text-red-400'
-                            }`}
-                            onClick={() => handlePortSelect('our', 'back')}
-                        >
-                            Back
-                        </button>
-                    </div>
-                </div>
-
-                <div className="flex flex-col gap-1">
-                    <div className="text-white/50">Target Port:</div>
-                    <div className="flex gap-1">
-                        <button
-                            className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.target === 'front' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
-                                !selectedTarget ? 'opacity-50' :
-                                isPortAvailable('target', 'front') ? '' : 'text-red-400'
-                            }`}
-                            onClick={() => handlePortSelect('target', 'front')}
-                            disabled={!selectedTarget}
-                        >
-                            Front
-                        </button>
-                        <button
-                            className={`flex-1 px-1 py-0.5 rounded ${selectedPorts.target === 'back' ? 'bg-cyan-500/30 border-cyan-500/50' : 'bg-black/40 border-white/20'} border text-white/90 text-[10px] font-mono ${
-                                !selectedTarget ? 'opacity-50' :
-                                isPortAvailable('target', 'back') ? '' : 'text-red-400'
-                            }`}
-                            onClick={() => handlePortSelect('target', 'back')}
-                            disabled={!selectedTarget}
-                        >
-                            Back
-                        </button>
-                    </div>
-                </div>
-            </div>
-
+            {/* Autopilot mode indicators */}
             {dockingInfo.modes && (
-                <div className="mt-2 grid grid-cols-5 gap-1 text-[10px] text-white/70">
-                    <div className={`${dockingInfo.modes.goToPosition ? 'text-cyan-300' : 'text-white/40'}`}>AP: GoTo</div>
-                    <div className={`${dockingInfo.modes.orientationMatch ? 'text-cyan-300' : 'text-white/40'}`}>Orient</div>
-                    <div className={`${dockingInfo.modes.cancelLinearMotion ? 'text-cyan-300' : 'text-white/40'}`}>Hold</div>
-                    <div className={`${dockingInfo.modes.cancelRotation ? 'text-cyan-300' : 'text-white/40'}`}>NoSpin</div>
-                    <div className={`${dockingInfo.modes.pointToPosition ? 'text-cyan-300' : 'text-white/40'}`}>Point</div>
+                <div className="flex gap-1.5 text-white/40 flex-wrap">
+                    {(['goToPosition', 'orientationMatch', 'cancelLinearMotion', 'cancelRotation', 'pointToPosition'] as const).map(m => (
+                        <span key={m} className={dockingInfo.modes![m] ? 'text-cyan-300/90' : ''}>
+                            {m === 'goToPosition' ? 'GoTo' : m === 'orientationMatch' ? 'Orient' : m === 'cancelLinearMotion' ? 'Hold' : m === 'cancelRotation' ? 'NoSpin' : 'Point'}
+                        </span>
+                    ))}
                 </div>
             )}
 
-            <button
-                className={`w-full mt-2 px-2 py-1 rounded ${
-                    (spacecraft?.getDockedSpacecrafts?.() || []).length > 0 || spacecraft?.dockingController?.getDockingPhase() === 'docked'
-                        ? 'bg-green-500/30 border-green-500/50'
-                        : spacecraft?.dockingController?.isDocking()
-                            ? 'bg-red-500/30 border-red-500/50'
-                            : 'bg-cyan-500/30 border-cyan-500/50'
-                } border text-white/90 text-sm font-mono ${
-                    spacecraft?.dockingController?.isDocking() ? '' : (!canDock() && (spacecraft?.getDockedSpacecrafts?.() || []).length === 0 ? 'opacity-50' : '')
-                }`}
-                onClick={handleDock}
-                disabled={!spacecraft?.dockingController?.isDocking() && !canDock() && (spacecraft?.getDockedSpacecrafts?.() || []).length === 0}
-            >
-                {(spacecraft?.getDockedSpacecrafts?.() || []).length > 0 || spacecraft?.dockingController?.getDockingPhase() === 'docked'
-                    ? 'Undock'
-                    : spacecraft?.dockingController?.isDocking()
-                        ? 'Cancel Docking'
-                        : 'Start Docking'}
-            </button>
-
-            {/* Target selection */}
-            <div className="mt-2 space-y-0.5">
-                <div className="text-white/50">Target Spacecraft:</div>
-                {otherSpacecraft.length > 0 ? (
-                    <select
-                        className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
-                        value={selectedTarget?.name || ''}
-                        onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                            const name = e.target.value;
-                            const target = otherSpacecraft.find(s => s.name === name) || null;
-                            setSelectedTarget(target);
-                        }}
-                    >
-                        <option value="">Select Spacecraft</option>
-                        {otherSpacecraft.map(s => (
-                            <option key={s.name} value={s.name}>{s.name}</option>
-                        ))}
-                    </select>
-                ) : (
-                    <div className="text-white/50 italic text-center bg-black/40 p-1 text-[10px] border border-white/10">
-                        No other spacecraft available
-                    </div>
-                )}
+            {/* Lights — compact row */}
+            <div className="flex items-center gap-2 text-white/40">
+                <span>Lights:</span>
+                {ourPorts.map(portId => (
+                    <label key={portId} className="flex items-center gap-0.5 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked={!!spacecraft?.isDockingLightOn?.(portId)}
+                            onChange={(e) => spacecraft?.setDockingLight?.(portId, e.target.checked)}
+                            className="w-2.5 h-2.5 rounded border-white/20 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+                        />
+                        <span className="capitalize">{portId.slice(0, 1).toUpperCase()}</span>
+                    </label>
+                ))}
             </div>
-
-            {selectedTarget && (
-                <div className="text-cyan-400 text-[10px] mt-1">
-                    Target: {selectedTarget.name}
-                </div>
-            )}
         </div>
     );
 } 

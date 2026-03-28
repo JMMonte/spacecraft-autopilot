@@ -8,7 +8,7 @@ import {
 } from '../../state/store';
 import { BasicWorld } from '../../core/BasicWorld';
 import { Spacecraft } from '../../core/spacecraft';
-import { CHECKBOX, SECTION_HEADER, FIELD_LABEL, SELECT } from '../ui/styles';
+import { CHECKBOX, SECTION_HEADER, FIELD_LABEL, SELECT, TOGGLE_GROUP, TOGGLE_OPTION, TOGGLE_ACTIVE, TOGGLE_INACTIVE } from '../ui/styles';
 
 interface SettingsWindowProps {
   world: BasicWorld | null;
@@ -47,19 +47,17 @@ export const SettingsWindow: React.FC<SettingsWindowProps> = ({ world }) => {
   };
 
   return (
-    <div className="flex flex-col gap-1.5 p-1 bg-black/40 text-white/90 backdrop-blur">
+    <div className="flex flex-col gap-1 p-1 text-white/90 text-[10px]">
       {/* Theme */}
       <div className="flex flex-col gap-0.5">
         <label className={SECTION_HEADER}>Theme</label>
-        <div className="flex gap-1">
+        <div className={TOGGLE_GROUP}>
           {THEMES.map(({ id, label }) => (
             <button
               key={id}
               onClick={() => setUiTheme(id)}
-              className={`flex-1 px-2 py-1 text-[10px] font-mono rounded transition-colors ${
-                settings.uiTheme === id
-                  ? 'bg-cyan-300/30 border border-cyan-300/60 text-white'
-                  : 'bg-black/40 border border-white/20 text-white/70 hover:bg-white/10'
+              className={`flex-1 py-0.5 ${TOGGLE_OPTION} ${
+                settings.uiTheme === id ? TOGGLE_ACTIVE : TOGGLE_INACTIVE
               }`}
             >
               {label}

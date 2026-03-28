@@ -23,10 +23,28 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
 
-    /* Path aliases */
+    /* Path aliases — keep in sync with vite.config.ts resolve.alias */
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
+      "@components/*": ["src/components/*"],
+      "@config/*": ["src/config/*"],
+      "@controllers/*": ["src/controllers/*"],
+      "@core/*": ["src/core/*"],
+      "@debug/*": ["src/debug/*"],
+      "@domain/*": ["src/domain/*"],
+      "@effects/*": ["src/effects/*"],
+      "@helpers/*": ["src/helpers/*"],
+      "@hooks/*": ["src/hooks/*"],
+      "@objects/*": ["src/objects/*"],
+      "@physics/*": ["src/physics/*"],
+      "@scenes/*": ["src/scenes/*"],
+      "@shaders/*": ["src/shaders/*"],
+      "@state/*": ["src/state/*"],
+      "@styles/*": ["src/styles/*"],
+      "@types/*": ["src/types/*"],
+      "@utils/*": ["src/utils/*"],
+      "@workers/*": ["src/workers/*"],
       "three/examples/jsm/*": ["node_modules/three/examples/jsm/*"]
     },
     

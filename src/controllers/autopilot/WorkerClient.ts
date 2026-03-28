@@ -1,6 +1,6 @@
 import type * as THREE from 'three';
 import type { ThrusterGroups } from '../../config/spacecraftConfig';
-import type { AutopilotConfig } from './types';
+import type { AutopilotConfig, PIDGains } from './types';
 import type { AutopilotModes, AutopilotTelemetry, WorkerInboundMsg, WorkerPlanPathMsg, WorkerThrusterConfig } from './types';
 import { ControlScheduler } from './ControlScheduler';
 
@@ -45,6 +45,16 @@ export class WorkerClient {
         return;
       }
     };
+    this.worker.onerror = (event: ErrorEvent) => {
+      console.error('[WorkerClient] Worker error:', event.message);
+      this.cbs.onError?.(new Error(`Worker error: ${event.message}`));
+      // Permanently disabled — recovery requires calling init() again
+      this.ready = false;
+    };
+    this.worker.onmessageerror = () => {
+      console.error('[WorkerClient] Message deserialization error');
+      this.cbs.onError?.(new Error('Worker message deserialization error'));
+    };
     this.worker.postMessage({
       type: 'init',
       thrusterGroups: params.thrusterGroups,
@@ -61,7 +71,7 @@ export class WorkerClient {
 
   terminate(): void { try { this.worker?.terminate(); } catch {} this.worker = undefined; this.ready = false; }
 
-  setGains(gains: { orientation: { kp: number; ki: number; kd: number }; rotationCancel?: { kp: number; ki: number; kd: number }; position: { kp: number; ki: number; kd: number }; momentum: { kp: number; ki: number; kd: number } }): void { try { this.worker?.postMessage({ type: 'setGains', gains }); } catch {} }
+  setGains(gains: { orientation: PIDGains; rotationCancel?: PIDGains; position: PIDGains; momentum: PIDGains }): void { try { this.worker?.postMessage({ type: 'setGains', gains }); } catch {} }
   setThrusterStrengths(strengths: number[]): void { try { this.worker?.postMessage({ type: 'setThrusterStrengths', strengths }); } catch {} }
   setThrusterGroups(groups: ThrusterGroups): void { try { this.worker?.postMessage({ type: 'setThrusterGroups', groups }); } catch {} }
   setThrusters(thrusters: WorkerThrusterConfig[]): void { try { this.worker?.postMessage({ type: 'setThrusters', thrusters }); } catch {} }
@@ -77,6 +87,8 @@ export class WorkerClient {
   postUpdate(controlDt: number, payload: { snapshot: Snapshot; active: AutopilotModes; targetPos: [number, number, number]; targetQuat: [number, number, number, number]; refVel: [number, number, number]; finalTarget?: [number, number, number]; obstacles?: Array<{ pos: [number, number, number]; radius: number }>; craftRadius?: number; trackRef?: boolean; rotScale?: number; }): void {
     try { this.worker!.postMessage({ type: 'update', dt: controlDt, ...payload }); } catch {}
   }
+
+  setSpeedLimit(maxSpeed: number | null): void { try { this.worker?.postMessage({ type: 'setSpeedLimit', maxSpeed }); } catch {} }
 
   planPath(id: number, start: [number, number, number], goal: [number, number, number], obstacles: WorkerPlanPathMsg['obstacles']): void {
     try { this.worker?.postMessage({ type: 'planPath', id, start, goal, obstacles }); } catch {}

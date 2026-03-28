@@ -35,6 +35,9 @@ export class TraceVisualizer {
     private prevGradientEnabled: boolean = false;
     private prevPalette: 'turbo' | 'viridis' = 'turbo';
     private runtimeState: SimulationRuntimeStatePort;
+    // Throttle trace event emission to reduce state propagation overhead (10 Hz instead of 60 Hz)
+    private lastTraceEmitTime: number = 0;
+    private readonly TRACE_EMIT_INTERVAL: number = 100; // ms
 
     constructor(
         private scene: THREE.Scene,
@@ -175,9 +178,13 @@ export class TraceVisualizer {
         if (posAttr) posAttr.needsUpdate = true;
         if (colAttr) colAttr.needsUpdate = true;
         this.traceGeometry.setDrawRange(0, this.traceCount);
-        try {
-            emitTraceSampleAppended({ spacecraftId, sample: { t: performance.now(), x: pos.x, y: pos.y, z: pos.z, speed, accel, forceAbs, forceNet } });
-        } catch {}
+        const now = performance.now();
+        if (now - this.lastTraceEmitTime >= this.TRACE_EMIT_INTERVAL) {
+            this.lastTraceEmitTime = now;
+            try {
+                emitTraceSampleAppended({ spacecraftId, sample: { t: now, x: pos.x, y: pos.y, z: pos.z, speed, accel, forceAbs, forceNet } });
+            } catch {}
+        }
     }
 
     private growTraceCapacity(): void {

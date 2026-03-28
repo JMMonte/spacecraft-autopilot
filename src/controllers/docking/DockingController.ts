@@ -10,6 +10,7 @@ import { buildDockingInfo } from './DockingInfo';
 
 export type DockingPhase = 'idle' | 'approach' | 'align' | 'dock' | 'docked';
 
+
 export class DockingController {
     private spacecraft: Spacecraft;
     private targetSpacecraft: Spacecraft | null = null;
@@ -106,9 +107,6 @@ export class DockingController {
     private calculateFinalPosition(targetPort: THREE.Vector3, targetDir: THREE.Vector3): THREE.Vector3 {
         if (!this.ourPortId || !this.targetSpacecraft || !this.targetPortId) return targetPort.clone();
 
-        const ourPortDir = this.spacecraft.getDockingPortWorldDirection(this.ourPortId);
-        if (!ourPortDir) return targetPort.clone();
-
         // Get dimensions
         const ourBoxDepth = this.spacecraft.objects.boxDepth;
         const ourDockingPortDepth = this.spacecraft.objects.dockingPortDepth || 0.3;
@@ -116,14 +114,13 @@ export class DockingController {
         const targetDockingPortLength = this.targetSpacecraft.objects.dockingPortLength || 0.1;
 
         // Calculate docking point at the TARGET PORT FACE (center-of-face)
-        // The face lies at +length/2 along the target port direction from the port center.
         const dockingPoint = targetPort.clone().add(targetDir.clone().multiplyScalar(+targetDockingPortLength * 0.5));
 
-        // Offset from docking point to OUR CENTER OF MASS so our FACE lands on dockingPoint
+        // Offset from docking point to OUR CENTER OF MASS so our FACE lands on dockingPoint.
+        // Use targetDir (stable) instead of ourPortDir (wobbles with orientation jitter).
+        // For correct docking, our port axis = -targetDir, so -ourPortDir ≈ targetDir.
         const ourFaceToCOM = (ourBoxDepth / 2) + ourDockingPortDepth + (ourDockingPortLength * 0.5);
-
-        // Move opposite our port direction by the face-to-COM distance
-        return dockingPoint.clone().add(ourPortDir.clone().multiplyScalar(-ourFaceToCOM));
+        return dockingPoint.clone().add(targetDir.clone().multiplyScalar(ourFaceToCOM));
     }
 
     private updateTrajectory(): void {
@@ -132,8 +129,8 @@ export class DockingController {
         const info = this.getSpacecraftInfo();
         if (!info || !info.ports.ourDirection || !info.ports.targetDirection) return;
 
-        // Calculate safe distance based on spacecraft dimensions plus extra margin
-        const safeDistance = (info.our.fullDimensions.z + info.target.fullDimensions.z) * 3.0;
+        // Standoff distance (must match approach phase calculation)
+        const safeDistance = Math.max(2.0, (info.our.fullDimensions.z + info.target.fullDimensions.z) * 0.8);
 
         const waypoints: THREE.Vector3[] = [info.ports.ourPosition.clone()];
 
@@ -257,6 +254,9 @@ export class DockingController {
         // Always operate relative to the target spacecraft during docking
         if (autopilot) {
             autopilot.setReferenceObject(this.targetSpacecraft);
+            // Exclude the entire target compound (target + all docked to it) from obstacle avoidance.
+            // The standoff point placement handles body clearance.
+            autopilot.setObstacleExclusions(this.targetSpacecraft.getCompoundMembers());
         }
 
         // Gather current info for guidance and physical checks
@@ -298,8 +298,11 @@ export class DockingController {
         switch (this.phase) {
             case 'approach': {
                 if (!autopilot) break;
-                // Clearance offset from target port along negative port axis
-                const safeDistance = (info.our.fullDimensions.z + info.target.fullDimensions.z) * 3.0;
+                // No speed limit during approach — fly at full speed
+                autopilot.setGoToSpeedLimit(null);
+
+                // Standoff distance: enough room to stop and align, not more
+                const safeDistance = Math.max(2.0, (info.our.fullDimensions.z + info.target.fullDimensions.z) * 0.8);
                 const targLen = this.targetSpacecraft.objects.dockingPortLength || 0.1;
                 const approachPos = this.calculateApproachPosition(
                     info.ports.targetPosition,
@@ -307,35 +310,39 @@ export class DockingController {
                     safeDistance,
                     targLen
                 );
+
+                // (obstacle exclusions set at top of update() — entire target compound excluded)
+
                 this.driveAutopilot(autopilot, {
                     goToPosition: { enabled: true, position: approachPos },
                     orientationMatch: { enabled: !!targetQuat, orientation: targetQuat || undefined },
                     cancelLinearMotion: { enabled: false }
                 });
-                // Transition when close and oriented reasonably
+                // Transition to align phase when close enough
                 const dist = this.spacecraft.getWorldPosition().distanceTo(approachPos);
                 const orientErr = this.getOrientationErrorRad(targetQuat);
                 const distThresh = Math.max(0.2, Math.min(2.0, safeDistance * 0.06));
-                const orientThresh = 8 * Math.PI / 180; // 8 degrees
-                if (dist < distThresh && orientErr < orientThresh && this.isStable(0.25)) {
-                    this.phase = 'dock';
-                    this.updateTrajectory(); // refresh visuals to final leg
+                const orientThresh = 5 * Math.PI / 180; // 5 degrees
+                if (dist < distThresh && orientErr < orientThresh && this.isStable(0.2)) {
+                    this.phase = 'align';
+                    this.updateTrajectory();
                 }
                 break;
             }
 
             case 'align': {
                 if (!autopilot) break;
+                // Hold position, refine attitude before final approach
+                autopilot.setGoToSpeedLimit(null);
                 this.driveAutopilot(autopilot, {
                     goToPosition: { enabled: false },
                     orientationMatch: { enabled: !!targetQuat, orientation: targetQuat || undefined },
                     cancelLinearMotion: { enabled: true }
                 });
 
-                const currentQuat = this.spacecraft.getWorldOrientation();
-                const angleDiff = targetQuat ? currentQuat.angleTo(targetQuat) : Infinity;
-
-                if (angleDiff < 0.05 && this.isStable(0.1, 0.05)) { // Tighter alignment requirements
+                const orientErrAlign = this.getOrientationErrorRad(targetQuat);
+                const alignThresh = 3 * Math.PI / 180; // 3 degrees
+                if (orientErrAlign < alignThresh && this.isStable(0.05, 0.03)) {
                     this.phase = 'dock';
                     this.updateTrajectory();
                 }
@@ -344,10 +351,17 @@ export class DockingController {
 
             case 'dock': {
                 if (!autopilot) break;
+                // (obstacle exclusions set at top of update() — entire target compound excluded)
                 const finalPos = this.calculateFinalPosition(
                     info.ports.targetPosition,
                     info.ports.targetDirection
                 );
+
+                // Range-based speed limit: ramp down from 0.3 m/s to 0.03 m/s
+                const range = this.spacecraft.getWorldPosition().distanceTo(finalPos);
+                const dockSpeedLimit = Math.max(0.03, Math.min(0.3, range * 0.15));
+                autopilot.setGoToSpeedLimit(dockSpeedLimit);
+
                 this.driveAutopilot(autopilot, {
                     goToPosition: { enabled: true, position: finalPos },
                     orientationMatch: { enabled: !!targetQuat, orientation: targetQuat || undefined },
@@ -445,9 +459,11 @@ export class DockingController {
             this.phase = 'docked';
             this.trajectoryVisualizer.clearDebugObjects();
             try { emitDockingPlanChanged({ plan: null }); } catch {}
-            
+
             const autopilot = this.spacecraft.spacecraftController?.autopilot;
             if (autopilot) {
+                autopilot.setGoToSpeedLimit(null);
+                autopilot.setObstacleExclusions([]);
                 autopilot.resetAllModes();
                 autopilot.setReferenceObject(null);
                 autopilot.setEnabled(false);
@@ -482,7 +498,7 @@ export class DockingController {
         }
 
         // Fallback: allow undocking even if phase wasn't set by DockingController
-        const occupied = (['front', 'back'] as const).find(pid => this.spacecraft.dockingPorts[pid].isOccupied);
+        const occupied = Object.keys(this.spacecraft.dockingPorts).find(pid => this.spacecraft.dockingPorts[pid]?.isOccupied);
         if (occupied) {
             this.spacecraft.undock(occupied);
             this.cancelDocking();
@@ -501,9 +517,13 @@ export class DockingController {
         if (reg) this.updateSpacecraftLists(reg.getSpacecraftList() as Spacecraft[]);
 
         this.trajectoryVisualizer.clearDebugObjects();
-        // Clear reference mode on autopilot if set
+        // Restore speed limit, obstacle exclusions, and clear reference mode
         const ap = this.spacecraft.spacecraftController?.autopilot;
-        ap?.setReferenceObject(null);
+        if (ap) {
+            ap.setGoToSpeedLimit(null);
+            ap.setObstacleExclusions([]);
+            ap.setReferenceObject(null);
+        }
     }
 
     public cleanup(): void {

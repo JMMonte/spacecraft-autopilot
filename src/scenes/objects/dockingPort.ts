@@ -1,6 +1,17 @@
 import * as THREE from 'three';
 import type { PhysicsEngine, RigidBody } from '../../physics';
 
+export interface PortConfig {
+    id: string;
+    /** Local position of the port face center */
+    localPosition: { x: number; y: number; z: number };
+    /** Local direction the port faces (unit vector) */
+    localDirection: { x: number; y: number; z: number };
+}
+
+/** Common prefix used to tag all port-related children for cleanup. */
+const PORT_TAG = '__dockingPort__';
+
 export class DockingPortManager {
     constructor(
         private boxDepth: number,
@@ -11,11 +22,12 @@ export class DockingPortManager {
     ) {}
 
     private colliderHandles: unknown[] = [];
-    public cameras: Partial<Record<'front' | 'back', THREE.PerspectiveCamera>> = {};
-    private spotlights: Partial<Record<'front' | 'back', THREE.SpotLight>> = {};
-    private lightTargets: Partial<Record<'front' | 'back', THREE.Object3D>> = {};
-    private lampMeshes: Partial<Record<'front' | 'back', THREE.Mesh>> = {};
-    private lightsState: Partial<Record<'front' | 'back', boolean>> = { front: false, back: false };
+    public cameras: Record<string, THREE.PerspectiveCamera> = {};
+    private spotlights: Record<string, THREE.SpotLight> = {};
+    private lightTargets: Record<string, THREE.Object3D> = {};
+    private lampMeshes: Record<string, THREE.Mesh> = {};
+    private lightsState: Record<string, boolean> = {};
+    private portConfigs: PortConfig[] = [];
     private spotlightParams: { intensity: number; angle: number; distance: number; decay: number; penumbra: number } = {
         // Stronger default flashlight power
         intensity: 10.0,
@@ -26,6 +38,24 @@ export class DockingPortManager {
         penumbra: 0.3,
     };
 
+    public setPortConfigs(configs: PortConfig[]): void {
+        this.portConfigs = configs;
+    }
+
+    /** Build default front/back port configs from box depth. */
+    private getEffectiveConfigs(): Array<{ name: string; id: string; localPos: THREE.Vector3; dirVec: THREE.Vector3 }> {
+        const configs = this.portConfigs.length > 0 ? this.portConfigs : [
+            { id: 'front', localPosition: { x: 0, y: 0, z: this.boxDepth / 2 + this.dockingPortDepth }, localDirection: { x: 0, y: 0, z: 1 } },
+            { id: 'back', localPosition: { x: 0, y: 0, z: -this.boxDepth / 2 - this.dockingPortDepth }, localDirection: { x: 0, y: 0, z: -1 } },
+        ];
+        return configs.map(c => ({
+            name: `dockingPort_${c.id}`,
+            id: c.id,
+            localPos: new THREE.Vector3(c.localPosition.x, c.localPosition.y, c.localPosition.z),
+            dirVec: new THREE.Vector3(c.localDirection.x, c.localDirection.y, c.localDirection.z).normalize(),
+        }));
+    }
+
     public addDockingPorts(
         box: THREE.Mesh,
         _boxBody: any,
@@ -33,12 +63,13 @@ export class DockingPortManager {
         rigid?: RigidBody | null,
         physics?: PhysicsEngine | null
     ): void {
-        const portPositions = [
-            { name: "dockingPortFront", id: 'front' as const, z: this.boxDepth / 2 + this.dockingPortDepth, angle: 0 },
-            { name: "dockingPortBack", id: 'back' as const, z: -this.boxDepth / 2 - this.dockingPortDepth, angle: Math.PI }
-        ];
+        const portEntries = this.getEffectiveConfigs();
 
-        portPositions.forEach(({ name, id, z, angle }) => {
+        portEntries.forEach(({ name, id, localPos, dirVec }) => {
+            // Compute rotation quaternion: rotate cylinder Y-axis to match port direction
+            const cylAxisDefault = new THREE.Vector3(0, 1, 0);
+            const rotQuat = new THREE.Quaternion().setFromUnitVectors(cylAxisDefault, dirVec);
+
             // Create the main cylinder
             const cylinderGeometry = new THREE.CylinderGeometry(
                 this.dockingPortRadius,
@@ -48,13 +79,15 @@ export class DockingPortManager {
             );
             const cylinder = new THREE.Mesh(cylinderGeometry, material);
             cylinder.name = name;
-            cylinder.rotation.x = Math.PI / 2;
-            cylinder.position.z = z;
+            cylinder.userData[PORT_TAG] = true;
+            cylinder.quaternion.copy(rotQuat);
+            cylinder.position.copy(localPos);
             cylinder.castShadow = true;
             cylinder.receiveShadow = true;
             box.add(cylinder);
 
             // Create the outer ring (torus)
+            // Torus lies in XY plane by default; we need it perpendicular to dirVec
             const torusGeometry = new THREE.TorusGeometry(
                 this.dockingPortRadius,
                 0.05,
@@ -63,22 +96,22 @@ export class DockingPortManager {
             );
             const torus = new THREE.Mesh(torusGeometry, material);
             torus.name = `${name}Ring`;
-            torus.rotation.y = angle;
-            torus.position.z = z;
+            torus.userData[PORT_TAG] = true;
+            // Torus default normal is Z; rotate so normal aligns with dirVec
+            const torusQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dirVec);
+            torus.quaternion.copy(torusQuat);
+            torus.position.copy(localPos);
             torus.castShadow = true;
             torus.receiveShadow = true;
             box.add(torus);
 
             // Attach physics collider if a physics engine/body is provided (Rapier supported)
             if (physics?.attachCylinderCollider && rigid) {
-                // Rapier's cylinder is along Y; rotate it so it extends along Z like the mesh
-                const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+                // Rapier's cylinder is along Y; rotate it to align with port direction
                 const handle = physics.attachCylinderCollider(rigid, this.dockingPortRadius, this.dockingPortLength, {
-                    translation: { x: 0, y: 0, z },
-                    rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
-                    // Enable physical contact for docking ports so they collide and contribute to mass.
+                    translation: { x: localPos.x, y: localPos.y, z: localPos.z },
+                    rotation: { x: rotQuat.x, y: rotQuat.y, z: rotQuat.z, w: rotQuat.w },
                     isSensor: false,
-                    // Set density to material density so the port's mass is physically represented by the collider.
                     density: this.dockingPortMaterialDensity,
                     friction: 0.6,
                     restitution: 0.1,
@@ -87,24 +120,25 @@ export class DockingPortManager {
             }
 
             // Create and attach a perspective camera at this docking port
-            // Use a large far plane to leverage logarithmic depth precision
             const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1e9);
             camera.name = `${name}Camera`;
-            // Place the camera slightly outside the port so geometry doesn't clip
-            const offset = (this.dockingPortLength / 2) + 0.05;
-            camera.position.set(0, 0, z + (id === 'front' ? offset : -offset));
-            // Cameras in Three.js look down -Z by default.
-            // Front port needs to look along +Z; back port along -Z.
-            // Since camera is parented to the box, rotate Y by PI only for the front port.
-            if (id === 'front') {
-                camera.rotation.y = Math.PI;
-            }
-            // Add to the main box so it inherits spacecraft transforms
+            camera.userData[PORT_TAG] = true;
+            // Place the camera slightly outside the port face
+            const camOffset = (this.dockingPortLength / 2) + 0.05;
+            const camPos = localPos.clone().add(dirVec.clone().multiplyScalar(camOffset));
+            camera.position.copy(camPos);
+            // Camera looks down -Z by default; rotate so it looks along dirVec
+            // We want the camera's -Z to point along dirVec, so align +Z with -dirVec
+            const camLookQuat = new THREE.Quaternion().setFromUnitVectors(
+                new THREE.Vector3(0, 0, -1),
+                dirVec
+            );
+            camera.quaternion.copy(camLookQuat);
             box.add(camera);
             camera.updateProjectionMatrix();
             this.cameras[id] = camera;
 
-            // Add a small off-center cylinder acting as a lamp housing
+            // Lamp housing
             const lampRadius = Math.max(this.dockingPortRadius * 0.1, 0.02);
             const lampLength = Math.max(this.dockingPortLength * 0.2, 0.03);
             const lampGeom = new THREE.CylinderGeometry(lampRadius, lampRadius, lampLength, 16);
@@ -117,18 +151,24 @@ export class DockingPortManager {
             });
             const lamp = new THREE.Mesh(lampGeom, lampMat);
             lamp.name = `${name}Lamp`;
+            lamp.userData[PORT_TAG] = true;
             lamp.castShadow = true;
             lamp.receiveShadow = true;
-            // Align cylinder along Z (default is Y), and position off-center on X
-            lamp.rotation.x = Math.PI / 2;
-            // Place lamp slightly off-center near the rim (not too far out)
+            // Align lamp cylinder along port direction
+            lamp.quaternion.copy(rotQuat);
+            // Place lamp at port face + clearance, offset to the side
             const radialOffset = Math.max(this.dockingPortRadius * 1.0, lampRadius);
-            const zClearance = (this.dockingPortLength / 2) + (lampLength / 2) + 0;
-            lamp.position.set(radialOffset, 0, z + (id === 'front' ? zClearance : -zClearance));
+            const zClearance = (this.dockingPortLength / 2) + (lampLength / 2);
+            // Compute a perpendicular vector for radial offset
+            const perpVec = this.computePerpendicular(dirVec);
+            const lampPos = localPos.clone()
+                .add(dirVec.clone().multiplyScalar(zClearance))
+                .add(perpVec.clone().multiplyScalar(radialOffset));
+            lamp.position.copy(lampPos);
             box.add(lamp);
             this.lampMeshes[id] = lamp;
 
-            // Create a SpotLight near the lamp, pointing outward along port direction
+            // SpotLight
             const spot = new THREE.SpotLight(
                 0xffffff,
                 this.spotlightParams.intensity,
@@ -138,20 +178,26 @@ export class DockingPortManager {
                 this.spotlightParams.decay
             );
             spot.name = `${name}SpotLight`;
+            spot.userData[PORT_TAG] = true;
             spot.castShadow = true;
-            // Soften shadows a bit
             spot.shadow.mapSize.width = 1024;
             spot.shadow.mapSize.height = 1024;
             spot.shadow.bias = -0.0001;
-            // Place light slightly ahead of the lamp so it doesn't self-shadow harshly
-            const forward = zClearance + 0.05;
-            spot.position.set(radialOffset, 0, z + (id === 'front' ? forward : -forward));
+            const spotForward = zClearance + 0.05;
+            const spotPos = localPos.clone()
+                .add(dirVec.clone().multiplyScalar(spotForward))
+                .add(perpVec.clone().multiplyScalar(radialOffset));
+            spot.position.copy(spotPos);
             spot.visible = !!this.lightsState[id];
 
-            // Create and place target so the light points straight out of the port
+            // SpotLight target
             const target = new THREE.Object3D();
             target.name = `${name}SpotTarget`;
-            target.position.set(radialOffset, 0, z + (id === 'front' ? forward + 2 : -forward - 2));
+            target.userData[PORT_TAG] = true;
+            const targetPos = localPos.clone()
+                .add(dirVec.clone().multiplyScalar(spotForward + 2))
+                .add(perpVec.clone().multiplyScalar(radialOffset));
+            target.position.copy(targetPos);
             box.add(target);
             spot.target = target;
 
@@ -161,33 +207,22 @@ export class DockingPortManager {
         });
     }
 
+    /** Compute an arbitrary perpendicular vector to the given direction. */
+    private computePerpendicular(dir: THREE.Vector3): THREE.Vector3 {
+        const up = Math.abs(dir.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+        return new THREE.Vector3().crossVectors(dir, up).normalize();
+    }
+
     public removeDockingPorts(box: THREE.Mesh, _boxBody: any, physics?: PhysicsEngine | null): void {
-        // Remove visual elements
-        const visualToRemove = box.children.filter(
-            child =>
-                child.name === 'dockingPortFront' ||
-                child.name === 'dockingPortBack' ||
-                child.name === 'dockingPortFrontRing' ||
-                child.name === 'dockingPortBackRing' ||
-                child.name === 'dockingPortFrontCamera' ||
-                child.name === 'dockingPortBackCamera' ||
-                child.name === 'dockingPortFrontLamp' ||
-                child.name === 'dockingPortBackLamp' ||
-                child.name === 'dockingPortFrontSpotLight' ||
-                child.name === 'dockingPortBackSpotLight' ||
-                child.name === 'dockingPortFrontSpotTarget' ||
-                child.name === 'dockingPortBackSpotTarget'
-        );
-        visualToRemove.forEach(obj => {
+        // Remove all children tagged with our port marker
+        const toRemove = box.children.filter(child => child.userData[PORT_TAG]);
+        toRemove.forEach(obj => {
             box.remove(obj);
             if (obj instanceof THREE.Mesh) {
                 obj.geometry.dispose();
                 if (obj.material instanceof THREE.Material) {
                     obj.material.dispose();
                 }
-            }
-            if (obj instanceof THREE.Camera) {
-                // Nothing to dispose for Camera, but ensure it's removed
             }
         });
 
@@ -214,17 +249,23 @@ export class DockingPortManager {
     }
 
     public setDockingLightsEnabled(enabled: boolean): void {
-        this.setDockingLightEnabled('front', enabled);
-        this.setDockingLightEnabled('back', enabled);
+        for (const id of Object.keys(this.spotlights)) {
+            this.setDockingLightEnabled(id, enabled);
+        }
+        // Also handle ports that may not have spotlights yet
+        for (const id of Object.keys(this.lampMeshes)) {
+            if (!(id in this.spotlights)) {
+                this.setDockingLightEnabled(id, enabled);
+            }
+        }
     }
 
-    public setDockingLightEnabled(id: 'front' | 'back', enabled: boolean): void {
+    public setDockingLightEnabled(id: string, enabled: boolean): void {
         this.lightsState[id] = enabled;
         const light = this.spotlights[id];
         if (light) light.visible = enabled;
-        const lamp = this.lampMeshes[id];
-        if (lamp && lamp.material && (lamp.material as any).emissive) {
-            const mat = lamp.material as THREE.MeshStandardMaterial;
+        const mat = this.lampMeshes[id]?.material as THREE.MeshStandardMaterial | undefined;
+        if (mat?.emissive) {
             mat.emissive.setHex(enabled ? 0xffffbb : 0x000000);
             mat.emissiveIntensity = enabled ? 2.0 : 0.0;
             mat.needsUpdate = true;
@@ -234,7 +275,8 @@ export class DockingPortManager {
     /** Get current spotlight parameters (shared across ports). */
     public getDockingLightParams(): { intensity: number; angle: number; distance: number; decay: number; penumbra: number } {
         // Prefer reading from an existing spotlight to reflect runtime changes
-        const ref = this.spotlights.front || this.spotlights.back;
+        const spotIds = Object.keys(this.spotlights);
+        const ref = spotIds.length > 0 ? this.spotlights[spotIds[0]] : undefined;
         if (ref) {
             return {
                 intensity: ref.intensity,
@@ -261,14 +303,14 @@ export class DockingPortManager {
         if (params.penumbra !== undefined) this.spotlightParams.penumbra = clamp(params.penumbra, 0, 1);
 
         // Apply to existing lights
-        (['front', 'back'] as const).forEach((id) => {
+        for (const id of Object.keys(this.spotlights)) {
             const light = this.spotlights[id];
-            if (!light) return;
+            if (!light) continue;
             if (params.intensity !== undefined) light.intensity = this.spotlightParams.intensity;
             if (params.angle !== undefined) light.angle = this.spotlightParams.angle;
             if (params.distance !== undefined) light.distance = this.spotlightParams.distance;
             if (params.decay !== undefined) light.decay = this.spotlightParams.decay;
             if (params.penumbra !== undefined) light.penumbra = this.spotlightParams.penumbra;
-        });
+        }
     }
 }

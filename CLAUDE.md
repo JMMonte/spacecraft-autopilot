@@ -102,7 +102,7 @@ Three themes (a/b/c) via CSS custom properties in `src/styles/global.css`. Theme
 ### Build
 
 - Vite 7 with manual chunks: vendor (Three.js), loaders, scenes, controllers
-- 10 path aliases: @, @components, @styles, @scenes, @controllers, @helpers, @core, @utils, @config
+- 19 path aliases (keep vite.config.ts and tsconfig.json in sync): @, @components, @config, @controllers, @core, @debug, @domain, @effects, @helpers, @hooks, @objects, @physics, @scenes, @shaders, @state, @styles, @types, @utils, @workers
 - WASM bundle (Rapier) causes large chunks — `chunkSizeWarningLimit: 2500` is intentional
 
 ## Testing

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Spacecraft } from '../../core/spacecraft';
 
-export type DockingPortId = 'front' | 'back';
+export type DockingPortId = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 
 // Shared thresholds (kept in one place so UI + controllers stay consistent)
 const ANGLE_THRESHOLD_DEG = 5;           // orientation between port axes

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import { Command } from 'lucide-react';
 import { TopBar } from './TopBar';
@@ -19,13 +19,15 @@ import { SettingsWindow } from './windows/SettingsWindow';
 import { DockingWindow } from './windows/DockingWindow';
 import { DockingCamerasWindow } from './windows/DockingCamerasWindow';
 import { DockingCameraView, PortId as DockingPortId } from './windows/DockingCameraView';
+import { ChartWindow } from './windows/ChartWindow';
+import type { ChartSource } from './windows/ChartWindow';
 import { Spacecraft } from '../core/spacecraft';
 import { useSettings } from '../state/store';
 // FOV inputs now live inside DockingCameraView
 import { useElementSize } from '../hooks/useElementSize';
 import { SpacecraftController } from '../controllers/spacecraftController';
 
-type WindowKey = 'telemetry' | 'horizon' | 'dimensions' | 'rcs' | 'arrows' | 'pid' | 'autopilot' | 'spacecraftList' | 'docking' | 'dockingCameras' | 'settings';
+type WindowKey = 'telemetry' | 'horizon' | 'dimensions' | 'rcs' | 'arrows' | 'pid' | 'autopilot' | 'spacecraftList' | 'docking' | 'dockingCameras' | 'settings' | 'chart';
 
 interface WindowStates extends Record<string, boolean> {
     telemetry: boolean;
@@ -39,6 +41,7 @@ interface WindowStates extends Record<string, boolean> {
     docking: boolean;
     dockingCameras: boolean;
     settings: boolean;
+    chart: boolean;
 }
 
 interface WindowPositions {
@@ -51,6 +54,7 @@ interface CockpitProps {
     loadingProgress?: number;
     loadingStatus?: string;
     onCreateNewSpacecraft?: () => void;
+    onCreateNodeSpacecraft?: (portCount?: 2 | 4 | 6) => void;
     spacecraftListVersion?: number;
 }
 
@@ -92,6 +96,7 @@ const windowSizeHints: Record<WindowKey, { width: number; height: number }> = {
     docking: { width: 340, height: 380 },
     dockingCameras: { width: 320, height: 280 },
     settings: { width: 300, height: 280 },
+    chart: { width: 400, height: 220 },
 };
 
 const rectanglesOverlap = (
@@ -130,6 +135,7 @@ const calculateInitialPositions = (viewportWidth: number): WindowPositions => {
         docking: { x: leftX, y: currentLeftY + horizonHeight + padding * 2 },
         dockingCameras: { x: leftX + 270, y: currentLeftY + horizonHeight + padding * 2 },
         settings: { x: rightX, y: currentRightY + titleBarHeight * 5 + padding * 2 },
+        chart: { x: leftX + 270, y: currentLeftY },
     };
 };
 
@@ -139,10 +145,22 @@ export const Cockpit: React.FC<CockpitProps> = ({
     loadingProgress = 100,
     loadingStatus = '',
     onCreateNewSpacecraft,
+    onCreateNodeSpacecraft,
     spacecraftListVersion = 0
 }) => {
     // Get the world instance directly from the spacecraft
     const world = spacecraft?.basicWorld ?? null;
+
+    // Chart data sources — closures capture spacecraft by ref, read live values at sample time
+    const chartSources = useMemo<ChartSource[]>(() => [
+        { id: 'vel.x', label: 'vel x', color: '#f87171', axis: 'left',  sample: () => spacecraft?.objects?.boxBody?.velocity?.x ?? null },
+        { id: 'vel.y', label: 'vel y', color: '#4ade80', axis: 'left',  sample: () => spacecraft?.objects?.boxBody?.velocity?.y ?? null },
+        { id: 'vel.z', label: 'vel z', color: '#60a5fa', axis: 'left',  sample: () => spacecraft?.objects?.boxBody?.velocity?.z ?? null },
+        { id: 'angvel', label: 'ang vel', color: '#facc15', axis: 'right', sample: () => {
+            const av = spacecraft?.objects?.boxBody?.angularVelocity;
+            return av ? Math.sqrt(av.x * av.x + av.y * av.y + av.z * av.z) : null;
+        }},
+    ], [spacecraft]);
 
     // State
     const [visibleWindows, setVisibleWindows] = useState<WindowStates>({
@@ -157,6 +175,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
         docking: true,
         dockingCameras: false,
         settings: false,
+        chart: false,
     });
     const horizonVisible = visibleWindows.horizon;
     const [windowPositions, setWindowPositions] = useState<WindowPositions>(calculateInitialPositions(typeof window !== 'undefined' ? window.innerWidth : 1024));
@@ -185,6 +204,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
         docking:        initialZ + 9,
         dockingCameras: initialZ + 10,
         settings:       initialZ + 11,
+        chart:          initialZ + 12,
     });
 
     const bringWindowToFront = (key: WindowKey) => {
@@ -880,6 +900,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                                 world={world}
                                 activeSpacecraft={spacecraft}
                                 onCreateSpacecraft={onCreateNewSpacecraft ?? (() => { })}
+                                onCreateNodeSpacecraft={onCreateNodeSpacecraft ?? (() => { })}
                                 onSelectSpacecraft={handleSelectSpacecraft}
                                 onDeleteSpacecraft={handleDeleteSpacecraft}
                                 version={spacecraftListVersion}
@@ -1041,6 +1062,22 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             <SettingsWindow world={world} />
                         </DraggableWindow>
                     )}
+                    {visibleWindows.chart && (
+                        <DraggableWindow
+                            title="Chart"
+                            defaultPosition={windowPositions.chart}
+                            onPositionChange={(pos) => updateWindowPosition('chart', pos)}
+                            onClose={() => toggleWindow('chart')}
+                            resizable={true}
+                            defaultWidth={400}
+                            defaultHeight={220}
+                            isVisible={visibleWindows.chart}
+                            zIndex={windowZ.chart}
+                            onFocus={() => bringWindowToFront('chart')}
+                        >
+                            <ChartWindow sources={chartSources} />
+                        </DraggableWindow>
+                    )}
                     {Object.values(cameraWindows).filter(w => w.open).map(w => {
                         const sc = world?.getSpacecraftList?.().find(s => s.uuid === w.spacecraftUuid) ?? null;
                         const title = `Docking Camera: ${sc?.name ?? 'Unknown'} ${w.portId === 'front' ? 'Front' : 'Back'}`;
@@ -1053,7 +1090,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                                 initiallyCollapsed={false}
                                 isVisible={true}
                                 resizable={true}
-                                defaultSize={w.size}
+                                defaultWidth={w.size.width}
+                                defaultHeight={w.size.height}
                                 onSizeChange={(size) => setCameraWindowSize(w.key, size)}
                                 onClose={() => toggleCameraWindow(w.spacecraftUuid, w.portId)}
                                 zIndex={cameraWindowZ[w.key]}
@@ -1072,7 +1110,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                 </div>
 
                 <button
-                    className="fixed bottom-2 right-2 w-6 h-6 bg-black/60 rounded flex items-center justify-center text-white/90 cursor-pointer text-xs hover:bg-white/20 transition-colors duration-200 border border-white/20 pointer-events-auto drop-shadow-md"
+                    className="fixed bottom-2 right-2 w-6 h-6 bg-black/60 rounded flex items-center justify-center text-white/90 cursor-pointer text-[10px] hover:bg-white/20 transition-colors border border-white/20 pointer-events-auto"
                     onClick={() => setShowKeyboardShortcuts(true)}
                 >
                     <Command size={14} />

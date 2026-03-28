@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { emitAutopilotStateChanged } from '../../domain/simulationEvents';
 import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
-import type { AutopilotConfig } from './types';
+import type { AutopilotConfig, PIDGains } from './types';
 import { CancelRotation } from './CancelRotation';
 import { CancelLinearMotion } from './CancelLinearMotion';
 import { PointToPosition } from './PointToPosition';
@@ -80,9 +80,9 @@ export class Autopilot implements IAutopilot {
         thrusterMax: number[],
         options: {
             pidGains?: {
-                orientation?: { kp: number; ki: number; kd: number; };
-                position?: { kp: number; ki: number; kd: number; };
-                momentum?: { kp: number; ki: number; kd: number; };
+                orientation?: PIDGains;
+                position?: PIDGains;
+                momentum?: PIDGains;
             };
             maxForce?: number;
             dampingFactor?: number;
@@ -204,20 +204,20 @@ export class Autopilot implements IAutopilot {
     }
 
     private forEachMode(fn: (m: AutopilotModeBase) => void): void {
-        try { fn(this.cancelRotationMode as unknown as AutopilotModeBase); } catch {}
-        try { fn(this.cancelLinearMotionMode as unknown as AutopilotModeBase); } catch {}
-        try { fn(this.pointToPositionMode as unknown as AutopilotModeBase); } catch {}
-        try { fn(this.orientationMatchMode as unknown as AutopilotModeBase); } catch {}
-        try { fn(this.goToPositionMode as unknown as AutopilotModeBase); } catch {}
+        try { fn(this.cancelRotationMode as unknown as AutopilotModeBase); } catch (err) { this.log.warn('forEachMode: cancelRotation failed', err); }
+        try { fn(this.cancelLinearMotionMode as unknown as AutopilotModeBase); } catch (err) { this.log.warn('forEachMode: cancelLinearMotion failed', err); }
+        try { fn(this.pointToPositionMode as unknown as AutopilotModeBase); } catch (err) { this.log.warn('forEachMode: pointToPosition failed', err); }
+        try { fn(this.orientationMatchMode as unknown as AutopilotModeBase); } catch (err) { this.log.warn('forEachMode: orientationMatch failed', err); }
+        try { fn(this.goToPositionMode as unknown as AutopilotModeBase); } catch (err) { this.log.warn('forEachMode: goToPosition failed', err); }
     }
 
     private setRotationAllocationScale(scale: number): void {
         const s = THREE.MathUtils.clamp(scale, 0, 1);
-        try { this.cancelRotationMode.setAllocationScale(s); } catch {}
-        try { this.orientationMatchMode.setAllocationScale(s); } catch {}
-        try { this.pointToPositionMode.setAllocationScale(s); } catch {}
-        try { this.cancelLinearMotionMode.setAllocationScale(1.0); } catch {}
-        try { this.goToPositionMode.setAllocationScale(1.0); } catch {}
+        try { this.cancelRotationMode.setAllocationScale(s); } catch (err) { this.log.warn('setRotationAllocationScale: cancelRotation failed', err); }
+        try { this.orientationMatchMode.setAllocationScale(s); } catch (err) { this.log.warn('setRotationAllocationScale: orientationMatch failed', err); }
+        try { this.pointToPositionMode.setAllocationScale(s); } catch (err) { this.log.warn('setRotationAllocationScale: pointToPosition failed', err); }
+        try { this.cancelLinearMotionMode.setAllocationScale(1.0); } catch (err) { this.log.warn('setRotationAllocationScale: cancelLinearMotion failed', err); }
+        try { this.goToPositionMode.setAllocationScale(1.0); } catch (err) { this.log.warn('setRotationAllocationScale: goToPosition failed', err); }
     }
 
     private initializeModes(): void {
@@ -361,7 +361,7 @@ export class Autopilot implements IAutopilot {
                 }
             };
             this.workerClient.setGains(gains);
-        } catch { }
+        } catch (err) { this.log.warn('syncPidGainsToWorker: failed to push gains to worker', err); }
     }
 
     // Worker calibration is no longer used; tuning happens via PID window-triggered autoTune
@@ -372,21 +372,21 @@ export class Autopilot implements IAutopilot {
         // Update all mode instances
         this.forEachMode((m) => m.setThrusterMax(arr));
         // Inform worker
-        try { this.workerClient?.setThrusterStrengths(arr); } catch { }
+        try { this.workerClient?.setThrusterStrengths(arr); } catch (err) { this.log.warn('setThrusterStrengths: worker update failed', err); }
     }
 
     // Adjust the scalar thrust budget used by allocation helpers across all modes
     public setThrust(value: number): void {
         this.thrust = value;
         this.forEachMode((m) => m.setThrust(value));
-        try { this.workerClient?.setThrust(value); } catch { }
+        try { this.workerClient?.setThrust(value); } catch (err) { this.log.warn('setThrust: worker update failed', err); }
     }
 
     // Dynamically update thruster grouping after geometry changes
     public setThrusterGroups(groups: ThrusterGroups): void {
         this.thrusterGroups = groups;
         this.forEachMode((m) => m.setThrusterGroups(groups));
-        try { this.workerClient?.setThrusterGroups(groups); } catch { }
+        try { this.workerClient?.setThrusterGroups(groups); } catch (err) { this.log.warn('setThrusterGroups: worker update failed', err); }
     }
 
     // Push current thruster transforms (position+direction) to worker and clear caps caches
@@ -398,8 +398,8 @@ export class Autopilot implements IAutopilot {
             }));
             // Invalidate caps on all modes (thruster layout affects torque capacities)
             this.forEachMode((m) => m.invalidateCaps());
-            try { this.workerClient?.setThrusters(thrusters); } catch { }
-        } catch { }
+            try { this.workerClient?.setThrusters(thrusters); } catch (err) { this.log.warn('refreshThrusters: worker setThrusters failed', err); }
+        } catch (err) { this.log.warn('refreshThrusters: failed to rebuild thruster data', err); }
     }
 
     // Sets a moving reference for translation modes (relative motion)
@@ -592,12 +592,14 @@ export class Autopilot implements IAutopilot {
             const rotScale = 0.25 + 0.75 * near;
             this.setRotationAllocationScale(rotScale);
             this._rotScaleRuntime = rotScale;
-        } catch {}
+        } catch (err) { this.log.warn('stepUpdateRotationAllocationScale: failed', err); }
     }
 
     private stepUpdatePathFollowing(dt: number): void {
         if (!this.activeAutopilots.goToPosition) return;
         this.pathManager.tick(dt);
+
+        // (obstacle exclusions are managed per-phase by DockingController via setObstacleExclusions)
 
         // Periodic recheck: update obstacles and recompute avoidance waypoints if needed
         if (this.pathManager.isTimeToReplan()) {
@@ -607,7 +609,7 @@ export class Autopilot implements IAutopilot {
             // Update obstacle list for repulsive avoidance (main thread + cache for worker)
             try {
                 const rawObs = this.pathManager.collectObstacles(this.spacecraft);
-                const dims = this.spacecraft.getMainBodyDimensions();
+                const dims = this.spacecraft.getFullDimensions();
                 const craftR = Math.max(dims.x, dims.y, dims.z);
                 const obsData = rawObs.map(o => ({
                     position: o.position,
@@ -619,7 +621,7 @@ export class Autopilot implements IAutopilot {
                     radius: o.radius,
                 }));
                 this.cachedCraftRadius = craftR;
-            } catch {}
+            } catch (err) { this.log.warn('stepUpdatePathFollowing: obstacle cache update failed', err); }
 
             if (this.pathManager.shouldReplan(this.spacecraft, sNow, gNow)) {
                 this.computeAndSetAvoidanceWaypoints();
@@ -634,9 +636,16 @@ export class Autopilot implements IAutopilot {
             const distToWp = this.spacecraft.getWorldPositionRef().distanceTo(currentWp);
             const isLast = this.currentWaypointIdx >= this.avoidanceWaypoints.length - 1;
 
-            // Advance to next waypoint if close to intermediate one
-            if (!isLast && distToWp < 3.0) {
-                this.currentWaypointIdx++;
+            // Advance to next waypoint if close enough.
+            // Threshold adapts: for closely-spaced avoidance waypoints, require getting
+            // closer before advancing to prevent corner-cutting near obstacles.
+            if (!isLast) {
+                const nextWp = this.avoidanceWaypoints[this.currentWaypointIdx + 1];
+                const gapToNext = currentWp.distanceTo(nextWp);
+                const advanceThreshold = Math.min(3.0, Math.max(0.5, gapToNext * 0.4));
+                if (distToWp < advanceThreshold) {
+                    this.currentWaypointIdx++;
+                }
             }
 
             const activeWp = this.avoidanceWaypoints[this.currentWaypointIdx];
@@ -657,7 +666,7 @@ export class Autopilot implements IAutopilot {
             if (start.distanceTo(goal) < 1e-3) return;
 
             const rawObs = this.pathManager.collectObstacles(this.spacecraft);
-            const dims = this.spacecraft.getMainBodyDimensions();
+            const dims = this.spacecraft.getFullDimensions();
             const craftR = Math.max(dims.x, dims.y, dims.z);
 
             const obstacles: AvoidanceObstacle[] = rawObs.map(o => ({
@@ -778,7 +787,7 @@ export class Autopilot implements IAutopilot {
             if (this.isEnabled && !this.workerClient) {
                 this.initWorker();
             } else if (!this.isEnabled && this.workerClient) {
-                try { this.workerClient.terminate(); } catch { }
+                try { this.workerClient.terminate(); } catch (err) { this.log.warn('updateAutopilotState: worker terminate failed', err); }
                 this.workerClient = undefined;
             }
         }
@@ -805,7 +814,7 @@ export class Autopilot implements IAutopilot {
 
         // Terminate worker if running to avoid leaks on React StrictMode remounts
         if (this.workerClient) {
-            try { this.workerClient.terminate(); } catch { }
+            try { this.workerClient.terminate(); } catch (err) { this.log.warn('cleanup: worker terminate failed', err); }
             this.workerClient = undefined;
         }
 
@@ -846,6 +855,26 @@ export class Autopilot implements IAutopilot {
         this.targetPosition.copy(position);
         // Clear any target object when setting a direct position
         this.targetObject = null;
+    }
+
+    /**
+     * Set spacecraft to exclude from obstacle avoidance (by UUID).
+     * During docking approach: empty (target body IS an obstacle to avoid).
+     * During dock phase: [target] (we're flying into it intentionally).
+     */
+    public setObstacleExclusions(spacecraft: Spacecraft[]): void {
+        const uuids = new Set(spacecraft.map(s => s.uuid));
+        this.pathManager.setExcludedSpacecraft(uuids);
+    }
+
+    /**
+     * Set a speed limit override on GoToPosition (e.g. for docking final approach).
+     * Pass null to restore the default config limit.
+     */
+    public setGoToSpeedLimit(maxSpeed: number | null): void {
+        this.goToPositionMode?.setSpeedLimit(maxSpeed);
+        // Forward to worker so the off-thread GoToPosition also respects the limit
+        this.workerClient?.setSpeedLimit(maxSpeed);
     }
 
     public clearTargetObject(): void {

@@ -40,8 +40,8 @@ export const DimensionsWindow: React.FC<DimensionsWindowProps> = ({ spacecraft }
   };
 
   return (
-    <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur">
-      <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Spacecraft Dimensions</h3>
+    <div className="flex flex-col gap-1 p-1 text-white/90 text-[10px]">
+      <h3 className="text-cyan-300/90 font-medium text-[10px]">Dimensions</h3>
       {dimensions.map(({ key, label, unit }) => (
         <RangeInput
           key={key}
@@ -62,7 +62,7 @@ export const DimensionsWindow: React.FC<DimensionsWindowProps> = ({ spacecraft }
           max={20}
           defaultValue={1}
           step={0.1}
-          className="text-[10px] font-mono"
+          className="text-[10px]"
         />
       ))}
     </div>

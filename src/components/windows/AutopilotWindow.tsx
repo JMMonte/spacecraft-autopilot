@@ -4,9 +4,12 @@ import { Spacecraft } from '../../core/spacecraft';
 import { SpacecraftController } from '../../controllers/spacecraftController';
 import { BasicWorld } from '../../core/BasicWorld';
 import { NumberInput } from '../ui/NumberInput';
+import {
+    INPUT_BASE, EMPTY_STATE, SECTION_HEADER, TOGGLE_GROUP, TOGGLE_STACK,
+    TOGGLE_OPTION, TOGGLE_ACTIVE, TOGGLE_INACTIVE,
+} from '../ui/styles';
 import { useAutopilot } from '../../state/store';
 import { TargetGizmo } from '../../scenes/objects/TargetGizmo';
-// camera planning removed
 
 interface AutopilotWindowProps {
     spacecraft: Spacecraft | null;
@@ -27,11 +30,27 @@ interface TargetSettingsMap {
     [key: string]: TargetSettings;
 }
 
-interface AutopilotButton {
-    key: 'orientationMatch' | 'pointToPosition' | 'cancelRotation' | 'cancelLinearMotion' | 'goToPosition';
+type ModeKey = 'orientationMatch' | 'pointToPosition' | 'cancelRotation' | 'cancelLinearMotion' | 'goToPosition';
+
+interface ModeButton {
+    key: ModeKey;
     label: string;
+    shortcut: string;
     description: string;
 }
+
+// Rotation group — mutually exclusive (pick at most one)
+const ROTATION_MODES: ModeButton[] = [
+    { key: 'orientationMatch', label: 'Match Orientation', shortcut: 'T', description: 'Matches orientation with target spacecraft (or reverses)' },
+    { key: 'pointToPosition', label: 'Point to Position', shortcut: 'Y', description: 'Points spacecraft to target position' },
+    { key: 'cancelRotation', label: 'Cancel Rotation', shortcut: 'R', description: 'Cancels all rotational movement' },
+];
+
+// Translation group — mutually exclusive (pick at most one)
+const TRANSLATION_MODES: ModeButton[] = [
+    { key: 'cancelLinearMotion', label: 'Cancel Velocity', shortcut: 'G', description: 'Cancels all linear movement' },
+    { key: 'goToPosition', label: 'Go to Position', shortcut: 'B', description: 'Moves spacecraft to target position' },
+];
 
 export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, controller, world, version }) => {
     const apState = useAutopilot();
@@ -102,7 +121,6 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                     camera,
                     dom,
                     (pos: THREE.Vector3, quat: THREE.Quaternion) => {
-                        // Push updates into autopilot + persist settings
                         autopilot.setTargetPosition(pos.clone());
                         autopilot.setTargetOrientation(quat.clone());
                         saveSettings({ customPosition: pos.clone(), customOrientation: quat.clone() });
@@ -117,13 +135,11 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                 console.warn('Failed to initialize TargetGizmo:', err);
             }
         } else if (!shouldShow && gizmoRef.current) {
-            // Hide and destroy when not in custom target mode
             try { gizmoRef.current.setVisible(false); } catch {}
             try { gizmoRef.current.dispose(); } catch {}
             gizmoRef.current = null;
         }
 
-        // Cleanup on unmount
         return () => {
             if (gizmoRef.current) {
                 try { gizmoRef.current.dispose(); } catch {}
@@ -181,7 +197,6 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
         if (target && autopilot) {
             autopilot.setTargetObject(target, targetPoint);
             saveSettings({ selectedSpacecraft: target });
-            // Switching to an object target: hide gizmo if present
             if (gizmoRef.current) {
                 try { gizmoRef.current.dispose(); } catch {}
                 gizmoRef.current = null;
@@ -189,7 +204,6 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
         } else if (autopilot) {
             autopilot.clearTargetObject();
             saveSettings({ selectedSpacecraft: null });
-            // If in custom mode, restore gizmo at the current position
             if (targetType === 'custom' && world && !gizmoRef.current) {
                 try {
                     const scene = world.camera.scene as unknown as THREE.Scene;
@@ -225,14 +239,12 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
         }
     };
 
-    const handleTargetTypeChange = (e: ChangeEvent<HTMLSelectElement>) => {
-        const type = e.target.value as 'custom' | 'spacecraft';
+    const applyTargetType = (type: 'custom' | 'spacecraft') => {
         setTargetType(type);
 
         if (type === 'custom' && autopilot) {
             autopilot.clearTargetObject();
             saveSettings({ targetType: type });
-            // Ensure gizmo exists and is positioned correctly
             if (world && !gizmoRef.current) {
                 try {
                     const scene = world.camera.scene as unknown as THREE.Scene;
@@ -262,7 +274,6 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
         } else if (type === 'spacecraft' && selectedSpacecraft && autopilot) {
             autopilot.setTargetObject(selectedSpacecraft, targetPoint);
             saveSettings({ targetType: type });
-            // Hide gizmo when not using a custom target
             if (gizmoRef.current) {
                 try { gizmoRef.current.dispose(); } catch {}
                 gizmoRef.current = null;
@@ -278,81 +289,76 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
         newPosition[axis] = parseFloat(value);
         autopilot.setTargetPosition(newPosition);
         saveSettings({ customPosition: newPosition });
-        // Reflect in gizmo immediately
         if (gizmoRef.current) {
             gizmoRef.current.setPosition(newPosition);
         }
     };
 
-    const autopilotButtons: AutopilotButton[] = [
-        {
-            key: 'orientationMatch',
-            label: 'Match Orientation (T)',
-            description: 'Matches orientation with target spacecraft (or reverses)'
-        },
-        { key: 'pointToPosition', label: 'Point to Position (Y)', description: 'Points spacecraft to target position' },
-        { key: 'cancelRotation', label: 'Cancel Rotation (R)', description: 'Cancels all rotational movement' },
-        { key: 'cancelLinearMotion', label: 'Cancel Linear Motion (G)', description: 'Cancels all linear movement' },
-        { key: 'goToPosition', label: 'Go to Position (B)', description: 'Moves spacecraft to target position' }
-    ];
+    const applyGizmoMode = (mode: 'translate' | 'rotate') => {
+        setGizmoMode(mode);
+        gizmoRef.current?.setMode(mode);
+    };
+
+    // Render a mode button inside a toggle stack
+    const renderModeButton = ({ key, label, shortcut, description }: ModeButton) => {
+        const isActive = !!apState.activeAutopilots?.[key];
+        return (
+            <button
+                key={key}
+                className={`w-full px-1.5 py-1 text-[10px] transition-colors text-left ${
+                    isActive
+                        ? 'bg-cyan-500/15 text-white'
+                        : 'bg-black/60 text-white/70 hover:bg-white/20'
+                }`}
+                onClick={() => autopilot?.[key]?.()}
+                title={description}
+            >
+                <span className="flex items-center justify-between">
+                    <span>{label}</span>
+                    <span className={isActive ? 'text-cyan-300/90' : 'text-white/50'}>{shortcut}</span>
+                </span>
+            </button>
+        );
+    };
 
     return (
-        <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur w-full">
-            {/* Camera-based planning removed */}
-            {/* Autopilot Buttons */}
-            <div className="space-y-0.5">
-                <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Commands</h3>
-                {autopilotButtons.map(({ key, label, description }) => {
-                    const isActive = !!apState.activeAutopilots?.[key];
-                    const base = 'w-full px-1 py-0.5 text-[10px] font-mono border disabled:opacity-50 transition-colors relative';
-                    const inactive = 'bg-black/60 text-white/80 border-white/20 hover:bg-white/20';
-                    const active = 'bg-cyan-500/15 text-white border-cyan-300/60 hover:bg-cyan-500/25 ring-1 ring-cyan-400/40 pl-1.5 border-l-4 border-l-cyan-400';
-                    return (
-                        <button
-                            key={key}
-                            className={[base, isActive ? active : inactive].join(' ')}
-                            onClick={() => autopilot?.[key]?.()}
-                            title={description}
-                        >
-                            <span className="flex items-center justify-between w-full">
-                                <span className="flex items-center gap-1">
-                                    {isActive && (
-                                        <span
-                                            aria-hidden
-                                            className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-300 shadow-[0_0_6px_rgba(34,211,238,0.9)]"
-                                        />
-                                    )}
-                                    {label}
-                                </span>
-                                {isActive && (
-                                    <span className="text-[9px] text-cyan-300/90 tracking-wide">ACTIVE</span>
-                                )}
-                            </span>
-                        </button>
-                    );
-                })}
+        <div className="flex flex-col gap-1 p-1 text-white/90 text-[10px] w-full">
+            {/* Autopilot Mode Groups */}
+            <div className="flex flex-col gap-1">
+                <div>
+                    <h3 className={`${SECTION_HEADER} mb-0.5`}>Attitude</h3>
+                    <div className={TOGGLE_STACK}>
+                        {ROTATION_MODES.map(renderModeButton)}
+                    </div>
+                </div>
+                <div>
+                    <h3 className={`${SECTION_HEADER} mb-0.5`}>Translation</h3>
+                    <div className={TOGGLE_STACK}>
+                        {TRANSLATION_MODES.map(renderModeButton)}
+                    </div>
+                </div>
             </div>
 
             {/* Target Selection */}
-            <div className="space-y-0.5">
-                <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Target Selection</h3>
-                <select
-                    className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 
-                              text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
-                    value={targetType}
-                    onChange={handleTargetTypeChange}
-                >
-                    <option value="custom">Custom Position</option>
-                    <option value="spacecraft">Spacecraft</option>
-                </select>
+            <div className="flex flex-col gap-1">
+                <h3 className={SECTION_HEADER}>Target</h3>
+                <div className={TOGGLE_GROUP}>
+                    <button
+                        className={`flex-1 py-0.5 ${TOGGLE_OPTION} ${targetType === 'custom' ? TOGGLE_ACTIVE : TOGGLE_INACTIVE}`}
+                        onClick={() => applyTargetType('custom')}
+                    >Custom</button>
+                    <button
+                        className={`flex-1 py-0.5 ${TOGGLE_OPTION} ${targetType === 'spacecraft' ? TOGGLE_ACTIVE : TOGGLE_INACTIVE}`}
+                        onClick={() => applyTargetType('spacecraft')}
+                    >Spacecraft</button>
+                </div>
 
                 {targetType === 'spacecraft' ? (
-                    <div className="space-y-0.5">
+                    <div className="flex flex-col gap-0.5">
                         {otherSpacecraft.length > 0 ? (
                             <>
                                 <select
-                                    className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 
-                                              text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
+                                    className={INPUT_BASE}
                                     value={selectedSpacecraft?.name || ''}
                                     onChange={handleSpacecraftSelect}
                                 >
@@ -365,8 +371,7 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                                 </select>
 
                                 <select
-                                    className="w-full px-1 py-0.5 bg-black/60 text-white/90 border border-white/20 
-                                              text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
+                                    className={INPUT_BASE}
                                     value={targetPoint}
                                     onChange={handleTargetPointChange}
                                     disabled={!selectedSpacecraft}
@@ -377,28 +382,28 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                                 </select>
                             </>
                         ) : (
-                            <div className="text-white/50 italic text-center bg-black/40 p-1 text-[10px] border border-white/10">
+                            <div className={EMPTY_STATE}>
                                 No other spacecraft available
                             </div>
                         )}
                     </div>
                 ) : (
-                    <div className="space-y-0.5">
-                        <div className="flex items-center gap-1">
+                    <div className="flex flex-col gap-0.5">
+                        <div className={TOGGLE_GROUP}>
                             <button
-                                className={`px-1 py-0.5 text-[10px] border ${gizmoMode === 'translate' ? 'bg-cyan-300/20 border-cyan-300/40' : 'bg-black/60 border-white/20'}`}
-                                onClick={() => { setGizmoMode('translate'); gizmoRef.current?.setMode('translate'); }}
+                                className={`flex-1 py-0.5 ${TOGGLE_OPTION} ${gizmoMode === 'translate' ? TOGGLE_ACTIVE : TOGGLE_INACTIVE}`}
+                                onClick={() => applyGizmoMode('translate')}
                                 title="Move gizmo"
                             >Move</button>
                             <button
-                                className={`px-1 py-0.5 text-[10px] border ${gizmoMode === 'rotate' ? 'bg-cyan-300/20 border-cyan-300/40' : 'bg-black/60 border-white/20'}`}
-                                onClick={() => { setGizmoMode('rotate'); gizmoRef.current?.setMode('rotate'); }}
+                                className={`flex-1 py-0.5 ${TOGGLE_OPTION} ${gizmoMode === 'rotate' ? TOGGLE_ACTIVE : TOGGLE_INACTIVE}`}
+                                onClick={() => applyGizmoMode('rotate')}
                                 title="Rotate gizmo"
                             >Rotate</button>
                         </div>
                         {(['x', 'y', 'z'] as const).map(axis => (
                             <div key={axis} className="flex items-center gap-1">
-                                <label className="text-[10px] text-cyan-300/90 font-mono w-4">{axis}</label>
+                                <label className="text-[10px] text-cyan-300/90 w-4">{axis}</label>
                                 <NumberInput
                                     value={autopilot?.getTargetPosition()?.[axis] ?? 0}
                                     onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -409,7 +414,7 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                             </div>
                         ))}
                         {selectedSpacecraft && (
-                            <div className="text-cyan-400 text-[10px] font-mono">
+                            <div className="text-cyan-300/90 text-[10px]">
                                 Current Target: {selectedSpacecraft.name}
                             </div>
                         )}
@@ -418,10 +423,10 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
             </div>
 
             {/* Autopilot Telemetry */}
-            <div className="space-y-0.5">
-                <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Telemetry</h3>
+            <div className="flex flex-col gap-0.5">
+                <h3 className={SECTION_HEADER}>Telemetry</h3>
                 {apTelemetry?.path && (
-                    <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
+                    <div className="text-[10px] font-mono bg-black/40 p-0.5 border border-white/10">
                         <div className="text-cyan-300/90">Path Follower</div>
                         <div>s: {apTelemetry.path.energy?.sCur?.toFixed?.(2)} / {apTelemetry.path.energy?.sStop?.toFixed?.(2)} m</div>
                         <div>v∥: {apTelemetry.path.energy?.vAlong?.toFixed?.(2)} m/s → v_ref: {apTelemetry.path.vRefMag?.toFixed?.(2)} m/s</div>
@@ -432,7 +437,7 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                     </div>
                 )}
                 {apTelemetry?.modes?.pointToPosition && apTelemetry?.point && (
-                    <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
+                    <div className="text-[10px] font-mono bg-black/40 p-0.5 border border-white/10">
                         <div className="text-cyan-300/90">Point To Position</div>
                         <div>angle: {apTelemetry.point.angleDeg?.toFixed?.(1)} deg</div>
                         <div>ω_des: {apTelemetry.point.wDesMag?.toFixed?.(2)} rad/s</div>
@@ -442,7 +447,7 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                     </div>
                 )}
                 {apTelemetry?.modes?.orientationMatch && apTelemetry?.orient && (
-                    <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
+                    <div className="text-[10px] font-mono bg-black/40 p-0.5 border border-white/10">
                         <div className="text-cyan-300/90">Orientation Match</div>
                         <div>angle: {apTelemetry.orient.angleDeg?.toFixed?.(1)} deg</div>
                         <div>ω_des: {apTelemetry.orient.wDesMag?.toFixed?.(2)} rad/s</div>
@@ -452,7 +457,7 @@ export const AutopilotWindow: React.FC<AutopilotWindowProps> = ({ spacecraft, co
                     </div>
                 )}
                 {apTelemetry?.modes?.goToPosition && apTelemetry?.goto && (
-                    <div className="text-[10px] font-mono bg-black/50 p-1 border border-white/10">
+                    <div className="text-[10px] font-mono bg-black/40 p-0.5 border border-white/10">
                         <div className="text-cyan-300/90">Go To Position</div>
                         <div>target: {apTelemetry.goto.targetType || 'static'}</div>
                         <div>dist: {apTelemetry.goto.distance?.toFixed?.(2)} m</div>

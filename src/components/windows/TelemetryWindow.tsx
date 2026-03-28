@@ -12,245 +12,106 @@ interface TelemetryWindowProps {
   } | null;
 }
 
-interface TelemetrySection {
-  title: string;
-  values: Record<string, number>;
+const _euler = new THREE.Euler();
+
+function quatToEulerDeg(q: THREE.Quaternion): { pitch: number; yaw: number; roll: number } {
+  _euler.setFromQuaternion(q, 'YXZ');
+  return {
+    pitch: THREE.MathUtils.radToDeg(_euler.x),
+    yaw:   THREE.MathUtils.radToDeg(_euler.y),
+    roll:  THREE.MathUtils.radToDeg(_euler.z),
+  };
+}
+
+/** Compact row: label + x/y/z values + optional magnitude. */
+function VectorRow({ label, v, decimals = 2, unit, showMag }: {
+  label: string;
+  v: THREE.Vector3;
+  decimals?: number;
+  unit?: string;
+  showMag?: boolean;
+}) {
+  const mag = showMag ? v.length() : undefined;
+  return (
+    <div className="flex items-baseline gap-2 text-[10px]">
+      <span className="text-white/70 w-14 shrink-0">{label}</span>
+      <span className="font-mono text-white/90">{v.x.toFixed(decimals)}</span>
+      <span className="font-mono text-white/90">{v.y.toFixed(decimals)}</span>
+      <span className="font-mono text-white/90">{v.z.toFixed(decimals)}</span>
+      {mag !== undefined && (
+        <span className="font-mono text-cyan-300/90 ml-auto">{mag.toFixed(decimals)}{unit ? ` ${unit}` : ''}</span>
+      )}
+    </div>
+  );
+}
+
+/** One row: direction label + a dot per thruster. */
+function ThrusterGroup({ label, indices, status }: { label: string; indices: number[]; status: boolean[] }) {
+  const active = indices.filter(i => status[i]).length;
+  return (
+    <div className="flex items-center gap-1">
+      <span className={`w-12 shrink-0 text-right ${active > 0 ? 'text-white/90' : 'text-white/50'}`}>{label}</span>
+      <div className="flex gap-px">
+        {indices.map(i => (
+          <div key={i} className={`w-2 h-2 rounded-sm ${status[i] ? 'bg-green-400' : 'bg-white/10'}`} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export const TelemetryWindow: React.FC<TelemetryWindowProps> = ({ telemetry }) => {
   if (!telemetry) return null;
 
-  const sections: TelemetrySection[] = [
-    {
-      title: "Position (m)",
-      values: {
-        x: telemetry.position.x,
-        y: telemetry.position.y,
-        z: telemetry.position.z
-      }
-    },
-    {
-      title: "Velocity (m/s)",
-      values: {
-        x: telemetry.velocity.x,
-        y: telemetry.velocity.y,
-        z: telemetry.velocity.z
-      }
-    },
-    {
-      title: "Angular Velocity (rad/s)",
-      values: {
-        x: telemetry.angularVelocity.x,
-        y: telemetry.angularVelocity.y,
-        z: telemetry.angularVelocity.z
-      }
-    },
-    {
-      title: "Orientation (quaternion)",
-      values: {
-        x: telemetry.orientation.x,
-        y: telemetry.orientation.y,
-        z: telemetry.orientation.z,
-        w: telemetry.orientation.w
-      }
-    },
-    {
-      title: "Mass (kg)",
-      values: {
-        mass: telemetry.mass
-      }
-    }
-  ];
+  const att = quatToEulerDeg(telemetry.orientation);
 
   return (
-    <div className="space-y-1">
-      {sections.map(section => (
-        <div key={section.title} className="text-[10px]">
-          <h4 className="text-cyan-300/90 font-medium mb-0.5 drop-shadow-md">
-            {section.title}
-          </h4>
-          <div className="flex flex-wrap gap-2">
-            {(Object.entries(section.values) as [string, number][]).map(([key, value]) => (
-              <div key={key} className="flex items-center gap-1">
-                <span className="text-cyan-300/90">{key.toUpperCase()}:</span>
-                <span className="text-white font-medium">{value.toFixed(3)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-      <div className="text-[10px]">
-        <h4 className="text-cyan-300/90 font-medium mb-0.5 drop-shadow-md">
-          Thrusters
-        </h4>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-1 w-fit">
-          {/* Rotation controls */}
-          <div>
-            <div className="text-cyan-300/90 text-[10px] mb-0.5">PITCH</div>
-            <div className="flex gap-0.5 mb-0.5">
-              {[0, 2, 5, 7, 8, 9, 14, 15].map(i => (
-                <div 
-                  key={i}
-                  className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                  title={`Pitch Up - T${i + 1}`}
-                >
-                  {i + 1}
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-0.5 mb-1">
-              {[1, 3, 4, 6, 10, 11, 12, 13].map(i => (
-                <div 
-                  key={i}
-                  className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                  title={`Pitch Down - T${i + 1}`}
-                >
-                  {i + 1}
-                </div>
-              ))}
-            </div>
+    <div className="flex flex-col gap-1 text-[10px]">
+      {/* Axis header */}
+      <div className="flex items-baseline gap-2 text-white/50">
+        <span className="w-14 shrink-0" />
+        <span>x</span>
+        <span>y</span>
+        <span>z</span>
+      </div>
 
-            <div className="text-cyan-300/90 text-[10px] mb-0.5">YAW</div>
-            <div className="flex gap-0.5 mb-0.5">
-              {[0, 1, 6, 7, 16, 17, 22, 23].map(i => (
-                <div 
-                  key={i}
-                  className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                  title={`Yaw Left - T${i + 1}`}
-                >
-                  {i + 1}
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-0.5 mb-1">
-              {[2, 3, 4, 5, 18, 19, 20, 21].map(i => (
-                <div 
-                  key={i}
-                  className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                  title={`Yaw Right - T${i + 1}`}
-                >
-                  {i + 1}
-                </div>
-              ))}
-            </div>
+      <VectorRow label="Position" v={telemetry.position} decimals={1} />
+      <VectorRow label="Velocity" v={telemetry.velocity} decimals={2} unit="m/s" showMag />
+      <VectorRow label="Ang. vel" v={telemetry.angularVelocity} decimals={3} unit="rad/s" showMag />
 
-            <div className="text-cyan-300/90 text-[10px] mb-0.5">ROLL</div>
-            <div className="flex gap-0.5 mb-0.5">
-              {[8, 11, 13, 14, 16, 18, 21, 23].map(i => (
-                <div 
-                  key={i}
-                  className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                  title={`Roll CCW - T${i + 1}`}
-                >
-                  {i + 1}
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-0.5">
-              {[9, 10, 12, 15, 17, 19, 20, 22].map(i => (
-                <div 
-                  key={i}
-                  className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                  title={`Roll CW - T${i + 1}`}
-                >
-                  {i + 1}
-                </div>
-              ))}
-            </div>
-          </div>
+      {/* Attitude in degrees */}
+      <div className="flex items-baseline gap-2 text-[10px]">
+        <span className="text-white/70 w-14 shrink-0">Attitude</span>
+        <span className="text-white/50">P</span>
+        <span className="font-mono text-white/90">{att.pitch.toFixed(1)}°</span>
+        <span className="text-white/50">Y</span>
+        <span className="font-mono text-white/90">{att.yaw.toFixed(1)}°</span>
+        <span className="text-white/50">R</span>
+        <span className="font-mono text-white/90">{att.roll.toFixed(1)}°</span>
+      </div>
 
-          {/* Translation controls */}
-          <div>
-            <div className="text-cyan-300/90 text-[10px] mb-0.5">TRANSLATION</div>
-            <div className="flex gap-0.5 mb-0.5">
-              <div className="flex gap-0.5">
-                {[0, 1, 2, 3].map(i => (
-                  <div 
-                    key={i}
-                    className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                    title={`Forward - T${i + 1}`}
-                  >
-                    {i + 1}
-                  </div>
-                ))}
-              </div>
-              <div className="text-[10px] text-cyan-300/90">FWD</div>
-            </div>
-            <div className="flex gap-0.5 mb-1">
-              <div className="flex gap-0.5">
-                {[4, 5, 6, 7].map(i => (
-                  <div 
-                    key={i}
-                    className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                    title={`Back - T${i + 1}`}
-                  >
-                    {i + 1}
-                  </div>
-                ))}
-              </div>
-              <div className="text-[10px] text-cyan-300/90">BCK</div>
-            </div>
+      {/* Mass — inline */}
+      <div className="flex items-baseline gap-2 text-[10px]">
+        <span className="text-white/70 w-14 shrink-0">Mass</span>
+        <span className="font-mono text-white/90">{telemetry.mass.toFixed(1)} kg</span>
+      </div>
 
-            <div className="flex gap-0.5 mb-0.5">
-              <div className="flex gap-0.5">
-                {[12, 13, 14, 15].map(i => (
-                  <div 
-                    key={i}
-                    className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                    title={`Up - T${i + 1}`}
-                  >
-                    {i + 1}
-                  </div>
-                ))}
-              </div>
-              <div className="text-[10px] text-cyan-300/90">UP</div>
-            </div>
-            <div className="flex gap-0.5 mb-1">
-              <div className="flex gap-0.5">
-                {[8, 9, 10, 11].map(i => (
-                  <div 
-                    key={i}
-                    className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                    title={`Down - T${i + 1}`}
-                  >
-                    {i + 1}
-                  </div>
-                ))}
-              </div>
-              <div className="text-[10px] text-cyan-300/90">DN</div>
-            </div>
-
-            <div className="flex gap-0.5 mb-0.5">
-              <div className="flex gap-0.5">
-                {[16, 17, 18, 19].map(i => (
-                  <div 
-                    key={i}
-                    className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                    title={`Left - T${i + 1}`}
-                  >
-                    {i + 1}
-                  </div>
-                ))}
-              </div>
-              <div className="text-[10px] text-cyan-300/90">LFT</div>
-            </div>
-            <div className="flex gap-0.5">
-              <div className="flex gap-0.5">
-                {[20, 21, 22, 23].map(i => (
-                  <div 
-                    key={i}
-                    className={`w-4 text-center px-0.5 py-0.5 rounded ${telemetry.thrusterStatus[i] ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}
-                    title={`Right - T${i + 1}`}
-                  >
-                    {i + 1}
-                  </div>
-                ))}
-              </div>
-              <div className="text-[10px] text-cyan-300/90">RGT</div>
-            </div>
-          </div>
-        </div>
+      {/* Thrusters — grouped by direction */}
+      <div className="flex flex-col gap-0.5 text-[10px] pt-0.5 border-t border-white/10">
+        <ThrusterGroup label="Pitch +" indices={[0,2,5,7,8,9,14,15]} status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Pitch −" indices={[1,3,4,6,10,11,12,13]} status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Yaw +"   indices={[0,1,6,7,16,17,22,23]} status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Yaw −"   indices={[2,3,4,5,18,19,20,21]} status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Roll +"  indices={[8,11,13,14,16,18,21,23]} status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Roll −"  indices={[9,10,12,15,17,19,20,22]} status={telemetry.thrusterStatus} />
+        <div className="h-px bg-white/10 my-0.5" />
+        <ThrusterGroup label="Fwd"     indices={[0,1,2,3]}   status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Back"    indices={[4,5,6,7]}   status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Up"      indices={[12,13,14,15]} status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Down"    indices={[8,9,10,11]}  status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Left"    indices={[16,17,18,19]} status={telemetry.thrusterStatus} />
+        <ThrusterGroup label="Right"   indices={[20,21,22,23]} status={telemetry.thrusterStatus} />
       </div>
     </div>
   );
-}; 
+};

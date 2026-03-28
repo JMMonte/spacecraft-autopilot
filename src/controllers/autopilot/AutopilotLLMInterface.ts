@@ -342,6 +342,9 @@ function requireVec3(v: unknown, name: string): Vec3 {
     if (typeof o.x !== 'number' || typeof o.y !== 'number' || typeof o.z !== 'number') {
         throw new Error(`"${name}" must have numeric x, y, z properties.`);
     }
+    if (!Number.isFinite(o.x) || !Number.isFinite(o.y) || !Number.isFinite(o.z)) {
+        throw new Error(`"${name}" values must be finite numbers.`);
+    }
     return { x: o.x as number, y: o.y as number, z: o.z as number };
 }
 
@@ -350,6 +353,9 @@ function requireQuat(q: unknown, name: string): Quat {
     const o = q as Record<string, unknown>;
     if (typeof o.x !== 'number' || typeof o.y !== 'number' || typeof o.z !== 'number' || typeof o.w !== 'number') {
         throw new Error(`"${name}" must have numeric x, y, z, w properties.`);
+    }
+    if (!Number.isFinite(o.x) || !Number.isFinite(o.y) || !Number.isFinite(o.z) || !Number.isFinite(o.w)) {
+        throw new Error(`"${name}" values must be finite numbers.`);
     }
     return { x: o.x as number, y: o.y as number, z: o.z as number, w: o.w as number };
 }

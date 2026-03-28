@@ -24,10 +24,12 @@ export class PathManager {
   private lastGoal = new THREE.Vector3(NaN, NaN, NaN);
   private lastGoalQuat = new THREE.Quaternion(0, 0, 0, 1);
   private lastStart = new THREE.Vector3(NaN, NaN, NaN);
-  private replanTimer = 0;
+  private replanTimer = Infinity;  // trigger immediately on first tick
   private replanInterval = 0.5;
   private planPending = false;
   private reqId = 0;
+  /** Spacecraft to exclude from obstacle collection (e.g. docking target during dock phase). */
+  private excludedSpacecraft: Set<string> = new Set();
   private lastObsSnapshot: Obstacle[] = [];
   private deviationThreshold = 2.5;
   private hasMultiSegmentPath = false;
@@ -122,15 +124,25 @@ export class PathManager {
     try { return this.follower.distanceToPath(pos); } catch { return 0; }
   }
 
+  /** Set spacecraft UUIDs to exclude from obstacle collection (e.g. docking target during dock phase). */
+  public setExcludedSpacecraft(uuids: Set<string>): void {
+    this.excludedSpacecraft = uuids;
+  }
+
   public collectObstacles(spacecraft: Spacecraft): Obstacle[] {
     const res: Obstacle[] = [];
     try {
       const world: WorldLike | undefined = (spacecraft as unknown as { registry?: WorldLike }).registry
         ?? (spacecraft as unknown as { basicWorld?: WorldLike }).basicWorld;
       const target = this.getTargetObject();
-      if (target) res.push({ position: target.objects.box.position.clone(), size: target.getFullDimensions().clone(), isTarget: true });
+      if (target && !this.excludedSpacecraft.has(target.uuid)) {
+        res.push({ position: target.objects.box.position.clone(), size: target.getFullDimensions().clone(), isTarget: true });
+      }
       const otherCraft = (world?.getSpacecraftList?.() || []).filter((s: Spacecraft) => s !== spacecraft);
-      for (const s of otherCraft) res.push({ position: s.objects.box.position.clone(), size: s.getFullDimensions().clone(), isTarget: false });
+      for (const s of otherCraft) {
+        if (this.excludedSpacecraft.has(s.uuid)) continue;
+        res.push({ position: s.objects.box.position.clone(), size: s.getFullDimensions().clone(), isTarget: false });
+      }
       try {
         const ast = world?.getAsteroidObstacles?.() || [];
         for (const a of ast) res.push({ position: a.position.clone(), size: a.size.clone(), isTarget: false });

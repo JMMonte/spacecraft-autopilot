@@ -113,7 +113,8 @@
 [class*='theme-'] .border-white\/20 { border-color: var(--panel-border) !important; }
 [class*='theme-'] .border-white\/10 { border-color: color-mix(in oklab, var(--panel-border) 70%, transparent) !important; }
 [class*='theme-'] .text-white\/90 { color: var(--text) !important; }
-[class*='theme-'] .text-white\/80 { color: var(--text-muted) !important; }
+[class*='theme-'] .text-white\/70 { color: var(--text-muted) !important; }
+[class*='theme-'] .text-white\/50 { color: color-mix(in oklab, var(--text-muted) 60%, transparent) !important; }
 [class*='theme-'] .text-white { color: var(--text-strong) !important; }
 [class*='theme-'] .bg-white\/20 { background-color: var(--muted-bg) !important; }
 [class*='theme-'] .hover\:bg-white\/20:hover { background-color: var(--hover-bg) !important; }

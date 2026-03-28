@@ -48,6 +48,8 @@ export class GoToPosition extends AutopilotMode {
 
     private telemetry: GoToPositionTelemetry | null = null;
     private burnFrames = 0;
+    /** Optional speed cap set by docking or external controllers. null = use config default. */
+    private speedLimitOverride: number | null = null;
     private totalFrames = 0;
 
 
@@ -71,6 +73,15 @@ export class GoToPosition extends AutopilotMode {
 
     setFinalTarget(position: THREE.Vector3): void {
         this.targetPosition = position;
+    }
+
+    /** Set a speed limit override (e.g. for docking final approach). null = use default. */
+    setSpeedLimit(maxSpeed: number | null): void {
+        // Clear arrival latch when limit changes (e.g. phase transition in docking)
+        if (this.speedLimitOverride !== maxSpeed) {
+            this.arrivalLatched = false;
+        }
+        this.speedLimitOverride = maxSpeed;
     }
 
     /** Set avoidance waypoints. The controller navigates each in sequence. */
@@ -123,10 +134,18 @@ export class GoToPosition extends AutopilotMode {
         const dtPhysics = 1 / 60; // physics timestep
         const minDeltaV = (minForce * dtPhysics) / mass;
         // Stop distance: where we can't meaningfully control — ~3 minimum impulses
-        const dynStopDist = Math.max(stopDist, minDeltaV * 3 / aMin);
-        const dynStopOut = Math.max(dynStopDist * 2.0, dynStopDist + minDeltaV * 5 / aMin);
+        let dynStopDist = Math.max(stopDist, minDeltaV * 3 / aMin);
+        let dynStopOut = Math.max(dynStopDist * 2.0, dynStopDist + minDeltaV * 5 / aMin);
         // Velocity deadband: below this we can't reliably measure/control
         const dynDeadband = Math.max(deadband, minDeltaV * 2);
+
+        // When a speed limit is active (e.g. docking), tighten stop thresholds
+        // so we don't stop prematurely far from the target
+        if (this.speedLimitOverride !== null) {
+            const tightStop = Math.max(0.01, this.speedLimitOverride * 0.3);
+            dynStopDist = Math.min(dynStopDist, tightStop);
+            dynStopOut = Math.min(dynStopOut, tightStop * 2);
+        }
 
         // ── Waypoint advancement ───────────────────────────────────────
         const isLastWaypoint = this.waypoints.length === 0 || this.waypointIndex >= this.waypoints.length - 1;
@@ -139,13 +158,18 @@ export class GoToPosition extends AutopilotMode {
         }
 
         // ── Arrival hysteresis (only for final waypoint) ──────────────
-        if (this.arrivalLatched) {
-            if (distance <= dynStopOut) return out;
-            this.arrivalLatched = false;
-        }
-        if (distance <= dynStopDist && speed <= dynDeadband) {
-            this.arrivalLatched = true;
-            return out;
+        // Skip arrival latch when a speed limit is active (e.g. docking final approach).
+        // Docking completion is handled by the physical docking gate, not GoToPosition.
+        const useArrivalLatch = this.speedLimitOverride === null;
+        if (useArrivalLatch) {
+            if (this.arrivalLatched) {
+                if (distance <= dynStopOut) return out;
+                this.arrivalLatched = false;
+            }
+            if (distance <= dynStopDist && speed <= dynDeadband) {
+                this.arrivalLatched = true;
+                return out;
+            }
         }
 
         // ── Desired velocity vector ───────────────────────────────────
@@ -157,7 +181,8 @@ export class GoToPosition extends AutopilotMode {
         const omniFactor = aMin / aMax; // 1.0 = perfectly uniform, <1 = asymmetric
         const brakeSafety = 0.5 + 0.3 * omniFactor; // 0.5-0.8 range
         const aBrake = aMin * brakeSafety;
-        const vMax = this.config.limits.maxLinearVelocity ?? 8.0;
+        const vMaxConfig = this.config.limits.maxLinearVelocity ?? 8.0;
+        const vMax = this.speedLimitOverride !== null ? Math.min(vMaxConfig, this.speedLimitOverride) : vMaxConfig;
         const vBrake = Math.sqrt(2 * aBrake * Math.max(0, distance - dynStopDist));
         const vDesired = Math.min(vMax, vBrake);
 
