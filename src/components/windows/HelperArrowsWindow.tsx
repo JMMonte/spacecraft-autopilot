@@ -2,6 +2,8 @@ import React, { ChangeEvent } from 'react';
 import { Spacecraft } from '../../core/spacecraft';
 import { BasicWorld } from '../../core/BasicWorld';
 import { setGridVisible, useUi, useTraceSettings, setTraceSettings } from '../../state/store';
+import type { TraceSettings } from '../../state/store';
+import { CHECKBOX, WINDOW_BODY, FIELD_LABEL, FIELD_ROW, SELECT_DISABLED } from '../ui/styles';
 
 interface HelperArrowsWindowProps {
   spacecraft: Spacecraft | null;
@@ -26,58 +28,55 @@ export const HelperArrowsWindow: React.FC<HelperArrowsWindowProps> = ({ spacecra
     return key === 'velocity' ? spacecraft.showVelocityArrow : spacecraft.showAngularVelocityArrow;
   };
 
+  const handleGridToggle = (e: ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.checked;
+    setGridVisible(v);
+    // Also apply directly when a world reference is provided (BasicWorld may not
+    // subscribe to the store in all setups)
+    world?.setGridVisible?.(v);
+  };
+
   return (
-    <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur">
-      <div className="flex items-center justify-between gap-1">
-        <label className="text-[10px] text-white/70 font-mono">Show Grid</label>
-        <input
-          type="checkbox"
-          checked={ui.gridVisible}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => {
-            const v = e.target.checked;
-            // Update global store; BasicWorld listens and applies scene change
-            setGridVisible(v);
-            // Also apply directly when a world reference is provided
-            world?.setGridVisible?.(v);
-          }}
-          className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
-        />
+    <div className={WINDOW_BODY}>
+      <div className={FIELD_ROW}>
+        <label className={FIELD_LABEL}>Show Grid</label>
+        <input type="checkbox" checked={ui.gridVisible} onChange={handleGridToggle} className={CHECKBOX} />
       </div>
-      <div className="flex items-center justify-between gap-1">
-        <label className="text-[10px] text-white/70 font-mono">Show Path</label>
+      <div className={FIELD_ROW}>
+        <label className={FIELD_LABEL}>Show Path</label>
         <input
           type="checkbox"
           checked={!!spacecraft?.isPathVisible?.()}
           onChange={(e: ChangeEvent<HTMLInputElement>) => spacecraft?.togglePath?.(e.target.checked)}
-          className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+          className={CHECKBOX}
         />
       </div>
-      <div className="flex items-center justify-between gap-1">
-        <label className="text-[10px] text-white/70 font-mono">Show Trace Lines</label>
+      <div className={FIELD_ROW}>
+        <label className={FIELD_LABEL}>Show Trace Lines</label>
         <input
           type="checkbox"
           checked={!!spacecraft?.showTraceLines}
           onChange={(e: ChangeEvent<HTMLInputElement>) => spacecraft?.toggleTraceLines?.(e.target.checked)}
-          className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+          className={CHECKBOX}
         />
       </div>
       {/* Scientific gradient controls */}
-      <div className="flex items-center justify-between gap-1">
-        <label className="text-[10px] text-white/70 font-mono">Scientific Gradient</label>
+      <div className={FIELD_ROW}>
+        <label className={FIELD_LABEL}>Scientific Gradient</label>
         <input
           type="checkbox"
           checked={traceSettings.gradientEnabled}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setTraceSettings({ gradientEnabled: e.target.checked })}
-          className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+          className={CHECKBOX}
         />
       </div>
-      <div className="flex items-center justify-between gap-1">
-        <label className="text-[10px] text-white/70 font-mono">Metric</label>
+      <div className={FIELD_ROW}>
+        <label className={FIELD_LABEL}>Metric</label>
         <select
           value={traceSettings.gradientMode}
-          onChange={(e) => setTraceSettings({ gradientMode: e.target.value as any })}
+          onChange={(e) => setTraceSettings({ gradientMode: e.target.value as TraceSettings['gradientMode'] })}
           disabled={!traceSettings.gradientEnabled || !spacecraft?.showTraceLines}
-          className="text-[10px] font-mono bg-black/40 text-white/90 border border-white/20 rounded px-1 py-0.5 disabled:opacity-40"
+          className={SELECT_DISABLED}
         >
           <option value="velocity">Velocity</option>
           <option value="acceleration">Acceleration</option>
@@ -85,13 +84,13 @@ export const HelperArrowsWindow: React.FC<HelperArrowsWindowProps> = ({ spacecra
           <option value="forceNet">Thrust Net</option>
         </select>
       </div>
-      <div className="flex items-center justify-between gap-1">
-        <label className="text-[10px] text-white/70 font-mono">Palette</label>
+      <div className={FIELD_ROW}>
+        <label className={FIELD_LABEL}>Palette</label>
         <select
           value={traceSettings.palette}
-          onChange={(e) => setTraceSettings({ palette: e.target.value as any })}
+          onChange={(e) => setTraceSettings({ palette: e.target.value as TraceSettings['palette'] })}
           disabled={!traceSettings.gradientEnabled || !spacecraft?.showTraceLines}
-          className="text-[10px] font-mono bg-black/40 text-white/90 border border-white/20 rounded px-1 py-0.5 disabled:opacity-40"
+          className={SELECT_DISABLED}
         >
           <option value="turbo">Turbo</option>
           <option value="viridis">Viridis</option>
@@ -107,13 +106,13 @@ export const HelperArrowsWindow: React.FC<HelperArrowsWindowProps> = ({ spacecra
         </button>
       </div>
       {arrows.map(({ key, label }) => (
-        <div key={key} className="flex items-center justify-between gap-1">
-          <label className="text-[10px] text-white/70 font-mono">{label}</label>
+        <div key={key} className={FIELD_ROW}>
+          <label className={FIELD_LABEL}>{label}</label>
           <input
             type="checkbox"
             checked={getArrowVisibility(key)}
             onChange={(e: ChangeEvent<HTMLInputElement>) => spacecraft?.toggleArrow?.(key, e.target.checked)}
-            className="w-3 h-3 rounded border-white/30 bg-black/40 checked:bg-cyan-300/40 checked:border-cyan-300/60 focus:ring-0 focus:ring-offset-0"
+            className={CHECKBOX}
           />
         </div>
       ))}

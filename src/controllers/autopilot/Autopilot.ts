@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { emitAutopilotStateChanged } from '../../domain/simulationEvents';
 import { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
-import { AutopilotConfig } from './AutopilotMode';
+import type { AutopilotConfig } from './types';
 import { CancelRotation } from './CancelRotation';
 import { CancelLinearMotion } from './CancelLinearMotion';
 import { PointToPosition } from './PointToPosition';

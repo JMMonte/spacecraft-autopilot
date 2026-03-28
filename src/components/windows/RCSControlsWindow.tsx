@@ -1,6 +1,7 @@
 import React, { ChangeEvent } from 'react';
 import { RangeInput } from '../ui/RangeInput';
 import { Spacecraft } from '../../core/spacecraft';
+import { WINDOW_BODY, SECTION_HEADER } from '../ui/styles';
 
 interface RCSControlsWindowProps {
   spacecraft: Spacecraft | null;
@@ -8,8 +9,8 @@ interface RCSControlsWindowProps {
 
 export const RCSControlsWindow: React.FC<RCSControlsWindowProps> = ({ spacecraft }) => {
   return (
-    <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur">
-      <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">RCS Thrust</h3>
+    <div className={WINDOW_BODY}>
+      <h3 className={SECTION_HEADER}>RCS Thrust</h3>
       <RangeInput
         label="RCS Thrust"
         unit="N"

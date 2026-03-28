@@ -1,7 +1,8 @@
 // Minimal runtime tests for allocator + modes (run with: npm run test:ap)
 import * as THREE from 'three';
 import { PIDController } from '../../src/controllers/pidController.ts';
-import { AutopilotMode, AutopilotConfig } from '../../src/controllers/autopilot/AutopilotMode.ts';
+import { AutopilotMode } from '../../src/controllers/autopilot/AutopilotMode.ts';
+import type { AutopilotConfig } from '../../src/controllers/autopilot/types.ts';
 import { CancelRotation } from '../../src/controllers/autopilot/CancelRotation.ts';
 import { PointToPosition } from '../../src/controllers/autopilot/PointToPosition.ts';
 

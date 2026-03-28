@@ -7,13 +7,14 @@ import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
 import { Spacecraft } from './spacecraft';
 import { SpacecraftController } from '../controllers/spacecraftController';
-import { canDockWithinThresholds } from '../controllers/docking/DockingUtils';
+import { DockingOrchestrator } from './DockingOrchestrator';
+import { InputRouter } from './InputRouter';
 import { BackgroundLoader } from '../helpers/backgroundLoader';
 import { AsteroidModel, AsteroidModelId } from '../objects/AsteroidModel';
 import { AsteroidSystem, AsteroidSystemConfig } from '../objects/AsteroidSystem';
 import { createLogger } from '../utils/logger';
 import { InfiniteGrid } from '../scenes/objects/InfiniteGrid';
-import { emitCameraModeToggleRequested } from '../domain/simulationEvents';
+import type { SpacecraftRegistry } from '../domain/spacecraftRegistry';
 import {
     noopSimulationRuntimeStatePort,
     SimulationRuntimeStatePort,
@@ -52,7 +53,7 @@ interface ThreeScene extends THREE.Scene {
     };
 }
 
-export class BasicWorld {
+export class BasicWorld implements SpacecraftRegistry {
     private log = createLogger('core:BasicWorld');
     private config: WorldConfig;
     private canvas: HTMLCanvasElement;
@@ -82,6 +83,8 @@ export class BasicWorld {
     private stats: Stats | null = null;
     private grid: InfiniteGrid | null = null;
     private runtimeState: SimulationRuntimeStatePort;
+    private dockingOrchestrator = new DockingOrchestrator();
+    private inputRouter!: InputRouter;
 
     constructor(
         config: WorldConfig = {},
@@ -106,6 +109,15 @@ export class BasicWorld {
 
         // Configure Three.js loading manager
         this.configureLoadingManager();
+
+        // Initialize input router (lazily wired after initializeWorld sets up renderer/camera)
+        this.inputRouter = new InputRouter(
+            () => this.spacecraftControllers,
+            () => this.spacecraft,
+            () => this.camera?.camera,
+            () => this.renderer?.renderer?.domElement,
+            (s) => this.setActiveSpacecraft(s),
+        );
     }
 
     private configureLoadingManager(): void {
@@ -433,7 +445,8 @@ export class BasicWorld {
                 this.runtimeState
             );
         spacecraft.name = name;
-        
+        spacecraft.registry = this;
+
         if (initialConeVisibility) {
             spacecraft.rcsVisuals.showCones();
         }
@@ -515,6 +528,16 @@ export class BasicWorld {
         this.onSpacecraftListChange = callback;
     }
 
+    /** SpacecraftRegistry implementation: subscribe to list changes, returns unsubscribe fn. */
+    public onSpacecraftListChanged(callback: () => void): () => void {
+        const prev = this.onSpacecraftListChange;
+        this.onSpacecraftListChange = (version: number) => {
+            try { prev?.(version); } catch {}
+            try { callback(); } catch {}
+        };
+        return () => { this.onSpacecraftListChange = prev; };
+    }
+
     public setActiveSpacecraftChangeCallback(callback: (spacecraft: Spacecraft) => void): void {
         this.onActiveSpacecraftChange = callback;
     }
@@ -522,45 +545,16 @@ export class BasicWorld {
     // Public wrappers so React can forward events without global listeners
     public onKeyDown(event: KeyboardEvent): void {
         this.keysPressed[event.code] = true;
-        // Global hotkeys first
-        if (event.code === 'KeyC') {
-            try { emitCameraModeToggleRequested('keyboard'); } catch {}
-        }
-        const activeController = this.spacecraftControllers.find(controller => controller.getIsActive());
-        if (activeController) {
-            activeController.handleKeyDown(event);
-        }
+        this.inputRouter.onKeyDown(event);
     }
 
     public onKeyUp(event: KeyboardEvent): void {
         this.keysPressed[event.code] = false;
-        const activeController = this.spacecraftControllers.find(controller => controller.getIsActive());
-        if (activeController) {
-            activeController.handleKeyUp(event);
-        }
+        this.inputRouter.onKeyUp(event);
     }
 
     public onDoubleClick(event: MouseEvent): void {
-        event.preventDefault();
-
-        const mouse = new THREE.Vector2();
-        const rect = this.renderer.renderer.domElement.getBoundingClientRect();
-        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(mouse, this.camera.camera);
-
-        const clickableObjects = this.spacecraft.flatMap(spacecraft => spacecraft.getThreeObjects());
-        const intersects = raycaster.intersectObjects(clickableObjects, true);
-
-        if (intersects.length > 0) {
-            const newTarget = intersects[0].object;
-            const spacecraft = this.spacecraft.find(spacecraft => spacecraft.objects.box === newTarget);
-            if (spacecraft) {
-                this.setActiveSpacecraft(spacecraft);
-            }
-        }
+        this.inputRouter.onDoubleClick(event);
     }
 
     public resize(): void {
@@ -607,7 +601,7 @@ export class BasicWorld {
             });
 
             // Passive auto-docking: no UI mode required
-            this.performPassiveDocking();
+            this.dockingOrchestrator.performPassiveDocking(this.spacecraft);
 
             // Update camera to follow active spacecraft when in 'follow' mode
             const ui = this.runtimeState.getUiState();
@@ -700,46 +694,5 @@ export class BasicWorld {
 
     public getGridVisible(): boolean {
         return !!this.grid?.mesh.visible;
-    }
-
-    // Evaluate all spacecraft pairs and dock automatically when thresholds are met
-    private performPassiveDocking(): void {
-        const ports: Array<'front' | 'back'> = ['front', 'back'];
-        const list = this.spacecraft;
-        const n = list.length;
-        for (let i = 0; i < n; i++) {
-            const a = list[i];
-            for (let j = i + 1; j < n; j++) {
-                const b = list[j];
-
-                // Skip if these two are already connected via any port
-                const alreadyConnected = (['front', 'back'] as const).some(p => a.dockingPorts[p].dockedTo?.spacecraft === b);
-                if (alreadyConnected) continue;
-
-                // Try all port combinations; stop at the first that satisfies docking
-                let paired = false;
-                for (const aPort of ports) {
-                    if (paired) break;
-                    if (!a.dockingPorts[aPort] || a.dockingPorts[aPort].isOccupied) continue;
-                    for (const bPort of ports) {
-                        if (!b.dockingPorts[bPort] || b.dockingPorts[bPort].isOccupied) continue;
-                        if (!canDockWithinThresholds(a, aPort, b, bPort)) continue;
-
-                        // Create the physical link
-                        if (a.dock(aPort, b, bPort)) {
-                            // Hard-disable autopilots and clear latches on both craft
-                            const apA = a.spacecraftController?.autopilot;
-                            const apB = b.spacecraftController?.autopilot;
-                            if (apA) { apA.resetAllModes(); apA.setReferenceObject(null); apA.setEnabled(false); }
-                            if (apB) { apB.resetAllModes(); apB.setReferenceObject(null); apB.setEnabled(false); }
-                            a.spacecraftController?.resetThrusterLatch?.();
-                            b.spacecraftController?.resetThrusterLatch?.();
-                            paired = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
     }
 }

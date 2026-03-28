@@ -1,4 +1,5 @@
-import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
+import { AutopilotMode } from './AutopilotMode';
+import type { AutopilotConfig } from './types';
 import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import type { ThrusterGroups } from '../../config/spacecraftConfig';

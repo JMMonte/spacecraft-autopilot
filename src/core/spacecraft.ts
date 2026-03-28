@@ -8,6 +8,7 @@ import { BasicWorld } from './BasicWorld';
 import type { PhysicsEngine } from '../physics';
 import { emitTraceSamplesCleared } from '../domain/simulationEvents';
 import type { SimulationRuntimeStatePort } from '../domain/runtimeStatePort';
+import type { SpacecraftRegistry } from '../domain/spacecraftRegistry';
 
 interface DockingPortInfo {
     position: THREE.Vector3;
@@ -26,6 +27,8 @@ interface DockingPorts {
 
 export class Spacecraft {
     public basicWorld: BasicWorld;
+    /** Narrow interface for cross-spacecraft queries (replaces basicWorld coupling). */
+    public registry: SpacecraftRegistry | null = null;
     public initialPosition: THREE.Vector3 | { x: number; y: number; z: number };
     public objects: SpacecraftModel;
     public rcsVisuals: RCSVisuals;

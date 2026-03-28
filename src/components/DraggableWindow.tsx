@@ -225,7 +225,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
               onMouseEnter={() => setHoveredEdge('right')}
               onMouseLeave={() => setHoveredEdge(null)}
               className="absolute top-0 right-0 h-full z-10"
-              style={{ width: 6, cursor: 'ew-resize', background: hoveredEdge === 'right' ? 'rgba(34,211,238,0.25)' : 'transparent' }}
+              style={{ width: 6, cursor: 'ew-resize', background: hoveredEdge === 'right' ? 'rgba(var(--accent-rgb),0.25)' : 'transparent' }}
             />
             {/* Left edge */}
             <div
@@ -233,7 +233,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
               onMouseEnter={() => setHoveredEdge('left')}
               onMouseLeave={() => setHoveredEdge(null)}
               className="absolute top-0 left-0 h-full z-10"
-              style={{ width: 6, cursor: 'ew-resize', background: hoveredEdge === 'left' ? 'rgba(34,211,238,0.25)' : 'transparent' }}
+              style={{ width: 6, cursor: 'ew-resize', background: hoveredEdge === 'left' ? 'rgba(var(--accent-rgb),0.25)' : 'transparent' }}
             />
             {/* Bottom edge */}
             <div
@@ -241,7 +241,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
               onMouseEnter={() => setHoveredEdge('bottom')}
               onMouseLeave={() => setHoveredEdge(null)}
               className="absolute left-0 bottom-0 w-full z-10"
-              style={{ height: 6, cursor: 'ns-resize', background: hoveredEdge === 'bottom' ? 'rgba(34,211,238,0.25)' : 'transparent' }}
+              style={{ height: 6, cursor: 'ns-resize', background: hoveredEdge === 'bottom' ? 'rgba(var(--accent-rgb),0.25)' : 'transparent' }}
             />
             {/* Top edge */}
             <div
@@ -249,7 +249,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
               onMouseEnter={() => setHoveredEdge('top')}
               onMouseLeave={() => setHoveredEdge(null)}
               className="absolute left-0 top-0 w-full z-10"
-              style={{ height: 6, cursor: 'ns-resize', background: hoveredEdge === 'top' ? 'rgba(34,211,238,0.25)' : 'transparent' }}
+              style={{ height: 6, cursor: 'ns-resize', background: hoveredEdge === 'top' ? 'rgba(var(--accent-rgb),0.25)' : 'transparent' }}
             />
             {/* Bottom-right corner */}
             <div
@@ -257,7 +257,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
               onMouseEnter={() => setHoveredEdge('bottom-right')}
               onMouseLeave={() => setHoveredEdge(null)}
               className="absolute z-10"
-              style={{ width: 12, height: 12, right: 0, bottom: 0, cursor: 'nwse-resize', background: hoveredEdge === 'bottom-right' ? 'rgba(34,211,238,0.35)' : 'transparent' }}
+              style={{ width: 12, height: 12, right: 0, bottom: 0, cursor: 'nwse-resize', background: hoveredEdge === 'bottom-right' ? 'rgba(var(--accent-rgb),0.35)' : 'transparent' }}
             />
             {/* Bottom-left corner */}
             <div
@@ -265,7 +265,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
               onMouseEnter={() => setHoveredEdge('bottom-left')}
               onMouseLeave={() => setHoveredEdge(null)}
               className="absolute z-10"
-              style={{ width: 12, height: 12, left: 0, bottom: 0, cursor: 'nesw-resize', background: hoveredEdge === 'bottom-left' ? 'rgba(34,211,238,0.35)' : 'transparent' }}
+              style={{ width: 12, height: 12, left: 0, bottom: 0, cursor: 'nesw-resize', background: hoveredEdge === 'bottom-left' ? 'rgba(var(--accent-rgb),0.35)' : 'transparent' }}
             />
             {/* Top-left corner */}
             <div
@@ -273,7 +273,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
               onMouseEnter={() => setHoveredEdge('top-left')}
               onMouseLeave={() => setHoveredEdge(null)}
               className="absolute z-10"
-              style={{ width: 12, height: 12, left: 0, top: 0, cursor: 'nwse-resize', background: hoveredEdge === 'top-left' ? 'rgba(34,211,238,0.35)' : 'transparent' }}
+              style={{ width: 12, height: 12, left: 0, top: 0, cursor: 'nwse-resize', background: hoveredEdge === 'top-left' ? 'rgba(var(--accent-rgb),0.35)' : 'transparent' }}
             />
             {/* Top-right corner */}
             <div
@@ -281,7 +281,7 @@ export const DraggableWindow: React.FC<DraggableWindowProps> = ({
               onMouseEnter={() => setHoveredEdge('top-right')}
               onMouseLeave={() => setHoveredEdge(null)}
               className="absolute z-10"
-              style={{ width: 12, height: 12, right: 0, top: 0, cursor: 'nesw-resize', background: hoveredEdge === 'top-right' ? 'rgba(34,211,238,0.35)' : 'transparent' }}
+              style={{ width: 12, height: 12, right: 0, top: 0, cursor: 'nesw-resize', background: hoveredEdge === 'top-right' ? 'rgba(var(--accent-rgb),0.35)' : 'transparent' }}
             />
           </>
         )}

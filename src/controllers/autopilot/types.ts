@@ -1,7 +1,29 @@
 import * as THREE from 'three';
 import type { Spacecraft } from '../../core/spacecraft';
 import type { ThrusterGroups } from '../../config/spacecraftConfig';
-import type { AutopilotConfig } from './AutopilotMode';
+
+export interface AutopilotConfig {
+    pid: {
+        orientation: { kp: number; ki: number; kd: number; };
+        position: { kp: number; ki: number; kd: number; };
+        momentum: { kp: number; ki: number; kd: number; };
+    };
+    limits: {
+        maxForce: number;
+        epsilon: number;
+        maxAngularMomentum: number;
+        maxLinearMomentum: number;
+        maxAngularVelocity: number;
+        maxAngularAcceleration: number;
+        maxLinearVelocity?: number;
+        maxLinearAcceleration?: number;
+    };
+    damping: {
+        factor: number;
+    };
+    customInertia?: { x: number; y: number; z: number };
+    inertiaMode?: 'solid' | 'hollow' | 'thin-shell';
+}
 
 // Mode names and state
 export type AutopilotModeName =

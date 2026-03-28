@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import {
   store,
+  traceStore,
   setAutopilotState,
   setUi,
   setGridVisible,
@@ -9,6 +10,8 @@ import {
   setSettings,
   setAttitudeSphereTexture,
   setUiTheme,
+  setThrusterLights,
+  setThrusterParticles,
   setTraceSettings,
   setDockingPlan,
 } from './appState';
@@ -34,6 +37,7 @@ export type {
 
 export {
   store,
+  traceStore,
   setAutopilotState,
   setUi,
   setGridVisible,
@@ -42,41 +46,27 @@ export {
   setSettings,
   setAttitudeSphereTexture,
   setUiTheme,
+  setThrusterLights,
+  setThrusterParticles,
   setTraceSettings,
   setDockingPlan,
 };
 
+// Hooks use stable snapshot getters — Object.is returns true when the slice
+// hasn't changed, preventing re-renders from unrelated state mutations.
+
 export function useAutopilot() {
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().autopilot,
-    () => store.getState().autopilot,
-  );
+  return useSyncExternalStore(store.subscribe, store.getAutopilot, store.getAutopilot);
 }
 
-// UI slice helpers
 export function useUi() {
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().ui,
-    () => store.getState().ui,
-  );
+  return useSyncExternalStore(store.subscribe, store.getUi, store.getUi);
 }
 
-// Settings slice helpers
 export function useSettings() {
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().settings,
-    () => store.getState().settings,
-  );
+  return useSyncExternalStore(store.subscribe, store.getSettings, store.getSettings);
 }
 
-// Trace settings helpers
 export function useTraceSettings() {
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().traceSettings,
-    () => store.getState().traceSettings,
-  );
+  return useSyncExternalStore(store.subscribe, store.getTraceSettings, store.getTraceSettings);
 }

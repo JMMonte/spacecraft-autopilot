@@ -1,0 +1,39 @@
+# Cursor Rules — Spacecraft Autopilot Simulator
+
+You are working on a Three.js + React 19 cockpit simulator with Rapier (WASM) physics, a modular autopilot system (5 modes), and web worker computation.
+
+## Critical Constraints
+
+- NEVER import `src/state/*` from simulation code (src/core/, src/controllers/, src/physics/, src/scenes/, src/objects/, src/helpers/, src/workers/). This boundary is test-enforced.
+- NO Redux. The project uses a custom Zustand-like store in `src/state/appState.ts`.
+- Use domain events (simulationEvents.ts) for cross-layer communication.
+- Zero-allocation in hot paths — autopilot modes use pre-allocated scratch THREE vectors. Don't create new Vector3/Quaternion in update loops.
+- Heavy computation goes to the web worker (src/workers/autopilot.worker.ts).
+- Tests use Node.js native `node:test` with `assert/strict`, NOT Jest or Vitest.
+- TypeScript strict mode. No implicit any, no unused locals/params.
+
+## Architecture
+
+Simulation Layer (core/, controllers/, physics/, scenes/, workers/) → domain events → domainStateBridge.ts → custom store → React hooks (useSyncExternalStore) → components.
+
+## Autopilot
+
+5 modes in src/controllers/autopilot/: orientationMatch, pointToPosition, cancelRotation, cancelLinearMotion, goToPosition. Base class AutopilotMode.ts. ManeuverPlanner.ts is pure math (zero THREE.js deps). LLM interface at window.__autopilot.
+
+## Stack
+
+React 19, Three.js 0.183, @react-three/fiber 9, Rapier WASM, Vite 7, Tailwind CSS v4, pnpm 10, Node 22.x, TypeScript 5.9 strict.
+
+## Commands
+
+- `pnpm run dev` — dev server :3000
+- `pnpm run test` — all tests (run before committing)
+- `pnpm run check:ts` — type check
+
+## TODOs
+
+See `TODO.md` for the actionable checklist. Pick a task, do the work, delete it from the file. Git history is the changelog. Add new issues you discover.
+
+## After Making Changes
+
+Update CLAUDE.md, AGENTS.md, and TODO.md if architecture changed or issues were resolved.

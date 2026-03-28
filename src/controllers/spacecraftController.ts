@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { Spacecraft } from '../core/spacecraft';
-import { SceneHelpers } from '../scenes/sceneHelpers';
 import { Autopilot } from './autopilot/Autopilot';
 import { createLogger } from '../utils/logger';
 import { getBasicThrusterGroups } from '../config/spacecraftConfig';
@@ -8,6 +7,8 @@ import type { ThrusterGroups } from '../config/spacecraftConfig';
 import { computeThrusterGroups } from '../utils/utils';
 import type { ThrusterConfig } from '../utils/utils';
 import { ManualAllocator } from './autopilot/ManualAllocator';
+import { ThrusterPWM } from './ThrusterPWM';
+import type { VisualizationCallbacks } from './types';
 
 interface KeyMap {
     [key: string]: boolean;
@@ -20,19 +21,13 @@ export class SpacecraftController {
     private isActive: boolean = false;
     private spacecraft!: Spacecraft;
     private currentTarget!: string | null;
-    private helpers!: SceneHelpers;
+    private helpers!: VisualizationCallbacks;
     private keysPressed!: KeyMap;
     private mass!: number;
     private thrust!: number;
     private thrusterMax: number[] = new Array(24).fill(0);
     public autopilot!: Autopilot;
-    // Thruster pulse-width modulation state (to reduce flicker)
-    private thrusterOnLatch: boolean[] = new Array(24).fill(false);
-    private thrusterLatchTimer: number[] = new Array(24).fill(0);
-    private thrusterLatchedForce: number[] = new Array(24).fill(0);
-    private minPulseOn: number = 0.03;  // seconds
-    private minPulseOff: number = 0.03; // seconds
-    private activationThresholdFactor: number = 0.003; // as fraction of per-thruster thrust
+    private thrusterPWM!: ThrusterPWM;
     // Reusable buffers to avoid per-frame allocations
     private manualForcesBuffer: number[] = new Array(24).fill(0);
     private combinedForcesBuffer: number[] = new Array(24).fill(0);
@@ -42,7 +37,7 @@ export class SpacecraftController {
     // Reserved for future: per-thruster custom caps provided by user/config
     // no waypoint planner
 
-    constructor(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers) {
+    constructor(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: VisualizationCallbacks) {
         this.log.debug('SpacecraftController constructor called');
         this.initializeProperties(spacecraft, currentTarget, helpers);
         this.log.debug('SpacecraftController initialized, isActive:', this.isActive);
@@ -65,7 +60,7 @@ export class SpacecraftController {
         this.currentTarget = target?.uuid || null;
     }
 
-    private initializeProperties(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: SceneHelpers): void {
+    private initializeProperties(spacecraft: Spacecraft, currentTarget: { uuid: string } | null, helpers: VisualizationCallbacks): void {
         this.log.debug('Initializing SpacecraftController properties');
         this.spacecraft = spacecraft;
         this.currentTarget = currentTarget?.uuid || null;
@@ -81,6 +76,7 @@ export class SpacecraftController {
         this.baseThrust = this.thrust;
         // Default per-thruster capacities (N). Can be customized later via config.
         this.thrusterMax = new Array(24).fill(this.thrust);
+        this.thrusterPWM = new ThrusterPWM(this.thrust, this.thrusterMax);
 
         // Create autopilot with correct parameters
         const thrusterGroups = this.getThrusterGroups();
@@ -379,25 +375,25 @@ export class SpacecraftController {
         // Compute only what is needed per visible helper
         if (h.velocityArrow?.visible) {
             const currentVelocity = this.spacecraft.getWorldVelocityRef();
-            this.helpers.updateVelocityArrow(bodyPosition, currentVelocity);
+            this.helpers.updateVelocityArrow?.(bodyPosition, currentVelocity);
         }
 
         if (h.rotationAxisArrow?.visible) {
             const currentAngularVelocity = this.spacecraft.getWorldAngularVelocityRef();
-            this.helpers.updateRotationAxisArrow(bodyPosition, currentAngularVelocity);
+            this.helpers.updateRotationAxisArrow?.(bodyPosition, currentAngularVelocity);
         }
 
         if (h.orientationArrow?.visible) {
             const defaultForwardVector = new THREE.Vector3(0, 0, 1);
             const orientationVector = defaultForwardVector.applyQuaternion(this.spacecraft.getWorldOrientationRef());
-            this.helpers.updateOrientationArrow(bodyPosition, orientationVector);
+            this.helpers.updateOrientationArrow?.(bodyPosition, orientationVector);
         }
 
         if (h.autopilotArrow?.visible) {
             const defaultForwardVector = new THREE.Vector3(0, 0, 1);
             const targetOrientationQuat = this.autopilot.getTargetOrientation();
             const targetOrientationVector = defaultForwardVector.applyQuaternion(targetOrientationQuat);
-            this.helpers.updateAutopilotArrow(bodyPosition, targetOrientationVector);
+            this.helpers.updateAutopilotArrow?.(bodyPosition, targetOrientationVector);
         }
 
         if (h.autopilotTorqueArrow?.visible) {
@@ -405,7 +401,7 @@ export class SpacecraftController {
             const yawTorque   = thrustForces[8] + thrustForces[11] + thrustForces[12] + thrustForces[15];
             const rollTorque  = thrustForces[1] + thrustForces[2] + thrustForces[5] + thrustForces[6];
             const autopilotTorque = new THREE.Vector3(pitchTorque, yawTorque, rollTorque);
-            this.helpers.updateAutopilotTorqueArrow(bodyPosition, autopilotTorque);
+            this.helpers.updateAutopilotTorqueArrow?.(bodyPosition, autopilotTorque);
         }
 
         // Update path visualization when enabled
@@ -415,64 +411,21 @@ export class SpacecraftController {
                 const pts = ap.getPathSamples?.();
                 const carrot = ap.getPathCarrot?.();
                 if (pts && pts.length >= 2) {
-                    this.helpers.updatePath(pts, carrot || undefined);
+                    this.helpers.updatePath?.(pts, carrot || undefined);
                 }
             } catch {}
         }
     }
 
     private applyForcesToThrusters(forces: number[], dt: number): boolean[] {
-        const activationThresholdBase = this.activationThresholdFactor;
-        const visibility = new Array(24).fill(false);
-        const appliedForces: number[] = new Array(24).fill(0);
+        const { visibility, applied } = this.thrusterPWM.apply(forces, dt);
 
+        // Apply forces to RCS visuals and update cone mesh visibility
         for (let i = 0; i < 24; i++) {
-            // clamp desired force
-            const cap = this.thrusterMax[i] || this.thrust;
-            const desired = Math.min(Math.max(forces[i] || 0, 0), cap);
-
-            // advance timer
-            this.thrusterLatchTimer[i] += dt;
-
-            // state transition with min pulse width hysteresis
-            const stateOn = this.thrusterOnLatch[i];
-            const activationThresholdOn = cap * activationThresholdBase;
-            const activationThresholdOff = activationThresholdOn * 0.5;
-            const desiredOn = stateOn
-                ? desired >= activationThresholdOff
-                : desired >= activationThresholdOn;
-            if (desiredOn !== stateOn) {
-                const minTime = stateOn ? this.minPulseOn : this.minPulseOff;
-                if (this.thrusterLatchTimer[i] >= minTime) {
-                    // toggle
-                    this.thrusterOnLatch[i] = desiredOn;
-                    this.thrusterLatchTimer[i] = 0;
-                    if (desiredOn) {
-                        this.thrusterLatchedForce[i] = desired; // start with desired
-                    } else {
-                        this.thrusterLatchedForce[i] = 0;
-                    }
-                }
-            }
-
-            // Smooth latched force when on
-            if (this.thrusterOnLatch[i]) {
-                // update toward desired
-                const alpha = 0.8; // heavier smoothing
-                this.thrusterLatchedForce[i] = this.thrusterLatchedForce[i] * alpha + desired * (1 - alpha);
-                // Do not force a minimum output once latched on; this avoids
-                // terminal overshoot oscillations from fixed-size pulses.
-                const f = Math.max(0, Math.min(this.thrusterLatchedForce[i], cap));
-                this.spacecraft.rcsVisuals.applyForce(i, f, dt);
-                visibility[i] = true;
-                appliedForces[i] = f;
-            } else {
-                visibility[i] = false;
-                appliedForces[i] = 0;
+            if (visibility[i]) {
+                this.spacecraft.rcsVisuals.applyForce(i, applied[i], dt);
             }
         }
-
-        // Update cone mesh visibility
         this.spacecraft.rcsVisuals.getConeMeshes().forEach((coneMesh, index) => {
             coneMesh.visible = visibility[index];
         });
@@ -482,10 +435,10 @@ export class SpacecraftController {
             const thrusters = this.spacecraft.getThrusterConfigs?.() || [];
             let absSum = 0;
             const net = new THREE.Vector3(0, 0, 0);
-            for (let i = 0; i < Math.min(24, appliedForces.length, thrusters.length); i++) {
-                const f = appliedForces[i] || 0;
+            for (let i = 0; i < Math.min(24, applied.length, thrusters.length); i++) {
+                const f = applied[i] || 0;
                 absSum += Math.abs(f);
-                const dir = thrusters[i]?.direction; // assume world-space unit
+                const dir = thrusters[i]?.direction;
                 if (dir && typeof dir.x === 'number') {
                     net.x += dir.x * f;
                     net.y += dir.y * f;
@@ -558,7 +511,7 @@ export class SpacecraftController {
 
         // Clean up helpers
         if (this.helpers) {
-            this.helpers.cleanup();
+            this.helpers.cleanup?.();
         }
     }
 
@@ -570,7 +523,8 @@ export class SpacecraftController {
         this.thrust = value;
         // Update per-thruster capacities to match new thrust
         this.thrusterMax = new Array(24).fill(value);
-        
+
+        try { this.thrusterPWM?.setThrust(value); this.thrusterPWM?.setThrusterMax(this.thrusterMax); } catch {}
         try { this.autopilot?.setThrust?.(value); } catch {}
         try { this.autopilot?.setThrusterStrengths?.(this.thrusterMax); } catch {}
         try { this.manualAllocator?.setThrust?.(value); } catch {}
@@ -584,6 +538,7 @@ export class SpacecraftController {
     public setThrusterStrengths(max: number[]): void {
         if (!Array.isArray(max) || max.length !== 24) return;
         this.thrusterMax = max.slice(0, 24);
+        try { this.thrusterPWM?.setThrusterMax(this.thrusterMax); } catch {}
         try { this.autopilot?.setThrusterStrengths(this.thrusterMax); } catch {}
         try { this.manualAllocator?.setThrusterMax(this.thrusterMax); } catch {}
     }
@@ -620,11 +575,7 @@ export class SpacecraftController {
      * Useful when external events (e.g., docking) require an abrupt stop.
      */
     public resetThrusterLatch(): void {
-        for (let i = 0; i < 24; i++) {
-            this.thrusterOnLatch[i] = false;
-            this.thrusterLatchTimer[i] = 0;
-            this.thrusterLatchedForce[i] = 0;
-        }
+        this.thrusterPWM.reset();
         // Also clear any lingering visual effects
         try {
             this.spacecraft.rcsVisuals.getConeMeshes().forEach((cone) => (cone.visible = false));

@@ -6,7 +6,7 @@ import { CancelLinearMotion } from '../controllers/autopilot/CancelLinearMotion'
 import { PointToPosition } from '../controllers/autopilot/PointToPosition';
 import { OrientationMatchAutopilot } from '../controllers/autopilot/OrientationMatchAutopilot';
 import { GoToPosition } from '../controllers/autopilot/GoToPosition';
-import type { AutopilotConfig } from '../controllers/autopilot/AutopilotMode';
+import type { AutopilotConfig } from '../controllers/autopilot/types';
 import { TrajectoryPlanner } from '../controllers/trajectory/TrajectoryPlanner';
 import type { ThrusterGroups } from '../config/spacecraftConfig';
 import type { WorkerInboundMsg } from '../controllers/autopilot/types';
@@ -156,6 +156,60 @@ class WorkerAutopilot {
     this.goToPositionMode.setAllocationScale(1.0);
   }
 
+  // ── Type-safe batch operations for worker message handlers ──
+
+  private get allModes() {
+    return [this.cancelRotationMode, this.cancelLinearMotionMode, this.pointToPositionMode, this.orientationMatchMode, this.goToPositionMode];
+  }
+
+  setThrusterStrengths(strengths: number[]): void {
+    const arr = (Array.isArray(strengths) && strengths.length === 24) ? strengths.slice(0, 24) : new Array(24).fill(this.thrust);
+    this.thrusterMax = arr;
+    for (const m of this.allModes) m.setThrusterMax(arr);
+  }
+
+  setThrusterGroupsAll(groups: ThrusterGroups): void {
+    this.thrusterGroups = groups;
+    for (const m of this.allModes) m.setThrusterGroups(groups);
+  }
+
+  setThrustAll(thrust: number): void {
+    this.thrust = thrust;
+    const newMax = new Array(24).fill(thrust);
+    this.thrusterMax = newMax;
+    for (const m of this.allModes) { m.setThrust(thrust); m.setThrusterMax(newMax); }
+  }
+
+  invalidateAllCaps(): void {
+    for (const m of this.allModes) m.invalidateCaps();
+  }
+
+  setGains(gains: { orientation: { kp: number; ki: number; kd: number }; rotationCancel?: { kp: number; ki: number; kd: number }; position: { kp: number; ki: number; kd: number }; momentum: { kp: number; ki: number; kd: number } }): void {
+    this.orientationPID.setGain('Kp', gains.orientation.kp);
+    this.orientationPID.setGain('Ki', gains.orientation.ki);
+    this.orientationPID.setGain('Kd', gains.orientation.kd);
+    if (gains.rotationCancel) {
+      this.rotationCancelPID.setGain('Kp', gains.rotationCancel.kp);
+      this.rotationCancelPID.setGain('Ki', gains.rotationCancel.ki);
+      this.rotationCancelPID.setGain('Kd', gains.rotationCancel.kd);
+    }
+    this.linearPID.setGain('Kp', gains.position.kp);
+    this.linearPID.setGain('Ki', gains.position.ki);
+    this.linearPID.setGain('Kd', gains.position.kd);
+    this.momentumPID.setGain('Kp', gains.momentum.kp);
+    this.momentumPID.setGain('Ki', gains.momentum.ki);
+    this.momentumPID.setGain('Kd', gains.momentum.kd);
+  }
+
+  async calibrate(targets: Array<'rotation' | 'linear' | 'momentum' | 'attitude' | 'rotCancel'>): Promise<void> {
+    const promises: Promise<any>[] = [];
+    if (targets.includes('attitude')) promises.push(this.orientationPID.autoCalibrate());
+    if (targets.includes('rotCancel')) promises.push(this.rotationCancelPID.autoCalibrate());
+    if (targets.includes('linear')) promises.push(this.linearPID.autoCalibrate());
+    if (targets.includes('momentum')) promises.push(this.momentumPID.autoCalibrate());
+    await Promise.all(promises);
+  }
+
   compute(dt: number, active: { orientationMatch: boolean; cancelRotation: boolean; cancelLinearMotion: boolean; pointToPosition: boolean; goToPosition: boolean }): { forces: Float32Array; telemetry: { point?: any; orient?: any; goto?: any } } {
     // Update targetOrientation if pointing to a position (like main thread version)
     if (active.pointToPosition) {
@@ -179,7 +233,7 @@ class WorkerAutopilot {
     if (active.goToPosition) this.goToPositionMode.calculateForces(dt, out);
     // Per-thruster saturation to hardware caps
     for (let i = 0; i < out.length; i++) {
-      const cap = (this as any)['thrusterMax']?.[i] ?? this.thrust;
+      const cap = this.thrusterMax[i] ?? this.thrust;
       out[i] = Math.min(Math.max(0, out[i] || 0), cap);
     }
     const forces = Float32Array.from(out);
@@ -248,91 +302,32 @@ self.onmessage = async (ev: MessageEvent<WorkerInboundMsg>) => {
   }
   if (data.type === 'setGains') {
     if (!autopilot) return;
-    try {
-      autopilot['orientationPID']?.setGain('Kp', data.gains.orientation.kp);
-      autopilot['orientationPID']?.setGain('Ki', data.gains.orientation.ki);
-      autopilot['orientationPID']?.setGain('Kd', data.gains.orientation.kd);
-      if (data.gains.rotationCancel) {
-        autopilot['rotationCancelPID']?.setGain('Kp', data.gains.rotationCancel.kp);
-        autopilot['rotationCancelPID']?.setGain('Ki', data.gains.rotationCancel.ki);
-        autopilot['rotationCancelPID']?.setGain('Kd', data.gains.rotationCancel.kd);
-      }
-      autopilot['linearPID']?.setGain('Kp', data.gains.position.kp);
-      autopilot['linearPID']?.setGain('Ki', data.gains.position.ki);
-      autopilot['linearPID']?.setGain('Kd', data.gains.position.kd);
-      autopilot['momentumPID']?.setGain('Kp', data.gains.momentum.kp);
-      autopilot['momentumPID']?.setGain('Ki', data.gains.momentum.ki);
-      autopilot['momentumPID']?.setGain('Kd', data.gains.momentum.kd);
-    } catch {}
+    try { autopilot.setGains(data.gains); } catch {}
     return;
   }
   if (data.type === 'calibrate') {
     if (!autopilot) return;
-    try {
-      const promises: Promise<any>[] = [];
-      if (data.targets.includes('attitude')) promises.push(autopilot['orientationPID']?.autoCalibrate?.());
-      if (data.targets.includes('rotCancel')) promises.push(autopilot['rotationCancelPID']?.autoCalibrate?.());
-      if (data.targets.includes('linear')) promises.push(autopilot['linearPID']?.autoCalibrate?.());
-      if (data.targets.includes('momentum')) promises.push(autopilot['momentumPID']?.autoCalibrate?.());
-      await Promise.all(promises);
-    } catch {}
+    try { await autopilot.calibrate(data.targets); } catch {}
     return;
   }
   if (data.type === 'setThrusterStrengths') {
     if (!autopilot) return;
-    try {
-      const arr = (Array.isArray(data.strengths) && data.strengths.length === 24) ? data.strengths.slice(0, 24) : new Array(24).fill(autopilot['thrust']);
-      (autopilot as any)['thrusterMax'] = arr;
-      (autopilot as any)['cancelRotationMode']?.setThrusterMax?.(arr);
-      (autopilot as any)['cancelLinearMotionMode']?.setThrusterMax?.(arr);
-      (autopilot as any)['pointToPositionMode']?.setThrusterMax?.(arr);
-      (autopilot as any)['orientationMatchMode']?.setThrusterMax?.(arr);
-      (autopilot as any)['goToPositionMode']?.setThrusterMax?.(arr);
-    } catch {}
+    try { autopilot.setThrusterStrengths(data.strengths); } catch {}
     return;
   }
   if (data.type === 'setThrusterGroups') {
     if (!autopilot) return;
-    try {
-      (autopilot as any)['thrusterGroups'] = data.groups;
-      (autopilot as any)['cancelRotationMode']?.setThrusterGroups?.(data.groups);
-      (autopilot as any)['cancelLinearMotionMode']?.setThrusterGroups?.(data.groups);
-      (autopilot as any)['pointToPositionMode']?.setThrusterGroups?.(data.groups);
-      (autopilot as any)['orientationMatchMode']?.setThrusterGroups?.(data.groups);
-      (autopilot as any)['goToPositionMode']?.setThrusterGroups?.(data.groups);
-    } catch {}
+    try { autopilot.setThrusterGroupsAll(data.groups); } catch {}
     return;
   }
   if (data.type === 'setThrusters') {
     if (!autopilot || !scAdapter) return;
-    try {
-      scAdapter.setThrusters(data.thrusters);
-      (autopilot as any)['cancelRotationMode']?.invalidateCaps?.();
-      (autopilot as any)['cancelLinearMotionMode']?.invalidateCaps?.();
-      (autopilot as any)['pointToPositionMode']?.invalidateCaps?.();
-      (autopilot as any)['orientationMatchMode']?.invalidateCaps?.();
-      (autopilot as any)['goToPositionMode']?.invalidateCaps?.();
-    } catch {}
+    try { scAdapter.setThrusters(data.thrusters); autopilot.invalidateAllCaps(); } catch {}
     return;
   }
   if (data.type === 'setThrust') {
     if (!autopilot) return;
-    try {
-      (autopilot as any)['thrust'] = data.thrust;
-      // Update per-thruster capacities to match new thrust (consistent with main thread)
-      const newThrusterMax = new Array(24).fill(data.thrust);
-      (autopilot as any)['thrusterMax'] = newThrusterMax;
-      (autopilot as any)['cancelRotationMode']?.setThrust?.(data.thrust);
-      (autopilot as any)['cancelRotationMode']?.setThrusterMax?.(newThrusterMax);
-      (autopilot as any)['cancelLinearMotionMode']?.setThrust?.(data.thrust);
-      (autopilot as any)['cancelLinearMotionMode']?.setThrusterMax?.(newThrusterMax);
-      (autopilot as any)['pointToPositionMode']?.setThrust?.(data.thrust);
-      (autopilot as any)['pointToPositionMode']?.setThrusterMax?.(newThrusterMax);
-      (autopilot as any)['orientationMatchMode']?.setThrust?.(data.thrust);
-      (autopilot as any)['orientationMatchMode']?.setThrusterMax?.(newThrusterMax);
-      (autopilot as any)['goToPositionMode']?.setThrust?.(data.thrust);
-      (autopilot as any)['goToPositionMode']?.setThrusterMax?.(newThrusterMax);
-    } catch {}
+    try { autopilot.setThrustAll(data.thrust); } catch {}
     return;
   }
   if (data.type === 'update') {

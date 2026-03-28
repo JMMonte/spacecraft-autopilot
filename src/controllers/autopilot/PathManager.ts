@@ -125,7 +125,8 @@ export class PathManager {
   public collectObstacles(spacecraft: Spacecraft): Obstacle[] {
     const res: Obstacle[] = [];
     try {
-      const world: WorldLike | undefined = (spacecraft as unknown as { basicWorld?: WorldLike }).basicWorld;
+      const world: WorldLike | undefined = (spacecraft as unknown as { registry?: WorldLike }).registry
+        ?? (spacecraft as unknown as { basicWorld?: WorldLike }).basicWorld;
       const target = this.getTargetObject();
       if (target) res.push({ position: target.objects.box.position.clone(), size: target.getFullDimensions().clone(), isTarget: true });
       const otherCraft = (world?.getSpacecraftList?.() || []).filter((s: Spacecraft) => s !== spacecraft);

@@ -31,14 +31,20 @@ export class DockingController {
         this.spacecraft = spacecraft;
         this.trajectoryVisualizer = new TrajectoryVisualizer(scene);
 
-        // Set up sync with BasicWorld
-        if (spacecraft.basicWorld) {
-            this.updateSpacecraftLists(spacecraft.basicWorld.getSpacecraftList());
-            spacecraft.basicWorld.setSpacecraftListChangeCallback(() => {
-                if (spacecraft.basicWorld) {
-                    this.updateSpacecraftLists(spacecraft.basicWorld.getSpacecraftList());
-                }
-            });
+        // Set up sync with spacecraft registry (or legacy BasicWorld fallback)
+        const registry = spacecraft.registry ?? spacecraft.basicWorld;
+        if (registry) {
+            this.updateSpacecraftLists(registry.getSpacecraftList() as Spacecraft[]);
+            if ('onSpacecraftListChanged' in registry) {
+                registry.onSpacecraftListChanged(() => {
+                    const reg = spacecraft.registry ?? spacecraft.basicWorld;
+                    if (reg) this.updateSpacecraftLists(reg.getSpacecraftList() as Spacecraft[]);
+                });
+            } else if (spacecraft.basicWorld?.setSpacecraftListChangeCallback) {
+                spacecraft.basicWorld.setSpacecraftListChangeCallback(() => {
+                    if (spacecraft.basicWorld) this.updateSpacecraftLists(spacecraft.basicWorld.getSpacecraftList());
+                });
+            }
         }
     }
 
@@ -61,9 +67,8 @@ export class DockingController {
         this._ourPortId = ourPortId;
         this._targetPortId = targetPortId;
 
-        if (this.spacecraft.basicWorld) {
-            this.updateSpacecraftLists(this.spacecraft.basicWorld.getSpacecraftList());
-        }
+        const reg = this.spacecraft.registry ?? this.spacecraft.basicWorld;
+        if (reg) this.updateSpacecraftLists(reg.getSpacecraftList() as Spacecraft[]);
 
         this.phase = 'approach';
         this.currentWaypointIndex = 0;
@@ -492,9 +497,8 @@ export class DockingController {
         this.trajectory = null;
         this.currentWaypointIndex = 0;
 
-        if (this.spacecraft.basicWorld) {
-            this.updateSpacecraftLists(this.spacecraft.basicWorld.getSpacecraftList());
-        }
+        const reg = this.spacecraft.registry ?? this.spacecraft.basicWorld;
+        if (reg) this.updateSpacecraftLists(reg.getSpacecraftList() as Spacecraft[]);
 
         this.trajectoryVisualizer.clearDebugObjects();
         // Clear reference mode on autopilot if set

@@ -1,6 +1,6 @@
 import type * as THREE from 'three';
 import type { ThrusterGroups } from '../../config/spacecraftConfig';
-import type { AutopilotConfig } from './AutopilotMode';
+import type { AutopilotConfig } from './types';
 import type { AutopilotModes, AutopilotTelemetry, WorkerInboundMsg, WorkerPlanPathMsg, WorkerThrusterConfig } from './types';
 import { ControlScheduler } from './ControlScheduler';
 

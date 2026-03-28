@@ -1,0 +1,108 @@
+{
+  "bestParameters": {
+    "positionKp": 0.7000767395279672,
+    "positionKi": 0.0072654374745576055,
+    "positionKd": 0.9588289708219147,
+    "velocityKp": 1.2572539149938793,
+    "velocityKi": 0.07676853750468574,
+    "velocityKd": 0.30562437119873564,
+    "maxApproachSpeed": 2.4704251909387027,
+    "brakingMargin": 1.462267776861729,
+    "alignGateOnDeg": 15.849947612119877,
+    "alignGateOffDeg": 8.135505678516768,
+    "deviationThreshold": 3.0173886670193704,
+    "replanInterval": 0.5935347257886916,
+    "thrustBudgetScale": 0.25740920535048306,
+    "velocityDeadband": 0.03536516187110735,
+    "stopDistance": 0.3009243995375705,
+    "velocityFilterAlpha": 0.41324220425062097
+  },
+  "bestScore": 77.2815119331263,
+  "totalTests": 2,
+  "timeElapsed": 69,
+  "timeElapsedFormatted": "0s",
+  "topResults": [
+    {
+      "score": 77.2815119331263,
+      "parameters": {
+        "positionKp": 0.7000767395279672,
+        "positionKi": 0.0072654374745576055,
+        "positionKd": 0.9588289708219147,
+        "velocityKp": 1.2572539149938793,
+        "velocityKi": 0.07676853750468574,
+        "velocityKd": 0.30562437119873564,
+        "maxApproachSpeed": 2.4704251909387027,
+        "brakingMargin": 1.462267776861729,
+        "alignGateOnDeg": 15.849947612119877,
+        "alignGateOffDeg": 8.135505678516768,
+        "deviationThreshold": 3.0173886670193704,
+        "replanInterval": 0.5935347257886916,
+        "thrustBudgetScale": 0.25740920535048306,
+        "velocityDeadband": 0.03536516187110735,
+        "stopDistance": 0.3009243995375705,
+        "velocityFilterAlpha": 0.41324220425062097
+      },
+      "scenarios": [
+        {
+          "name": "corridor",
+          "score": 62.85514751621717,
+          "success": true,
+          "collisions": 0,
+          "minDistance": 0.000059191878752251625,
+          "fuelUsed": 8638.245403215702,
+          "fuelBudgetExceeded": false
+        },
+        {
+          "name": "slalom",
+          "score": 91.70787635003542,
+          "success": true,
+          "collisions": 0,
+          "minDistance": 2.500009905305717,
+          "fuelUsed": 9732.475147635201,
+          "fuelBudgetExceeded": false
+        }
+      ]
+    },
+    {
+      "score": 76.96197720593588,
+      "parameters": {
+        "positionKp": 0.94421777057798,
+        "positionKi": 0.005846817002663052,
+        "positionKd": 0.5787921537225387,
+        "velocityKp": 1.6281617818535892,
+        "velocityKi": 0.08215672255075071,
+        "velocityKd": 0.34486154373915634,
+        "maxApproachSpeed": 1.935100915916493,
+        "brakingMargin": 1.4950013970137288,
+        "alignGateOnDeg": 15.204104087331604,
+        "alignGateOffDeg": 9.699373095811698,
+        "deviationThreshold": 3.240889433572371,
+        "replanInterval": 0.5575200559232629,
+        "thrustBudgetScale": 0.23438061274530855,
+        "velocityDeadband": 0.011748739172906593,
+        "stopDistance": 0.07496572852273735,
+        "velocityFilterAlpha": 0.6912335682420754
+      },
+      "scenarios": [
+        {
+          "name": "corridor",
+          "score": 62.417675293819215,
+          "success": true,
+          "collisions": 0,
+          "minDistance": 0.000001490620724631242,
+          "fuelUsed": 9074.582201242478,
+          "fuelBudgetExceeded": false
+        },
+        {
+          "name": "slalom",
+          "score": 91.50627911805255,
+          "success": true,
+          "collisions": 0,
+          "minDistance": 2.500000082427868,
+          "fuelUsed": 10111.861138303591,
+          "fuelBudgetExceeded": false
+        }
+      ]
+    }
+  ]
+}

@@ -2,31 +2,12 @@ import * as THREE from 'three';
 import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 import type { ThrusterGroups } from '../../config/spacecraftConfig';
+import type { AutopilotConfig } from './types';
+import { CapabilityCalculator } from './CapabilityCalculator';
+import { ThrusterAllocator } from './ThrusterAllocator';
 
-export interface AutopilotConfig {
-    pid: {
-        orientation: { kp: number; ki: number; kd: number; };
-        position: { kp: number; ki: number; kd: number; };
-        momentum: { kp: number; ki: number; kd: number; };
-    };
-    limits: {
-        maxForce: number;
-        epsilon: number;
-        maxAngularMomentum: number; // limit rotational momentum |L|
-        maxLinearMomentum: number;  // limit translational momentum |p|
-        maxAngularVelocity: number; // rad/s cap for attitude profiles
-        maxAngularAcceleration: number; // rad/s^2 cap for attitude profiles
-        maxLinearVelocity?: number; // m/s cap for translation profiles (optional)
-        maxLinearAcceleration?: number; // m/s^2 cap for translation profiles (optional)
-    };
-    damping: {
-        factor: number;
-    };
-    // Optional custom inertia tensor (if known from CAD/physics)
-    customInertia?: { x: number; y: number; z: number };
-    // Inertia estimation mode for geometric approximation
-    inertiaMode?: 'solid' | 'hollow' | 'thin-shell';
-}
+// Re-export for backward compatibility during migration
+export type { AutopilotConfig } from './types';
 
 export abstract class AutopilotMode {
     protected spacecraft: Spacecraft;
@@ -35,17 +16,11 @@ export abstract class AutopilotMode {
     protected thrust: number;
     protected thrusterMax: number[] = new Array(24).fill(0);
     protected pidController: PIDController;
-    // Optional moving reference frame (e.g., target spacecraft)
-    // Currently only velocity is needed by translation modes
     protected referenceVelocityWorld: THREE.Vector3 | null = null;
-    // Simple output smoothing to reduce flicker near zero
-    protected lastRotCmd: THREE.Vector3 = new THREE.Vector3();
-    protected lastLinCmd: THREE.Vector3 = new THREE.Vector3();
-    protected rotSmoothAlpha: number = 0.4; // lower alpha => more responsive rotation
-    protected linSmoothAlpha: number = 0.5;
-    // Per-mode allocation scale (0..1) to arbitrate shared thruster budget across modes
-    private allocationScale: number = 1.0;
-    // Scratch vectors to reduce allocations
+    // Composed modules
+    protected capCalc: CapabilityCalculator;
+    protected allocator: ThrusterAllocator;
+    // Scratch vectors to reduce allocations in mode subclasses
     protected tmpVecA: THREE.Vector3 = new THREE.Vector3();
     protected tmpVecB: THREE.Vector3 = new THREE.Vector3();
     protected tmpVecC: THREE.Vector3 = new THREE.Vector3();
@@ -53,14 +28,6 @@ export abstract class AutopilotMode {
     protected tmpVecE: THREE.Vector3 = new THREE.Vector3();
     protected tmpQuatA: THREE.Quaternion = new THREE.Quaternion();
     protected tmpQuatB: THREE.Quaternion = new THREE.Quaternion();
-    private capsCache?: {
-        sig: string;
-        linForce: { x: number; y: number; z: number };
-        linAccel: { x: number; y: number; z: number };
-        inertia: { x: number; y: number; z: number };
-        angTorque: { x: number; y: number; z: number };
-        angAccel: { x: number; y: number; z: number };
-    };
 
     constructor(
         spacecraft: Spacecraft,
@@ -75,35 +42,40 @@ export abstract class AutopilotMode {
         this.thrusterGroups = thrusterGroups;
         this.thrust = thrust;
         this.pidController = pidController;
-        // Per-thruster max strengths (N). Defaults to uniform `thrust` when not provided
         this.thrusterMax = (thrusterMax && thrusterMax.length === 24) ? thrusterMax.slice(0, 24) : new Array(24).fill(thrust);
+
+        this.capCalc = new CapabilityCalculator(
+            spacecraft as any, config, thrusterGroups, thrust, this.thrusterMax,
+        );
+        this.allocator = new ThrusterAllocator(
+            thrusterGroups, thrust, this.thrusterMax, config.limits.epsilon,
+            () => this.getDynamicCaps(),
+        );
     }
 
-    // Update the scalar thrust budget used by allocation helpers
     public setThrust(value: number): void {
         this.thrust = value;
-        this.capsCache = undefined;
+        this.capCalc.setThrust(value);
+        this.allocator.setThrust(value);
     }
 
-    // Update grouping dynamically (e.g., when RCS transforms change)
     public setThrusterGroups(groups: ThrusterGroups): void {
         this.thrusterGroups = groups;
-        this.capsCache = undefined;
+        this.capCalc.setThrusterGroups(groups);
+        this.allocator.setThrusterGroups(groups);
     }
 
-    // Invalidate cached capability calculations (e.g., after thruster layout change)
     public invalidateCaps(): void {
-        this.capsCache = undefined;
+        this.capCalc.invalidate();
     }
 
-    // Update per-thruster capacities at runtime and invalidate cached caps
     public setThrusterMax(max: number[]): void {
         if (Array.isArray(max) && max.length === 24) this.thrusterMax = max.slice(0, 24);
         else this.thrusterMax = new Array(24).fill(this.thrust);
-        this.capsCache = undefined;
+        this.capCalc.setThrusterMax(this.thrusterMax);
+        this.allocator.setThrusterMax(this.thrusterMax);
     }
 
-    // Implementations should write into `out` when provided to avoid allocations
     abstract calculateForces(dt: number, out?: number[]): number[];
 
     public setReferenceVelocityWorld(v: THREE.Vector3 | null): void {
@@ -115,166 +87,55 @@ export abstract class AutopilotMode {
         }
     }
 
-
     public setAllocationScale(scale: number): void {
-        this.allocationScale = THREE.MathUtils.clamp(scale, 0, 1);
+        this.allocator.setAllocationScale(scale);
     }
 
+    // ── Backward-compatible delegators (modes call these; will be removed in Step 1.4) ──
+
+    /** @deprecated Use this.allocator.allocateRotation() directly */
     protected applyPIDOutputToThrusters(pidOutput: THREE.Vector3): number[] {
         const out = Array(24).fill(0);
-        this.applyPIDOutputToThrustersInPlace(pidOutput, out);
+        this.allocator.allocateRotation(pidOutput, out);
         return out;
     }
 
+    /** @deprecated Use this.allocator.allocateRotation() directly */
     protected applyPIDOutputToThrustersInPlace(pidOutput: THREE.Vector3, out: number[]): void {
-        // lastRotCmd = lastRotCmd * alpha + pidOutput * (1 - alpha)
-        this.lastRotCmd.multiplyScalar(this.rotSmoothAlpha);
-        this.tmpVecA.copy(pidOutput).multiplyScalar(1 - this.rotSmoothAlpha);
-        this.lastRotCmd.add(this.tmpVecA);
-
-        // Direct torque mapping: PID output directly commands thrust fraction
-        // No Lcap normalization - PID gains handle the scaling
-        const eps = this.config.limits.epsilon * 2.0;
-        const caps = this.getDynamicCaps();
-
-        // X axis (pitch)
-        const x = this.lastRotCmd.x;
-        if (Math.abs(x) > eps) {
-            const tauAxisMax = Math.max(1e-6, caps.angTorque.x);
-            // Clamp to max torque capability, thrust fraction = min(1, pidOut/tauMax)
-            const thrustFraction = Math.min(1.0, Math.abs(x) / tauAxisMax);
-            // pitch[0] = pitch up (+X rotation), pitch[1] = pitch down (-X rotation)
-            // If PID says +X torque needed, use pitch[0] (pitch up)
-            const group = this.thrusterGroups.pitch[x >= 0 ? 1 : 0];
-            const perThruster = this.thrust * thrustFraction * this.allocationScale;
-            group.forEach((idx: number) => {
-                const cap = this.thrusterMax[idx] || this.thrust;
-                out[idx] += Math.min(cap, perThruster);
-            });
-        }
-
-        // Y axis (yaw)
-        const y = this.lastRotCmd.y;
-        if (Math.abs(y) > eps) {
-            const tauAxisMax = Math.max(1e-6, caps.angTorque.y);
-            const thrustFraction = Math.min(1.0, Math.abs(y) / tauAxisMax);
-            // yaw[0] = yaw left (+Y rotation), yaw[1] = yaw right (-Y rotation)
-            // If PID says +Y torque needed, use yaw[0] (yaw left)
-            const group = this.thrusterGroups.yaw[y >= 0 ? 0 : 1];
-            const perThruster = this.thrust * thrustFraction * this.allocationScale;
-            group.forEach((idx: number) => {
-                const cap = this.thrusterMax[idx] || this.thrust;
-                out[idx] += Math.min(cap, perThruster);
-            });
-        }
-
-        // Z axis (roll)
-        const z = this.lastRotCmd.z;
-        if (Math.abs(z) > eps) {
-            const tauAxisMax = Math.max(1e-6, caps.angTorque.z);
-            const thrustFraction = Math.min(1.0, Math.abs(z) / tauAxisMax);
-            // roll[0] = roll right (+Z rotation), roll[1] = roll left (-Z rotation)
-            // If PID says +Z torque needed, use roll[0] (roll right)
-            const group = this.thrusterGroups.roll[z >= 0 ? 0 : 1];
-            const perThruster = this.thrust * thrustFraction * this.allocationScale;
-            group.forEach((idx: number) => {
-                const cap = this.thrusterMax[idx] || this.thrust;
-                out[idx] += Math.min(cap, perThruster);
-            });
-        }
+        this.allocator.allocateRotation(pidOutput, out);
     }
 
+    /** @deprecated Use this.allocator.allocateTranslation() directly */
     protected applyTranslationalForcesToThrusterGroups(localForce: THREE.Vector3): number[] {
         const out = Array(24).fill(0);
-        this.applyTranslationalForcesToThrusterGroupsInPlace(localForce, out);
+        this.allocator.allocateTranslation(localForce, out);
         return out;
     }
 
+    /** @deprecated Use this.allocator.allocateTranslation() directly */
     protected applyTranslationalForcesToThrusterGroupsInPlace(localForce: THREE.Vector3, out: number[]): void {
-        // lastLinCmd = lastLinCmd * alpha + localForce * (1 - alpha)
-        this.lastLinCmd.multiplyScalar(this.linSmoothAlpha);
-        this.tmpVecA.copy(localForce).multiplyScalar(1 - this.linSmoothAlpha);
-        this.lastLinCmd.add(this.tmpVecA);
-
-        const smoothed = this.lastLinCmd;
-        const axes = [
-            { axis: 'z' as keyof THREE.Vector3, groups: this.thrusterGroups.forward, positive: true },
-            { axis: 'y' as keyof THREE.Vector3, groups: this.thrusterGroups.up, positive: true },
-            { axis: 'x' as keyof THREE.Vector3, groups: this.thrusterGroups.left, positive: false },
-        ];
-
-        const epsilon = this.config.limits.epsilon * 2.0;
-        // (caps not needed here)
-        axes.forEach(({ axis, groups, positive }) => {
-            const val = smoothed[axis] as number; // desired total local force [N] along axis
-            if (Math.abs(val) <= epsilon) return;
-            const thrusterGroup = val * (positive ? 1 : -1) > 0 ? groups[0] : groups[1];
-            if (!thrusterGroup || thrusterGroup.length === 0) return;
-            // Group-specific capacity (sum of per-thruster caps)
-            const sumCap = thrusterGroup.reduce((s: number, idx: number) => s + (this.thrusterMax[idx] || this.thrust), 0);
-            const total = THREE.MathUtils.clamp(Math.abs(val), 0, sumCap);
-            if (sumCap <= 1e-6) return;
-            thrusterGroup.forEach((index: number) => {
-                const cap = this.thrusterMax[index] || this.thrust;
-                const share = total * (cap / sumCap);
-                out[index] += Math.min(cap, share * this.allocationScale);
-            });
-        });
+        this.allocator.allocateTranslation(localForce, out);
     }
 
+    /** @deprecated Use this.capCalc.calculateMomentOfInertia() directly */
     protected calculateMomentOfInertia(): number {
-        const mass = this.spacecraft.getMass();
-        const size = this.spacecraft.getMainBodyDimensions();
-
-        const w = size.x;
-        const h = size.y;
-        const d = size.z;
-
-        const Ix = (1 / 12) * mass * (h * h + d * d);
-        const Iy = (1 / 12) * mass * (w * w + d * d);
-        const Iz = (1 / 12) * mass * (w * w + h * h);
-        return Math.max(Ix, Iy, Iz);
+        return this.capCalc.calculateMomentOfInertia();
     }
 
+    /** @deprecated Use this.capCalc.calculateMomentOfInertiaByAxis() directly */
     protected calculateMomentOfInertiaByAxis(): { x: number; y: number; z: number } {
-        // Use custom inertia if provided (from physics engine or CAD)
-        if (this.config.customInertia) {
-            return { ...this.config.customInertia };
-        }
-
-        // Otherwise calculate from geometry
-        const mass = this.spacecraft.getMass();
-        const size = this.spacecraft.getMainBodyDimensions();
-        const w = size.x;
-        const h = size.y;
-        const d = size.z;
-
-        // Shape factor based on inertia mode
-        let k = 1 / 12; // solid box (default)
-        const mode = this.config.inertiaMode || 'solid';
-        
-        if (mode === 'hollow') {
-            // Hollow box approximation (walls have thickness, interior is empty)
-            // Assumes ~20% wall thickness, increases inertia by ~1.5x
-            k = 1 / 8;
-        } else if (mode === 'thin-shell') {
-            // Thin-walled box (negligible thickness)
-            // All mass at surface, increases inertia significantly
-            k = 1 / 6;
-        }
-
-        const Ix = k * mass * (h * h + d * d);
-        const Iy = k * mass * (w * w + d * d);
-        const Iz = k * mass * (w * w + h * h);
-        return { x: Ix, y: Iy, z: Iz };
+        return this.capCalc.calculateMomentOfInertiaByAxis();
     }
 
+    /** @deprecated Use this.capCalc.getEffectiveInertiaAlongAxis() directly */
     protected getEffectiveInertiaAlongAxis(axis: THREE.Vector3): number {
-        const I = this.calculateMomentOfInertiaByAxis();
-        const a = this.tmpVecA.copy(axis).normalize();
-        return I.x * a.x * a.x + I.y * a.y * a.y + I.z * a.z * a.z;
+        return this.capCalc.getEffectiveInertiaAlongAxis(axis.x, axis.y, axis.z);
     }
 
+    /**
+     * Overridable capability getter. Tests override this to inject fixed caps.
+     * Delegates to capCalc by default.
+     */
     protected getDynamicCaps(): {
         linForce: { x: number; y: number; z: number };
         linAccel: { x: number; y: number; z: number };
@@ -282,75 +143,10 @@ export abstract class AutopilotMode {
         angTorque: { x: number; y: number; z: number };
         angAccel: { x: number; y: number; z: number };
     } {
-        // Build signature to cache across frames until geometry/parameters change
-        const dims = this.spacecraft.getMainBodyDimensions();
-        const mass = this.spacecraft.getMass();
-        const sig = `${dims.x.toFixed(3)}:${dims.y.toFixed(3)}:${dims.z.toFixed(3)}:m${mass.toFixed(3)}:t${this.thrust.toFixed(3)}`;
-        if (this.capsCache && this.capsCache.sig === sig) {
-            return this.capsCache;
-        }
-
-        // Linear force/accel capability per principal axis (use per-thruster capacities)
-        const sumGroup = (arr?: number[]) => (arr || []).reduce((s, i) => s + (this.thrusterMax[i] || this.thrust), 0);
-        const linForce = {
-            x: Math.max(sumGroup(this.thrusterGroups.left?.[0]), sumGroup(this.thrusterGroups.left?.[1])),
-            y: Math.max(sumGroup(this.thrusterGroups.up?.[0]),   sumGroup(this.thrusterGroups.up?.[1])),
-            z: Math.max(sumGroup(this.thrusterGroups.forward?.[0]), sumGroup(this.thrusterGroups.forward?.[1])),
-        };
-        const linAccel = {
-            x: linForce.x / Math.max(mass, 1e-6),
-            y: linForce.y / Math.max(mass, 1e-6),
-            z: linForce.z / Math.max(mass, 1e-6),
-        };
-
-        // Angular torque/accel capability (approx) using thruster geometry
-        const inertia = this.calculateMomentOfInertiaByAxis();
-        const thrusters = this.spacecraft.getThrusterConfigs?.() || [];
-        const axisX = new THREE.Vector3(1, 0, 0);
-        const axisY = new THREE.Vector3(0, 1, 0);
-        const axisZ = new THREE.Vector3(0, 0, 1);
-        const torqueForGroup = (indices: number[], axis: THREE.Vector3) => {
-            let tau = 0;
-            indices?.forEach((i) => {
-                const t = thrusters[i];
-                if (!t) return;
-                const r = t.position; // local
-                const dir = t.direction.clone().normalize();
-                const cap = this.thrusterMax[i] || this.thrust;
-                const F = dir.clone().multiplyScalar(-cap); // force is opposite to nozzle dir
-                const tauVec = new THREE.Vector3().copy(r).cross(F);
-                tau += Math.abs(tauVec.dot(axis));
-            });
-            return tau; // N·m approx
-        };
-        const pitchGroups = this.thrusterGroups.pitch || [[], []];
-        const yawGroups = this.thrusterGroups.yaw || [[], []];
-        const rollGroups = this.thrusterGroups.roll || [[], []];
-
-        const tauX = Math.max(
-            torqueForGroup(pitchGroups[0] || [], axisX),
-            torqueForGroup(pitchGroups[1] || [], axisX)
-        );
-        const tauY = Math.max(
-            torqueForGroup(yawGroups[0] || [], axisY),
-            torqueForGroup(yawGroups[1] || [], axisY)
-        );
-        const tauZ = Math.max(
-            torqueForGroup(rollGroups[0] || [], axisZ),
-            torqueForGroup(rollGroups[1] || [], axisZ)
-        );
-
-        const angTorque = { x: tauX, y: tauY, z: tauZ };
-        const angAccel = {
-            x: tauX / Math.max(inertia.x, 1e-6),
-            y: tauY / Math.max(inertia.y, 1e-6),
-            z: tauZ / Math.max(inertia.z, 1e-6),
-        };
-
-        this.capsCache = { sig, linForce, linAccel, inertia, angTorque, angAccel };
-        return this.capsCache;
+        return this.capCalc.getDynamicCaps();
     }
 
+    /** Derived from getDynamicCaps() — calls the overridable version for test compatibility. */
     protected getDynamicLinearAccelAlong(dirLocal: THREE.Vector3): number {
         const caps = this.getDynamicCaps();
         const nx = Math.abs(dirLocal.x);
@@ -359,16 +155,15 @@ export abstract class AutopilotMode {
         return nx * caps.linAccel.x + ny * caps.linAccel.y + nz * caps.linAccel.z;
     }
 
+    /** Derived from getDynamicCaps() — calls the overridable version for test compatibility. */
     protected getDynamicAngularAccelCap(): { alphaMax: number; omegaMax: number } {
         const caps = this.getDynamicCaps();
-        // Conservative scalar cap as min across axes with a safety factor (brake earlier)
         const angAccel = caps.angAccel;
         const alphaDyn = angAccel
             ? Math.max(1e-4, Math.min(angAccel.x, angAccel.y, angAccel.z)) * 0.6
             : this.config.limits.maxAngularAcceleration * 0.6;
         const alphaMax = Math.min(this.config.limits.maxAngularAcceleration, alphaDyn);
-        // Derive an omega cap from alpha (triangular rotate over ~0.5 rad)
-        const omegaFromAlpha = Math.sqrt(2 * alphaMax * 0.5); // rad/s
+        const omegaFromAlpha = Math.sqrt(2 * alphaMax * 0.5);
         const omegaMax = Math.min(this.config.limits.maxAngularVelocity, Math.max(0.2, omegaFromAlpha));
         return { alphaMax, omegaMax };
     }
@@ -381,7 +176,7 @@ export abstract class AutopilotMode {
 
     protected quaternionToAngularVelocity(quaternion: THREE.Quaternion): THREE.Vector3 {
         let angle = 2 * Math.acos(quaternion.w);
-        let sinHalfAngle = Math.sqrt(1 - quaternion.w * quaternion.w);
+        const sinHalfAngle = Math.sqrt(1 - quaternion.w * quaternion.w);
         const axis = new THREE.Vector3(quaternion.x, quaternion.y, quaternion.z);
 
         if (sinHalfAngle > 0.01) {
@@ -396,4 +191,8 @@ export abstract class AutopilotMode {
         }
         return axis;
     }
-} 
+
+    // Smoothing alpha setters — modes set these in constructors
+    protected set rotSmoothAlpha(alpha: number) { this.allocator.setRotSmoothAlpha(alpha); }
+    protected set linSmoothAlpha(alpha: number) { this.allocator.setLinSmoothAlpha(alpha); }
+}

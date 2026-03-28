@@ -8,7 +8,7 @@ import {
   emitTraceSamplesCleared,
   resetSimulationEventsForTests,
 } from '../../../src/domain/simulationEvents';
-import { resetAppStateForTests, store } from '../../../src/state/appState';
+import { resetAppStateForTests, store, traceStore } from '../../../src/state/appState';
 import {
   ensureDomainStateBridgeInstalled,
   installDomainStateBridge,
@@ -80,12 +80,12 @@ test('trace events append and clear samples', () => {
     sample: { t: 100, x: 1, y: 2, z: 3, speed: 4, accel: 5, forceAbs: 6, forceNet: 7 },
   });
 
-  const samples = store.getState().traces['sc-01'];
+  const samples = traceStore.getTraces()['sc-01'];
   assert.equal(samples.length, 1);
   assert.equal(samples[0].speed, 4);
 
   emitTraceSamplesCleared('sc-01');
-  assert.equal(store.getState().traces['sc-01'].length, 0);
+  assert.equal(traceStore.getTraces()['sc-01'].length, 0);
   cleanup();
 });
 

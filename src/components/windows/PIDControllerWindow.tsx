@@ -1,5 +1,6 @@
 import React, { ChangeEvent, useEffect, useState } from 'react';
 import { NumberInput } from '../ui/NumberInput';
+import { WINDOW_BODY, SECTION_HEADER, FIELD_LABEL, BUTTON_PRIMARY } from '../ui/styles';
 import { PIDController } from '../../controllers/pidController';
 import type { Autopilot } from '../../controllers/autopilot/Autopilot';
 
@@ -11,400 +12,243 @@ interface PIDControllerWindowProps {
     autopilot?: Autopilot | null;
 }
 
-interface GainConfig {
-    key: 'Kp' | 'Ki' | 'Kd';
-}
+type GainKey = 'Kp' | 'Ki' | 'Kd';
+const GAIN_KEYS: GainKey[] = ['Kp', 'Ki', 'Kd'];
 
 interface GainState {
     value: number;
     isChanged: boolean;
 }
+type GainStates = Partial<Record<GainKey, GainState>>;
 
-interface GainStates {
-    [key: string]: GainState;
+type ControllerType = 'rotation' | 'rotCancel' | 'linear' | 'momentum';
+const AUTOTUNE_MAP: Record<ControllerType, string> = {
+    rotation: 'attitude',
+    rotCancel: 'rotCancel',
+    linear: 'position',
+    momentum: 'linMomentum',
+};
+
+// ── Sparkline SVG ──
+
+const Sparkline: React.FC<{ values: number[]; width?: number; height?: number; color?: string }> = ({
+    values, width = 140, height = 28, color = '#7dd3fc',
+}) => {
+    const max = Math.max(1e-6, ...values);
+    const pts = values.map((v, i) => {
+        const x = (i / Math.max(1, values.length - 1)) * (width - 2) + 1;
+        const y = height - 1 - (v / Math.max(1e-6, max)) * (height - 2);
+        return `${x},${y}`;
+    }).join(' ');
+    return (
+        <svg width={width} height={height} className="block bg-white/[0.04] border border-white/[0.12]">
+            <polyline fill="none" stroke={color} strokeWidth="1" points={pts} />
+        </svg>
+    );
+};
+
+// ── Hook: live calibration samples for sparkline ──
+
+function useCalibrationSeries(ctl: PIDController | null, active: boolean): number[] {
+    const [series, setSeries] = useState<number[]>([]);
+    useEffect(() => {
+        if (!ctl || !active) return;
+        let raf: number | null = null;
+        const tick = () => {
+            try {
+                if (ctl.isCalibrating?.()) {
+                    const samples = ctl.getCalibrationSamples?.() || [];
+                    setSeries(samples.map(s => s.error));
+                }
+            } catch { /* ignore */ }
+            raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+        return () => { if (raf) cancelAnimationFrame(raf); };
+    }, [ctl, active]);
+    return series;
 }
 
-export const PIDControllerWindow: React.FC<PIDControllerWindowProps> = ({ 
-    controller, 
+// ── Hook: sync controller gains into local state ──
+
+function useSyncGains(ctl: PIDController | null): [GainStates, (key: GainKey, value: number) => void] {
+    const [gains, setGains] = useState<GainStates>({});
+
+    useEffect(() => {
+        if (!ctl) return;
+        const next: GainStates = {};
+        for (const key of GAIN_KEYS) {
+            next[key] = { value: ctl.getGain(key), isChanged: false };
+        }
+        setGains(next);
+    }, [ctl]);
+
+    const update = (key: GainKey, value: number) => {
+        setGains(prev => ({ ...prev, [key]: { value, isChanged: true } }));
+    };
+
+    return [gains, update];
+}
+
+// ── Single controller section (replaces 4x duplicated blocks) ──
+
+interface ControllerSectionProps {
+    title: string;
+    controller: PIDController;
+    gains: GainStates;
+    isCalibrating: boolean;
+    sparkColor?: string;
+    onGainChange: (key: GainKey, value: number) => void;
+    onCalibrate: () => void;
+}
+
+const ControllerSection: React.FC<ControllerSectionProps> = ({
+    title, controller, gains, isCalibrating, sparkColor, onGainChange, onCalibrate,
+}) => {
+    const series = useCalibrationSeries(controller, isCalibrating);
+    return (
+        <div className="space-y-0.5">
+            <h3 className={SECTION_HEADER}>{title}</h3>
+            {isCalibrating && series.length > 0 && (
+                <div className="flex items-center gap-1 mb-0.5">
+                    <Sparkline values={series} color={sparkColor} />
+                    <span className="text-[10px] text-white/60 font-mono">n={series.length}</span>
+                </div>
+            )}
+            {isCalibrating && series.length === 0 && (
+                <div className="text-[10px] text-white/50 font-mono mb-0.5">Collecting samples…</div>
+            )}
+            <div className="space-y-0.5">
+                {GAIN_KEYS.map((key) => (
+                    <div key={key} className="flex items-center justify-between gap-1">
+                        <label className={FIELD_LABEL}>{key}</label>
+                        <NumberInput
+                            value={gains[key]?.value ?? 0}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) => onGainChange(key, parseFloat(e.target.value))}
+                            step={0.01}
+                            className={`w-16 ${gains[key]?.isChanged ? 'text-cyan-400' : ''}`}
+                        />
+                    </div>
+                ))}
+            </div>
+            <button onClick={onCalibrate} disabled={isCalibrating} className={BUTTON_PRIMARY}>
+                {isCalibrating ? 'Calibrating...' : 'Auto-Calibrate'}
+            </button>
+        </div>
+    );
+};
+
+// ── Controller config for the four sections ──
+
+interface ControllerConfig {
+    type: ControllerType;
+    title: string;
+    sparkColor?: string;
+}
+
+const CONTROLLERS: ControllerConfig[] = [
+    { type: 'rotation', title: 'Orientation (Attitude)' },
+    { type: 'rotCancel', title: 'Cancel Rotation (Angular Momentum)', sparkColor: '#93c5fd' },
+    { type: 'linear', title: 'Position', sparkColor: '#a7f3d0' },
+    { type: 'momentum', title: 'Linear Momentum', sparkColor: '#fca5a5' },
+];
+
+// ── Main component ──
+
+export const PIDControllerWindow: React.FC<PIDControllerWindowProps> = ({
+    controller,
     rotationCancelController,
     linearController,
     momentumController,
     autopilot,
 }) => {
-    const gains: GainConfig[] = [
-        { key: 'Kp' },
-        { key: 'Ki' },
-        { key: 'Kd' }
-    ];
+    const ctlMap: Record<ControllerType, PIDController | null | undefined> = {
+        rotation: controller,
+        rotCancel: rotationCancelController,
+        linear: linearController,
+        momentum: momentumController,
+    };
 
-    // Separate states for each controller
-    const [rotationGains, setRotationGains] = useState<GainStates>({});
-    const [rotCancelGains, setRotCancelGains] = useState<GainStates>({});
-    const [linearGains, setLinearGains] = useState<GainStates>({});
-    const [momentumGains, setMomentumGains] = useState<GainStates>({});
-    const [isCalibrating, setIsCalibrating] = useState<{
-        rotation: boolean, 
-        rotCancel: boolean,
-        linear: boolean,
-        momentum: boolean
-    }>({ 
-        rotation: false, 
-        rotCancel: false,
-        linear: false,
-        momentum: false 
+    const [rotGains, updateRotGains] = useSyncGains(controller);
+    const [rotCancelGains, updateRotCancelGains] = useSyncGains(rotationCancelController ?? null);
+    const [linGains, updateLinGains] = useSyncGains(linearController ?? null);
+    const [momGains, updateMomGains] = useSyncGains(momentumController ?? null);
+
+    const gainsMap: Record<ControllerType, [GainStates, (key: GainKey, value: number) => void]> = {
+        rotation: [rotGains, updateRotGains],
+        rotCancel: [rotCancelGains, updateRotCancelGains],
+        linear: [linGains, updateLinGains],
+        momentum: [momGains, updateMomGains],
+    };
+
+    // Poll calibration flags from controllers
+    const [calibrating, setCalibrating] = useState<Record<ControllerType, boolean>>({
+        rotation: false, rotCancel: false, linear: false, momentum: false,
     });
 
-    // Track external calibrations (e.g., triggered by autopilot) and reflect in UI
     useEffect(() => {
         let t: number | null = null;
         const poll = () => {
-            const rot = controller?.isCalibrating?.() || false;
-            const rotCancel = rotationCancelController?.isCalibrating?.() || false;
-            const lin = linearController?.isCalibrating?.() || false;
-            const mom = momentumController?.isCalibrating?.() || false;
-            setIsCalibrating({ rotation: rot, rotCancel, linear: lin, momentum: mom });
+            setCalibrating({
+                rotation: controller?.isCalibrating?.() || false,
+                rotCancel: rotationCancelController?.isCalibrating?.() || false,
+                linear: linearController?.isCalibrating?.() || false,
+                momentum: momentumController?.isCalibrating?.() || false,
+            });
             t = window.setTimeout(poll, 200);
         };
         poll();
         return () => { if (t) window.clearTimeout(t); };
     }, [controller, rotationCancelController, linearController, momentumController]);
 
-    // Simple sparkline renderer helper
-    const Sparkline: React.FC<{ values: number[]; width?: number; height?: number; color?: string }>
-      = ({ values, width = 140, height = 28, color = '#7dd3fc' }) => {
-        const max = Math.max(1e-6, ...values);
-        const min = 0; // errors are >= 0
-        const pts = values.map((v, i) => {
-            const x = (i / Math.max(1, values.length - 1)) * (width - 2) + 1;
-            const y = height - 1 - ((v - min) / Math.max(1e-6, max - min)) * (height - 2);
-            return `${x},${y}`;
-        }).join(' ');
-        return (
-            <svg width={width} height={height} style={{ display: 'block', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)' }}>
-                <polyline fill="none" stroke={color} strokeWidth="1" points={pts} />
-            </svg>
-        );
+    const handleGainChange = (type: ControllerType, key: GainKey, value: number) => {
+        const ctl = ctlMap[type];
+        if (!ctl) return;
+        ctl.setGain(key, value);
+        try { autopilot?.syncPidGainsToWorker?.(); } catch { /* ignore */ }
+        gainsMap[type][1](key, value);
     };
 
-    // Live calibration samples for each controller (for sparkline)
-    const useCalibrationSeries = (ctl: PIDController | null, flag: boolean) => {
-        const [series, setSeries] = useState<number[]>([]);
-        useEffect(() => {
-            if (!ctl) return;
-            let raf: number | null = null;
-            let timer: number | null = null;
-            const tick = () => {
-                try {
-                    if (ctl.isCalibrating?.()) {
-                        const samples = ctl.getCalibrationSamples?.() || [];
-                        setSeries(samples.map(s => s.error));
-                    }
-                } catch {}
-                raf = requestAnimationFrame(tick);
-            };
-            if (flag) {
-                raf = requestAnimationFrame(tick);
-            }
-            return () => {
-                if (raf) cancelAnimationFrame(raf);
-                if (timer) clearInterval(timer);
-            };
-        }, [ctl, flag]);
-        return series;
-    };
-
-    const CalibrationSpark: React.FC<{ controller: PIDController; color?: string }> = ({ controller, color }) => {
-        const series = useCalibrationSeries(controller, true);
-        if (!controller?.isCalibrating?.()) return null;
-        if (!series || series.length === 0) {
-            return <div className="text-[10px] text-white/50 font-mono">Collecting samples…</div>;
-        }
-        return (
-            <div className="flex items-center gap-1">
-                <Sparkline values={series} color={color ?? '#7dd3fc'} />
-                <span className="text-[10px] text-white/60 font-mono">n={series.length}</span>
-            </div>
-        );
-    };
-
-    // Update states when controllers change
-    useEffect(() => {
-        if (controller) {
-            const newGains: GainStates = {};
-            gains.forEach(({ key }) => {
-                newGains[key] = {
-                    value: controller.getGain(key),
-                    isChanged: false
-                };
-            });
-            setRotationGains(newGains);
-        }
-    }, [controller]);
-
-    useEffect(() => {
-        if (rotationCancelController) {
-            const newGains: GainStates = {};
-            gains.forEach(({ key }) => {
-                newGains[key] = {
-                    value: rotationCancelController.getGain(key),
-                    isChanged: false
-                };
-            });
-            setRotCancelGains(newGains);
-        }
-    }, [rotationCancelController]);
-
-    useEffect(() => {
-        if (linearController) {
-            const newGains: GainStates = {};
-            gains.forEach(({ key }) => {
-                newGains[key] = {
-                    value: linearController.getGain(key),
-                    isChanged: false
-                };
-            });
-            setLinearGains(newGains);
-        }
-    }, [linearController]);
-
-    useEffect(() => {
-        if (momentumController) {
-            const newGains: GainStates = {};
-            gains.forEach(({ key }) => {
-                newGains[key] = {
-                    value: momentumController.getGain(key),
-                    isChanged: false
-                };
-            });
-            setMomentumGains(newGains);
-        }
-    }, [momentumController]);
-
-    const handleGainChange = (type: 'rotation' | 'rotCancel' | 'linear' | 'momentum', key: 'Kp' | 'Ki' | 'Kd', value: number) => {
-        const targetController = type === 'rotation' ? controller : 
-                               type === 'rotCancel' ? rotationCancelController : 
-                               type === 'linear' ? linearController : 
-                               momentumController;
-        if (!targetController) return;
-
-        targetController.setGain(key, value);
-        // Sync updated gains to worker if applicable
-        try { autopilot?.syncPidGainsToWorker?.(); } catch {}
-        
-        switch (type) {
-            case 'rotation':
-                setRotationGains(prev => ({
-                    ...prev,
-                    [key]: { value, isChanged: true }
-                }));
-                break;
-            case 'rotCancel':
-                setRotCancelGains(prev => ({
-                    ...prev,
-                    [key]: { value, isChanged: true }
-                }));
-                break;
-            case 'linear':
-                setLinearGains(prev => ({
-                    ...prev,
-                    [key]: { value, isChanged: true }
-                }));
-                break;
-            case 'momentum':
-                setMomentumGains(prev => ({
-                    ...prev,
-                    [key]: { value, isChanged: true }
-                }));
-                break;
-        }
-    };
-
-    const startCalibration = async (type: 'rotation' | 'rotCancel' | 'linear' | 'momentum') => {
-        const targetController = type === 'rotation' ? controller : 
-                               type === 'rotCancel' ? rotationCancelController : 
-                               type === 'linear' ? linearController : 
-                               momentumController;
-        if (!targetController) return;
-
-        setIsCalibrating(prev => ({ ...prev, [type]: true } as any));
-
+    const startCalibration = async (type: ControllerType) => {
+        const ctl = ctlMap[type];
+        if (!ctl) return;
+        setCalibrating(prev => ({ ...prev, [type]: true }));
         try {
-            // Kick the controller's calibrating flag for sparkline
-            await targetController.autoCalibrate(1200);
-            // Run active auto-tune via Autopilot so we actually fit gains from samples
+            await ctl.autoCalibrate(1200);
             if (autopilot) {
-                const map = type === 'rotation' ? 'attitude'
-                          : type === 'rotCancel' ? 'rotCancel'
-                          : type === 'linear' ? 'position'
-                          : 'linMomentum';
-                await autopilot.autoTune(map as any, 1200);
+                await autopilot.autoTune(AUTOTUNE_MAP[type] as Parameters<Autopilot['autoTune']>[0], 1200);
             }
-            try { autopilot?.syncPidGainsToWorker?.(); } catch {}
-            
-            // Update gains after calibration
-            const newGains: GainStates = {};
-            gains.forEach(({ key }) => {
-                newGains[key] = {
-                    value: targetController.getGain(key),
-                    isChanged: true
-                };
-            });
-
-            switch (type) {
-                case 'rotation':
-                    setRotationGains(newGains);
-                    break;
-                case 'rotCancel':
-                    setRotCancelGains(newGains);
-                    break;
-                case 'linear':
-                    setLinearGains(newGains);
-                    break;
-                case 'momentum':
-                    setMomentumGains(newGains);
-                    break;
+            try { autopilot?.syncPidGainsToWorker?.(); } catch { /* ignore */ }
+            // Refresh gains from controller after calibration
+            for (const key of GAIN_KEYS) {
+                gainsMap[type][1](key, ctl.getGain(key));
             }
         } catch (error) {
             console.error(`Failed to calibrate ${type} PID:`, error);
         } finally {
-            setIsCalibrating(prev => ({ ...prev, [type]: false } as any));
+            setCalibrating(prev => ({ ...prev, [type]: false }));
         }
     };
 
     return (
-        <div className="flex flex-col gap-0.5 p-1 bg-black/40 text-white/90 backdrop-blur w-full">
-            {controller && (
-                <div className="space-y-0.5">
-                    <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Orientation (Attitude)</h3>
-                    {/* Sparkline while calibrating */}
-                    {isCalibrating.rotation && (
-                        <div className="mb-0.5">
-                            <CalibrationSpark controller={controller} />
-                        </div>
-                    )}
-                    <div className="space-y-0.5">
-                        {gains.map(({ key }) => (
-                            <div key={key} className="flex items-center justify-between gap-1">
-                                <label className="text-[10px] text-white/70 font-mono">{key}</label>
-                                <NumberInput
-                                    value={rotationGains[key]?.value ?? 0}
-                                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
-                                        handleGainChange('rotation', key, parseFloat(e.target.value))}
-                                    step={0.01}
-                                    className={`w-16 ${rotationGains[key]?.isChanged ? 'text-cyan-400' : ''}`}
-                                />
-                            </div>
-                        ))}
-                    </div>
-                    <button
-                        onClick={() => startCalibration('rotation')}
-                        disabled={isCalibrating.rotation}
-                        className="w-full px-1 py-0.5 bg-black/60 hover:bg-white/20 text-white/90 
-                                  text-[10px] border border-white/20 font-mono disabled:opacity-50"
-                    >
-                        {isCalibrating.rotation ? 'Calibrating...' : 'Auto-Calibrate'}
-                    </button>
-                </div>
-            )}
-
-            {rotationCancelController && (
-                <div className="space-y-0.5">
-                    <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Cancel Rotation (Angular Momentum)</h3>
-                    {isCalibrating.rotCancel && (
-                        <div className="mb-0.5">
-                            <CalibrationSpark controller={rotationCancelController} color="#93c5fd" />
-                        </div>
-                    )}
-                    <div className="space-y-0.5">
-                        {gains.map(({ key }) => (
-                            <div key={key} className="flex items-center justify-between gap-1">
-                                <label className="text-[10px] text-white/70 font-mono">{key}</label>
-                                <NumberInput
-                                    value={rotCancelGains[key]?.value ?? 0}
-                                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
-                                        handleGainChange('rotCancel', key, parseFloat(e.target.value))}
-                                    step={0.01}
-                                    className={`w-16 ${rotCancelGains[key]?.isChanged ? 'text-cyan-400' : ''}`}
-                                />
-                            </div>
-                        ))}
-                    </div>
-                    <button
-                        onClick={() => startCalibration('rotCancel')}
-                        disabled={isCalibrating.rotCancel}
-                        className="w-full px-1 py-0.5 bg-black/60 hover:bg-white/20 text-white/90 
-                                  text-[10px] border border-white/20 font-mono disabled:opacity-50"
-                    >
-                        {isCalibrating.rotCancel ? 'Calibrating...' : 'Auto-Calibrate'}
-                    </button>
-                </div>
-            )}
-            
-            {linearController && (
-                <div className="space-y-0.5">
-                    <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Position</h3>
-                    {isCalibrating.linear && (
-                        <div className="mb-0.5">
-                            <CalibrationSpark controller={linearController} color="#a7f3d0" />
-                        </div>
-                    )}
-                    <div className="space-y-0.5">
-                        {gains.map(({ key }) => (
-                            <div key={key} className="flex items-center justify-between gap-1">
-                                <label className="text-[10px] text-white/70 font-mono">{key}</label>
-                                <NumberInput
-                                    value={linearGains[key]?.value ?? 0}
-                                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
-                                        handleGainChange('linear', key, parseFloat(e.target.value))}
-                                    step={0.01}
-                                    className={`w-16 ${linearGains[key]?.isChanged ? 'text-cyan-400' : ''}`}
-                                />
-                            </div>
-                        ))}
-                    </div>
-                    <button
-                        onClick={() => startCalibration('linear')}
-                        disabled={isCalibrating.linear}
-                        className="w-full px-1 py-0.5 bg-black/60 hover:bg-white/20 text-white/90 
-                                  text-[10px] border border-white/20 font-mono disabled:opacity-50"
-                    >
-                        {isCalibrating.linear ? 'Calibrating...' : 'Auto-Calibrate'}
-                    </button>
-                </div>
-            )}
-
-            {momentumController && (
-                <div className="space-y-0.5">
-                    <h3 className="text-cyan-300/90 font-medium text-[10px] uppercase">Linear Momentum</h3>
-                    {isCalibrating.momentum && (
-                        <div className="mb-0.5">
-                            <CalibrationSpark controller={momentumController} color="#fca5a5" />
-                        </div>
-                    )}
-                    <div className="space-y-0.5">
-                        {gains.map(({ key }) => (
-                            <div key={key} className="flex items-center justify-between gap-1">
-                                <label className="text-[10px] text-white/70 font-mono">{key}</label>
-                                <NumberInput
-                                    value={momentumGains[key]?.value ?? 0}
-                                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
-                                        handleGainChange('momentum', key, parseFloat(e.target.value))}
-                                    step={0.01}
-                                    className={`w-16 ${momentumGains[key]?.isChanged ? 'text-cyan-400' : ''}`}
-                                />
-                            </div>
-                        ))}
-                    </div>
-                    <button
-                        onClick={() => startCalibration('momentum')}
-                        disabled={isCalibrating.momentum}
-                        className="w-full px-1 py-0.5 bg-black/60 hover:bg-white/20 text-white/90 
-                                  text-[10px] border border-white/20 font-mono disabled:opacity-50"
-                    >
-                        {isCalibrating.momentum ? 'Calibrating...' : 'Auto-Calibrate'}
-                    </button>
-                </div>
-            )}
+        <div className={WINDOW_BODY + ' w-full'}>
+            {CONTROLLERS.map(({ type, title, sparkColor }) => {
+                const ctl = ctlMap[type];
+                if (!ctl) return null;
+                const [gains] = gainsMap[type];
+                return (
+                    <ControllerSection
+                        key={type}
+                        title={title}
+                        controller={ctl}
+                        gains={gains}
+                        isCalibrating={calibrating[type]}
+                        sparkColor={sparkColor}
+                        onGainChange={(key, value) => handleGainChange(type, key, value)}
+                        onCalibrate={() => startCalibration(type)}
+                    />
+                );
+            })}
         </div>
     );
-}; 
+};

@@ -1,62 +1,61 @@
 import * as THREE from 'three';
-import { PIDController } from '../pidController';
-import { AutopilotMode, AutopilotConfig } from './AutopilotMode';
+import type { AutopilotConfig } from './types';
 import type { Spacecraft } from '../../core/spacecraft';
 import type { ThrusterGroups } from '../../config/spacecraftConfig';
+import { CapabilityCalculator } from './CapabilityCalculator';
+import { ThrusterAllocator } from './ThrusterAllocator';
 
 /**
- * Thin wrapper around AutopilotMode that exposes the internal allocation helpers
- * for manual control. No PID is used; we directly convert desired vectors into
- * per-thruster forces using the same distribution rules as the autopilot.
+ * Allocates manual control inputs to thrusters using the same distribution
+ * rules as the autopilot modes — without requiring PID or mode machinery.
  */
-export class ManualAllocator extends AutopilotMode {
-  constructor(
-    spacecraft: Spacecraft,
-    config: AutopilotConfig,
-    thrusterGroups: ThrusterGroups,
-    thrust: number,
-    thrusterMax?: number[],
-  ) {
-    super(
-      spacecraft,
-      config,
-      thrusterGroups,
-      thrust,
-      // Dummy PID, not used
-      new PIDController(0, 0, 0, 'linearMomentum'),
-      thrusterMax
-    );
-  }
+export class ManualAllocator {
+    private capCalc: CapabilityCalculator;
+    private allocator: ThrusterAllocator;
 
-  // Allow external systems to adjust the scalar thrust budget
-  public setThrust(value: number): void {
-    super.setThrust(value);
-  }
+    constructor(
+        spacecraft: Spacecraft,
+        config: AutopilotConfig,
+        thrusterGroups: ThrusterGroups,
+        thrust: number,
+        thrusterMax?: number[],
+    ) {
+        const max = (thrusterMax && thrusterMax.length === 24) ? thrusterMax.slice(0, 24) : new Array(24).fill(thrust);
+        this.capCalc = new CapabilityCalculator(spacecraft as any, config, thrusterGroups, thrust, max);
+        this.allocator = new ThrusterAllocator(thrusterGroups, thrust, max, config.limits.epsilon, () => this.capCalc.getDynamicCaps());
+    }
 
-  /**
-   * Allocate translational force in body-local space to thrusters.
-   * Writes into `out` when provided, returns it for convenience.
-   */
-  public allocateTranslation(localForce: THREE.Vector3, out?: number[]): number[] {
-    const arr = out ?? new Array(24).fill(0);
-    // zero array if provided
-    if (out) for (let i = 0; i < 24; i++) arr[i] = 0;
-    this.applyTranslationalForcesToThrusterGroupsInPlace(localForce, arr);
-    return arr;
-  }
+    public setThrust(value: number): void {
+        this.capCalc.setThrust(value);
+        this.allocator.setThrust(value);
+    }
 
-  /**
-   * Allocate rotational command (use same mapping as rotational autopilot)
-   * Writes into `out` when provided, returns it for convenience.
-   * The input vector is interpreted like the autopilot's momentum-domain PID output.
-   */
-  public allocateRotation(rotCmd: THREE.Vector3, out?: number[]): number[] {
-    const arr = out ?? new Array(24).fill(0);
-    if (out) for (let i = 0; i < 24; i++) arr[i] = 0;
-    this.applyPIDOutputToThrustersInPlace(rotCmd, arr);
-    return arr;
-  }
+    public setThrusterGroups(groups: ThrusterGroups): void {
+        this.capCalc.setThrusterGroups(groups);
+        this.allocator.setThrusterGroups(groups);
+    }
 
-  // Not used by manual control
-  calculateForces(_dt: number, _out?: number[]): number[] { return new Array(24).fill(0); }
+    public setThrusterMax(max: number[]): void {
+        const arr = (Array.isArray(max) && max.length === 24) ? max.slice(0, 24) : new Array(24).fill(0);
+        this.capCalc.setThrusterMax(arr);
+        this.allocator.setThrusterMax(arr);
+    }
+
+    public invalidateCaps(): void {
+        this.capCalc.invalidate();
+    }
+
+    public allocateTranslation(localForce: THREE.Vector3, out?: number[]): number[] {
+        const arr = out ?? new Array(24).fill(0);
+        if (out) for (let i = 0; i < 24; i++) arr[i] = 0;
+        this.allocator.allocateTranslation(localForce, arr);
+        return arr;
+    }
+
+    public allocateRotation(rotCmd: THREE.Vector3, out?: number[]): number[] {
+        const arr = out ?? new Array(24).fill(0);
+        if (out) for (let i = 0; i < 24; i++) arr[i] = 0;
+        this.allocator.allocateRotation(rotCmd, arr);
+        return arr;
+    }
 }

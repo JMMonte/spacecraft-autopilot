@@ -61,3 +61,21 @@ test('runtime state module is controller-agnostic', () => {
     'src/state/appState.ts must not depend on controller modules'
   );
 });
+
+test('controllers do not import from scenes layer', () => {
+  const files = collectFiles(path.join(ROOT, 'src/controllers'));
+  const offenders: string[] = [];
+  for (const file of files) {
+    const text = fs.readFileSync(file, 'utf8');
+    const hasScenesImport = /from\s+['"][^'"]*\/scenes\/[^'"]*['"]/.test(text);
+    if (hasScenesImport) {
+      offenders.push(path.relative(ROOT, file));
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `Forbidden direct imports from src/scenes/* in controllers:\n${offenders.join('\n')}`
+  );
+});
