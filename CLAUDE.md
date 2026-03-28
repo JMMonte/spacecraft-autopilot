@@ -79,6 +79,42 @@ Five modes, orchestrated by `src/controllers/autopilot/Autopilot.ts`:
 
 **Worker architecture:** GoToPosition and force calculations run in `src/workers/autopilot.worker.ts`. Main thread sends state snapshots; worker returns forces + telemetry. Obstacles sent via `cachedObstacles` field.
 
+### Docking System
+
+**Compound body docking** — docked spacecraft merge into a single Rapier rigid body with multiple colliders (no joint constraints). Eliminates joint solver instability.
+
+**Key components:**
+- `DockingController.ts` — Orchestrates approach → align → dock phases with speed limiting
+- `DockingOrchestrator.ts` — Passive proximity detection, triggers `dock()` when thresholds met
+- `DockingInfo.ts` — Builds per-frame docking telemetry (port positions, directions, distances)
+- `DockingUtils.ts` — Orientation quaternion computation for port-to-port alignment
+
+**Compound body architecture (`spacecraft.ts`):**
+- `dock(ourPort, otherSpacecraft, theirPort)` — Merges guest into compound body:
+  1. Resolves compound root (prefers hub with more ports)
+  2. Computes guest position from **port geometry** (not world positions) — port faces snap perfectly
+  3. Redirects guest's `RigidBodyProxy` to root body with local offset
+  4. Attaches guest's box collider to root body
+  5. Syncs guest mesh immediately after redirect
+- `undock(portId)` — Detaches guest, creates new rigid body, restores individual physics
+- `getCompoundMembers()` — Walks docked partners transitively to find all members
+
+**Obstacle exclusions during docking:**
+- `Autopilot.setObstacleExclusions(spacecraft[])` — Excludes spacecraft from `PathManager.collectObstacles()`
+- `DockingController` excludes the **entire target compound** (target + all docked to it) during approach and dock phases
+- Cleared on cancel/complete
+
+**Hub/Node spacecraft:**
+- Configurable 2/4/6-port docking nodes (no thrusters, no solar panels)
+- Created via `BasicWorld.addNodeSpacecraft(position, portCount)`
+- Hub stays compound root due to port-count tiebreaker in root selection
+- Supports chain docking (multiple craft to one hub)
+
+**Docking test harness (`src/debug/DockingTestHarness.ts`):**
+- Exposes `window.__dockingTest` for programmatic docking tests
+- Methods: `setup()`, `start()`, `cancel()`, `status()`, `statusLine()`
+- Text-based telemetry for automated verification without screenshots
+
 ### RCS Visuals & Thruster Effects
 
 `src/scenes/objects/rcsVisuals.ts` — 24 thrusters per spacecraft with exhaust cones, point lights, and particle effects.

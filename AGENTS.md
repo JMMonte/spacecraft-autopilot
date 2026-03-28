@@ -61,6 +61,28 @@ React hooks (useSyncExternalStore) → UI components
 
 Orchestrated by `Autopilot.ts`. Force calculations offloaded to web worker. LLM interface at `window.__autopilot`.
 
+### Docking System
+
+**Compound body docking** — docked spacecraft merge into a single Rapier rigid body with multiple colliders. No joint constraints = no solver instability.
+
+| Component | Purpose |
+|-----------|---------|
+| `DockingController.ts` | Approach → align → dock phase orchestration |
+| `DockingOrchestrator.ts` | Passive proximity detection, triggers `dock()` |
+| `DockingInfo.ts` | Per-frame docking telemetry |
+| `DockingUtils.ts` | Port-to-port orientation quaternion math |
+
+**Key patterns:**
+- `spacecraft.dock(ourPort, other, theirPort)` computes guest position from **port geometry** (not world positions) — port faces snap perfectly
+- Compound root selection: hub with more docking ports stays root (port-count tiebreaker)
+- `getCompoundMembers()` walks docked partners transitively
+- Entire target compound excluded from obstacle avoidance during docking (`Autopilot.setObstacleExclusions`)
+- Mesh position/quaternion synced immediately after compound redirect
+
+**Hub/Node spacecraft:** configurable 2/4/6-port nodes, no thrusters. Created via `BasicWorld.addNodeSpacecraft()`. Supports chain docking.
+
+**Test harness:** `src/debug/DockingTestHarness.ts` → `window.__dockingTest` for programmatic text-based docking verification.
+
 ### RCS Visuals & Performance
 
 `src/scenes/objects/rcsVisuals.ts` — 24 thrusters per spacecraft with exhaust cones, point lights, and sprite-based particles. Both lights and particles have global toggles (`setThrusterLightsEnabled()`, `setThrusterParticlesEnabled()`) controlled from `SettingsWindow.tsx` which applies to ALL spacecraft. At 18 spacecraft, both systems tank FPS (~3 FPS) — toggling both off restores ~60 FPS. Needs instanced rendering.
@@ -78,7 +100,7 @@ Custom store in `appState.ts` — NOT Redux. React hooks via `useSyncExternalSto
 - Pure math where possible — ManeuverPlanner has zero THREE.js deps
 - Worker offload for heavy computation
 - Tailwind CSS v4 with CSS custom properties for theming (3 themes: a/b/c)
-- Vite 7, 10 path aliases (@, @components, @core, etc.)
+- Vite 7, 19+ path aliases (@, @components, @core, @debug, etc.)
 
 ## Testing
 
