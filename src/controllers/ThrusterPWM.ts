@@ -2,11 +2,13 @@
  * Thruster pulse-width modulation state machine.
  * Prevents visual flicker by enforcing minimum on/off pulse durations
  * and smoothing latched force values.
+ * Supports variable thruster count (default 24 for solo, Nx24 for compound).
  */
 export class ThrusterPWM {
-    private thrusterOnLatch: boolean[] = new Array(24).fill(false);
-    private thrusterLatchTimer: number[] = new Array(24).fill(0);
-    private thrusterLatchedForce: number[] = new Array(24).fill(0);
+    private size: number;
+    private thrusterOnLatch: boolean[];
+    private thrusterLatchTimer: number[];
+    private thrusterLatchedForce: number[];
     private minPulseOn: number = 0.03;   // seconds
     private minPulseOff: number = 0.03;  // seconds
     private activationThresholdFactor: number = 0.003;
@@ -14,20 +16,41 @@ export class ThrusterPWM {
     constructor(
         private thrust: number,
         private thrusterMax: number[],
-    ) {}
+        size?: number,
+    ) {
+        this.size = size ?? thrusterMax.length;
+        this.thrusterOnLatch = new Array(this.size).fill(false);
+        this.thrusterLatchTimer = new Array(this.size).fill(0);
+        this.thrusterLatchedForce = new Array(this.size).fill(0);
+    }
 
     setThrust(value: number): void { this.thrust = value; }
-    setThrusterMax(max: number[]): void { this.thrusterMax = max; }
+    setThrusterMax(max: number[]): void {
+        this.thrusterMax = max;
+        // Resize if needed
+        if (max.length !== this.size) {
+            this.resize(max.length);
+        }
+    }
+
+    /** Resize the PWM state arrays (e.g., when compound membership changes). */
+    resize(newSize: number): void {
+        this.size = newSize;
+        this.thrusterOnLatch = new Array(newSize).fill(false);
+        this.thrusterLatchTimer = new Array(newSize).fill(0);
+        this.thrusterLatchedForce = new Array(newSize).fill(0);
+    }
 
     /**
      * Apply PWM state machine to desired forces.
      * Returns per-thruster visibility and applied (smoothed/latched) forces.
      */
     apply(desired: number[], dt: number): { visibility: boolean[]; applied: number[] } {
-        const visibility = new Array(24).fill(false);
-        const applied = new Array(24).fill(0);
+        const n = this.size;
+        const visibility = new Array(n).fill(false);
+        const applied = new Array(n).fill(0);
 
-        for (let i = 0; i < 24; i++) {
+        for (let i = 0; i < n; i++) {
             const cap = this.thrusterMax[i] || this.thrust;
             const clamped = Math.min(Math.max(desired[i] || 0, 0), cap);
 

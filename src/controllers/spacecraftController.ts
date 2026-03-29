@@ -8,6 +8,7 @@ import { computeThrusterGroups } from '../utils/utils';
 import type { ThrusterConfig } from '../utils/utils';
 import { ManualAllocator } from './autopilot/ManualAllocator';
 import { ThrusterPWM } from './ThrusterPWM';
+import type { CompoundControlAuthority } from './CompoundControlAuthority';
 import type { VisualizationCallbacks } from './types';
 import { THRUST_FACTOR } from '../constants';
 
@@ -36,6 +37,8 @@ export class SpacecraftController {
     // Cluster-aware scaling
     private baseThrust!: number;
     private isClusterScaling = false;
+    // Compound body delegation
+    private compoundAuthority: CompoundControlAuthority | null = null;
     // Reserved for future: per-thruster custom caps provided by user/config
     // no waypoint planner
 
@@ -169,18 +172,12 @@ export class SpacecraftController {
 
     public handleKeyDown(event: KeyboardEvent): void {
         if (!this.isActive) return;
-
-        // Prevent handling the same key press multiple times
         if (this.keysPressed[event.code]) return;
-
         this.keysPressed[event.code] = true;
 
-        // If docked, forward autopilot key events to the cluster leader
-        // so toggles take effect on the leader (which syncs to followers).
-        const leader = this.getClusterLeader();
-        if (leader && leader !== this.spacecraft) {
-            const leaderCtrl = leader.spacecraftController as SpacecraftController | undefined;
-            leaderCtrl?.handleAutopilotControl(event.code);
+        // If compound authority exists, route autopilot toggles through it
+        if (this.compoundAuthority) {
+            this.compoundAuthority.handleAutopilotControl(event.code);
         } else {
             this.handleAutopilotControl(event.code);
         }
@@ -189,19 +186,6 @@ export class SpacecraftController {
     public handleKeyUp(event: KeyboardEvent): void {
         if (!this.isActive) return;
         this.keysPressed[event.code] = false;
-    }
-
-    /** Get the cluster leader spacecraft (or null if not docked). */
-    private getClusterLeader(): import('../core/spacecraft').Spacecraft | null {
-        const partners = this.spacecraft.getDockedSpacecrafts?.() || [];
-        if (!partners.length) return null;
-        const cluster = [this.spacecraft, ...partners];
-        return [...cluster].sort((a, b) => {
-            const aEn = a.spacecraftController?.autopilot?.getAutopilotEnabled?.() ? 1 : 0;
-            const bEn = b.spacecraftController?.autopilot?.getAutopilotEnabled?.() ? 1 : 0;
-            if (aEn !== bEn) return bEn - aEn;
-            return a.uuid.localeCompare(b.uuid);
-        })[0];
     }
 
     public handleAutopilotControl(code: string): void {
@@ -245,9 +229,23 @@ export class SpacecraftController {
      * Called each frame or physics step with dt
      */
     public applyForces(dt: number = 1/60): boolean[] {
-        // When docked, keep autopilots in sync across the cluster so both crafts
-        // act as one. Leader mirrors its modes/targets into followers.
-        this.syncDockedAutopilots();
+        // ── Compound body delegation ──
+        // If this spacecraft is part of a compound body with an authority,
+        // only the authority host runs the control loop.
+        if (this.compoundAuthority) {
+            // Mirror keysPressed from the active controller to the authority
+            if (this.isActive) {
+                this.compoundAuthority.keysPressed = { ...this.keysPressed };
+            }
+            // Only the root runs the authority's control loop
+            if (this.spacecraft === this.compoundAuthority.root) {
+                return this.compoundAuthority.applyForces(dt);
+            }
+            // Subordinate: visuals already updated by authority's distributeForces
+            return new Array(24).fill(false);
+        }
+
+        // ── Solo spacecraft (no compound) ──
 
         // If no fuel access, zero all forces (thrusters disabled)
         if (!this.spacecraft.hasFuelAccess()) {
@@ -283,90 +281,8 @@ export class SpacecraftController {
         return coneVisibility;
     }
 
-    /**
-     * If docked with other spacecraft, mirror this autopilot's active modes and targets
-     * into the partner(s). The cluster then behaves like one craft using all thrusters.
-     * We elect the cluster leader by smallest UUID to avoid double-driving.
-     */
-    private syncDockedAutopilots(): void {
-        const partners = this.spacecraft.getDockedSpacecrafts?.() || [];
-        if (!partners.length) return;
-
-        // Build cluster and elect leader. Prefer the craft whose autopilot is enabled;
-        // tie-break by smallest UUID for stability.
-        const cluster = [this.spacecraft, ...partners];
-        const enabledFirst = [...cluster].sort((a, b) => {
-            const aEn = (a.spacecraftController?.autopilot?.getAutopilotEnabled?.() ? 1 : 0);
-            const bEn = (b.spacecraftController?.autopilot?.getAutopilotEnabled?.() ? 1 : 0);
-            if (aEn !== bEn) return bEn - aEn; // enabled before disabled
-            return a.uuid.localeCompare(b.uuid);
-        });
-        const leader = enabledFirst[0];
-        if (leader !== this.spacecraft) return; // only leader propagates
-
-        // Update cluster-aware thrust scaling on all participants
-        for (const craft of cluster) {
-            const ctrl = craft.spacecraftController as SpacecraftController | undefined;
-            ctrl?.updateClusterScaling(cluster);
-        }
-
-        const leaderAP = this.autopilot;
-        if (!leaderAP?.getAutopilotEnabled()) return;
-
-        // Snapshot leader's modes and targets
-        const active = leaderAP.getActiveAutopilots();
-        const targetPos = leaderAP.getTargetPosition?.();
-        const targetQuat = leaderAP.getTargetOrientation?.();
-
-        for (const craft of cluster.slice(1)) {
-            const ctrl = craft.spacecraftController as SpacecraftController | undefined;
-            const ap = ctrl?.autopilot;
-            if (!ap) continue;
-            // Suppress store emission from followers to avoid overwriting leader state
-            ap.suppressStateEmit = true;
-            // Ensure enabled
-            ap.setEnabled(true);
-            // Mirror targets
-            if (targetPos) ap.setTargetPosition(targetPos.clone());
-            if (targetQuat) ap.setTargetOrientation(targetQuat.clone());
-            // Mirror modes
-            ap.setMode('goToPosition', !!active.goToPosition);
-            ap.setMode('orientationMatch', !!active.orientationMatch);
-            ap.setMode('cancelLinearMotion', !!active.cancelLinearMotion);
-            ap.setMode('cancelRotation', !!active.cancelRotation);
-            ap.setMode('pointToPosition', !!active.pointToPosition);
-
-        }
-    }
-
-    /**
-     * Update scalar thrust/strength scaling to reflect docked cluster mass.
-     * Keeps physical per-thruster caps unless user customized them.
-     */
-    private updateClusterScaling(cluster?: import('../core/spacecraft').Spacecraft[]): void {
-        const partners = cluster ? cluster.slice(1) : (this.spacecraft.getDockedSpacecrafts?.() || []);
-        const all = cluster ? cluster : [this.spacecraft, ...partners];
-        // Compute mass ratio (total / self)
-        let totalMass = 0;
-        for (const s of all) totalMass += Math.max(1e-6, s.getMass?.() || 0);
-        const selfMass = Math.max(1e-6, this.spacecraft.getMass?.() || 0);
-        const scale = Math.max(1, totalMass / selfMass);
-
-        // Scale thrust budget (skip nozzle visual resize — this is logical, not physical)
-        const newThrust = this.baseThrust * scale;
-        if (Math.abs(newThrust - this.thrust) > 1e-6) {
-            this.isClusterScaling = true;
-            this.setThrust(newThrust);
-            this.isClusterScaling = false;
-        }
-
-        // Do not scale per-thruster physical caps here; keep hardware limits.
-    }
-
-    /** Public entry to recompute cluster scaling immediately (e.g., on dock). */
-    public applyClusterScalingNow(): void {
-        this.updateClusterScaling();
-    }
+    // syncDockedAutopilots and updateClusterScaling removed —
+    // CompoundControlAuthority handles all compound body control.
 
     private updateHelpers(thrustForces: number[]): void {
         // Skip all work if no helper is visible and trace is off
@@ -563,17 +479,29 @@ export class SpacecraftController {
         try { this.manualAllocator?.setThrusterMax(this.thrusterMax); } catch (err) { this.log.warn('setThrusterStrengths: manualAllocator max update failed', err); }
     }
 
-    /** Reset thrust to its pre-cluster value. */
-    public resetClusterScalingToBase(): void {
-        this.setThrust(this.baseThrust);
-    }
 
     public getSpacecraft(): Spacecraft {
         return this.spacecraft;
     }
 
     public getAutopilot(): Autopilot {
+        // If compound authority exists, return its autopilot for UI binding
+        if (this.compoundAuthority) return this.compoundAuthority.autopilot;
         return this.autopilot;
+    }
+
+    public getCompoundAuthority(): CompoundControlAuthority | null {
+        return this.compoundAuthority;
+    }
+
+    public setCompoundAuthority(authority: CompoundControlAuthority | null): void {
+        this.compoundAuthority = authority;
+        if (authority) {
+            // Suppress solo autopilot state emission while under compound control
+            this.autopilot.suppressStateEmit = true;
+        } else {
+            this.autopilot.suppressStateEmit = false;
+        }
     }
 
     public getTargetOrientation(): THREE.Quaternion {

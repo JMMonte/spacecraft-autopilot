@@ -14,6 +14,7 @@ import { FUEL_TYPES } from '../scenes/modules/SpacecraftBlueprint';
 import type { SpacecraftModule } from '../scenes/modules/SpacecraftModule';
 import { SolarPanelModule } from '../scenes/modules/SolarPanelModule';
 import { FuelTankModule } from '../scenes/modules/FuelTankModule';
+import { CompoundControlAuthority } from '../controllers/CompoundControlAuthority';
 
 interface DockingPortInfo {
     position: THREE.Vector3;
@@ -613,31 +614,31 @@ export class Spacecraft {
             console.warn('Docking: physics not available. Visual docking only.');
         }
 
-        // After creating the hard constraint, ensure both crafts' autopilots are quiescent.
-        // This avoids fighting the joint with stale guidance modes or references.
+        // ── Set up CompoundControlAuthority ──
+        // Reset solo autopilots on both craft, then create/extend compound authority.
         try {
-            const apA = this.spacecraftController?.autopilot;
-            const apB = otherSpacecraft.spacecraftController?.autopilot;
-            if (apA) {
-                apA.resetAllModes();
-                apA.setReferenceObject(null);
-                apA.setEnabled(false);
+            for (const craft of [this, otherSpacecraft]) {
+                const ap = craft.spacecraftController?.autopilot;
+                if (ap) { ap.resetAllModes(); ap.setReferenceObject(null); ap.setEnabled(false); }
+                craft.spacecraftController?.resetThrusterLatch?.();
             }
-            if (apB) {
-                apB.resetAllModes();
-                apB.setReferenceObject(null);
-                apB.setEnabled(false);
+
+            // Determine root (non-redirected) and guest (redirected)
+            const root = this.objects.rigid?.isRedirected?.() ? otherSpacecraft : this;
+            const guest = root === this ? otherSpacecraft : this;
+
+            // Check if either spacecraft already has a compound authority
+            let authority = root.spacecraftController?.getCompoundAuthority?.()
+                ?? guest.spacecraftController?.getCompoundAuthority?.();
+
+            if (authority) {
+                authority.addMember(guest);
+            } else {
+                authority = CompoundControlAuthority.createFromDock(root, [root, guest]);
             }
-            // Clear any latched RCS pulses on both controllers
-            this.spacecraftController?.resetThrusterLatch?.();
-            otherSpacecraft.spacecraftController?.resetThrusterLatch?.();
-            // Recompute thruster grouping for both crafts relative to the
-            // combined center of mass so rotational groups act in unison.
-            try { this.spacecraftController?.refreshThrusterGroups?.(); } catch {}
-            try { otherSpacecraft.spacecraftController?.refreshThrusterGroups?.(); } catch {}
-            // Apply cluster-aware thrust/strength scaling immediately
-            try { (this.spacecraftController as any)?.applyClusterScalingNow?.(); } catch {}
-            try { (otherSpacecraft.spacecraftController as any)?.applyClusterScalingNow?.(); } catch {}
+
+            root.spacecraftController?.setCompoundAuthority(authority);
+            guest.spacecraftController?.setCompoundAuthority(authority);
         } catch {}
 
         return true;
@@ -729,11 +730,25 @@ export class Spacecraft {
             }
         }
 
-        // Recompute thruster grouping back to per-craft mapping and reset scaling
-        try { this.spacecraftController?.refreshThrusterGroups?.(); } catch {}
-        try { otherSpacecraft.spacecraftController?.refreshThrusterGroups?.(); } catch {}
-        try { (this.spacecraftController as any)?.resetClusterScalingToBase?.(); } catch {}
-        try { (otherSpacecraft.spacecraftController as any)?.resetClusterScalingToBase?.(); } catch {}
+        // ── Dissolve/shrink CompoundControlAuthority ──
+        try {
+            const authority = this.spacecraftController?.getCompoundAuthority?.();
+            if (authority) {
+                const shouldDissolve = authority.removeMember(otherSpacecraft);
+                // Clear authority on the undocked spacecraft
+                otherSpacecraft.spacecraftController?.setCompoundAuthority(null);
+                if (shouldDissolve) {
+                    // Only root + guest remain or just root — dissolve entirely
+                    authority.cleanup();
+                    for (const m of authority.members) {
+                        m.spacecraftController?.setCompoundAuthority(null);
+                    }
+                }
+            }
+            // Restore solo thruster groups
+            this.spacecraftController?.refreshThrusterGroups?.();
+            otherSpacecraft.spacecraftController?.refreshThrusterGroups?.();
+        } catch {}
 
         return true;
     }

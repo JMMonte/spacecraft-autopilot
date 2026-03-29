@@ -26,7 +26,7 @@ import { computeAvoidanceWaypoints, type Obstacle as AvoidanceObstacle } from '.
 export class Autopilot implements IAutopilot {
     private log = createLogger('controllers:Autopilot');
     private spacecraft: Spacecraft;
-    private config: AutopilotConfig;
+    public readonly config: AutopilotConfig;
     private thrusterGroups: ThrusterGroups;
     private thrust: number;
     private thrusterMax: number[];
