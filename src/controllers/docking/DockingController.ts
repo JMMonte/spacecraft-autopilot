@@ -27,7 +27,9 @@ export class DockingController {
     private _visualUpdateIntervalMs: number = 100; // update visuals every 100ms
     private spacecraftListUnsubscribe: (() => void) | null = null;
     private isCleanedUp: boolean = false;
-    
+    /** Whether the approach has reached the pre-approach point (far along port axis). */
+    private _approachAligned: boolean = false;
+
     // Thresholds moved to shared DockingUtils for reuse across systems
 
     constructor(spacecraft: Spacecraft, scene: THREE.Scene) {
@@ -62,6 +64,18 @@ export class DockingController {
             this.cancelDocking();
         }
 
+        // Validate port availability before starting
+        const ourPort = this.spacecraft.dockingPorts[ourPortId];
+        const theirPort = targetSpacecraft.dockingPorts[targetPortId];
+        if (!ourPort || ourPort.isOccupied) {
+            console.warn(`[DockingController] Cannot start: our port "${ourPortId}" is ${!ourPort ? 'missing' : 'occupied'}`);
+            return;
+        }
+        if (!theirPort || theirPort.isOccupied) {
+            console.warn(`[DockingController] Cannot start: target port "${targetPortId}" on ${targetSpacecraft.name} is ${!theirPort ? 'missing' : 'occupied'}`);
+            return;
+        }
+
         this.targetSpacecraft = targetSpacecraft;
         this._ourPortId = ourPortId;
         this._targetPortId = targetPortId;
@@ -70,6 +84,7 @@ export class DockingController {
         if (reg) this.updateSpacecraftLists(reg.getSpacecraftList() as Spacecraft[]);
 
         this.phase = 'approach';
+        this._approachAligned = false;
         this.currentWaypointIndex = 0;
         this.updateTrajectory();
         // Seed initial docking orientations for both spacecraft (stored in global store)
@@ -252,10 +267,16 @@ export class DockingController {
         // Always operate relative to the target spacecraft during docking
         if (autopilot) {
             autopilot.setReferenceObject(this.targetSpacecraft);
-            // Always exclude the target compound during docking.
-            // The standoff point is placed far enough from the target port face
-            // to avoid collision. Non-target obstacles are still avoided.
-            autopilot.setObstacleExclusions(this.targetSpacecraft.getCompoundMembers());
+            // Phase-dependent obstacle exclusions:
+            // - approach: only exclude the target spacecraft itself so the path avoids
+            //   other compound members (e.g. craft already docked to a hub)
+            // - align/dock: exclude the full compound since we're already at the
+            //   standoff point and closing along the port axis
+            if (this.phase === 'approach') {
+                autopilot.setObstacleExclusions([this.targetSpacecraft]);
+            } else {
+                autopilot.setObstacleExclusions(this.targetSpacecraft.getCompoundMembers());
+            }
         }
 
         // Gather current info for guidance and physical checks
@@ -298,10 +319,11 @@ export class DockingController {
             case 'approach': {
                 if (!autopilot) break;
 
-                // Standoff distance: enough room to stop and align, accounting for compound body extent
-                const tDims = info.target.fullDimensions;
-                const maxTargetExtent = Math.max(tDims.x, tDims.y, tDims.z);
-                const safeDistance = Math.max(3.0, maxTargetExtent + info.our.fullDimensions.z);
+                // Standoff distance: must clear the entire compound body.
+                const compoundExtent = this.getCompoundExtentFromPort(
+                    this.targetSpacecraft, info.ports.targetPosition, info.ports.targetDirection
+                );
+                const safeDistance = Math.max(3.0, compoundExtent + info.our.fullDimensions.z);
                 const targLen = this.targetSpacecraft.objects.dockingPortLength || 0.1;
                 const approachPos = this.calculateApproachPosition(
                     info.ports.targetPosition,
@@ -310,30 +332,73 @@ export class DockingController {
                     targLen
                 );
 
-                // Speed limit scales with distance to target body — start braking early
                 const ourPos = this.spacecraft.getWorldPosition();
                 const distToTarget = ourPos.distanceTo(info.ports.targetPosition);
-                const distToApproach = ourPos.distanceTo(approachPos);
-                // Start limiting at 4x safe distance (~15m), cap at 1.5 m/s near target
-                if (distToTarget < safeDistance * 4) {
-                    const speedLimit = Math.max(0.5, Math.min(1.5, distToTarget * 0.15));
-                    autopilot.setGoToSpeedLimit(speedLimit);
-                } else {
-                    autopilot.setGoToSpeedLimit(null);
+                let currentGoal: THREE.Vector3;
+
+                if (!this._approachAligned) {
+                    // Compound-aware routing: if the craft is on the wrong side of the
+                    // compound (i.e. the straight path to the standoff crosses the compound),
+                    // fly to a detour waypoint that routes around the compound bounding sphere.
+                    const compoundCenter = this.getCompoundCenter(this.targetSpacecraft);
+                    const compoundRadius = this.getCompoundBoundingRadius(this.targetSpacecraft, compoundCenter);
+                    const clearance = compoundRadius + Math.max(info.our.fullDimensions.x, info.our.fullDimensions.z) + 1.0;
+
+                    // Check if we're on the port-axis side of the compound
+                    const toUs = new THREE.Vector3().subVectors(ourPos, compoundCenter);
+                    const alongPort = toUs.dot(info.ports.targetDirection);
+
+                    if (alongPort > clearance) {
+                        // Already on the correct side (beyond the compound along port axis)
+                        this._approachAligned = true;
+                    } else {
+                        // Wrong side or too close — fly to a detour point perpendicular to
+                        // the port axis, outside the compound sphere, then toward the standoff.
+                        // Pick the perpendicular direction that's closest to our current position.
+                        const lateral = toUs.clone().sub(
+                            info.ports.targetDirection.clone().multiplyScalar(alongPort)
+                        );
+                        if (lateral.lengthSq() < 0.01) {
+                            // Directly behind — pick an arbitrary perpendicular
+                            lateral.set(0, 1, 0).cross(info.ports.targetDirection);
+                            if (lateral.lengthSq() < 0.01) lateral.set(1, 0, 0);
+                        }
+                        lateral.normalize();
+                        // Detour: go sideways + forward along port axis to clear the sphere
+                        currentGoal = compoundCenter.clone()
+                            .add(lateral.multiplyScalar(clearance))
+                            .add(info.ports.targetDirection.clone().multiplyScalar(clearance));
+
+                        const distToDetour = ourPos.distanceTo(currentGoal);
+                        if (distToDetour < Math.max(1.5, clearance * 0.2) && this.isStable(0.5)) {
+                            this._approachAligned = true;
+                        }
+                        autopilot.setGoToSpeedLimit(null);
+                    }
                 }
 
-                // During approach: fly to standoff, do NOT orient simultaneously
+                if (this._approachAligned) {
+                    // On the correct side — fly to standoff point along port axis
+                    currentGoal = approachPos;
+                    if (distToTarget < safeDistance * 4) {
+                        const speedLimit = Math.max(0.5, Math.min(1.5, distToTarget * 0.15));
+                        autopilot.setGoToSpeedLimit(speedLimit);
+                    } else {
+                        autopilot.setGoToSpeedLimit(null);
+                    }
+                }
+
+                // During approach: fly to goal, do NOT orient simultaneously
                 // (GoToPosition and OrientationMatch fight over the same thrusters)
-                // Orientation is handled in the align phase after arrival.
                 this.driveAutopilot(autopilot, {
-                    goToPosition: { enabled: true, position: approachPos },
+                    goToPosition: { enabled: true, position: currentGoal! },
                     orientationMatch: { enabled: false },
                     cancelLinearMotion: { enabled: false }
                 });
                 // Transition to align phase when close to standoff and slow enough
-                const dist = distToApproach;
+                const distToApproach = ourPos.distanceTo(approachPos);
                 const distThresh = Math.max(0.3, Math.min(2.0, safeDistance * 0.1));
-                if (dist < distThresh && this.isStable(0.3)) {
+                if (this._approachAligned && distToApproach < distThresh && this.isStable(0.3)) {
                     this.phase = 'align';
                     this.updateTrajectory();
                 }
@@ -361,7 +426,7 @@ export class DockingController {
 
             case 'dock': {
                 if (!autopilot) break;
-                // (obstacle exclusions set at top of update() — entire target compound excluded)
+                // (obstacle exclusions set at top of update() — full compound excluded in dock phase)
                 const finalPos = this.calculateFinalPosition(
                     info.ports.targetPosition,
                     info.ports.targetDirection
@@ -428,6 +493,64 @@ export class DockingController {
         const w = THREE.MathUtils.clamp(errQ.w, -1, 1);
         const ang = 2 * Math.acos(Math.abs(w));
         return ang;
+    }
+
+    /**
+     * Compute the maximum extent of the compound body perpendicular to the
+     * target port axis. This determines how far back the standoff point must be
+     * so the approaching craft has a clear path that doesn't clip other members.
+     */
+    private getCompoundExtentFromPort(
+        target: Spacecraft,
+        portPos: THREE.Vector3,
+        portDir: THREE.Vector3,
+    ): number {
+        const members = target.getCompoundMembers();
+        if (members.length <= 1) {
+            // Single spacecraft — just use its own max extent
+            const d = target.getFullDimensions();
+            return Math.max(d.x, d.y, d.z);
+        }
+        // For each compound member, project its bounding sphere onto the plane
+        // perpendicular to the port axis and find the maximum lateral extent.
+        // The standoff must clear this extent so the approach path is obstacle-free.
+        let maxExtent = 0;
+        for (const member of members) {
+            const mPos = member.getWorldPosition();
+            const mDims = member.getFullDimensions();
+            const mRadius = Math.max(mDims.x, mDims.y, mDims.z);
+            // Vector from port to member center
+            const toMember = new THREE.Vector3().subVectors(mPos, portPos);
+            // Lateral distance (perpendicular to port axis)
+            const alongPort = toMember.dot(portDir);
+            const lateralDistSq = toMember.lengthSq() - alongPort * alongPort;
+            const lateralDist = Math.sqrt(Math.max(0, lateralDistSq));
+            // Extent = lateral distance + member radius (how far out this member reaches)
+            maxExtent = Math.max(maxExtent, lateralDist + mRadius);
+        }
+        return maxExtent;
+    }
+
+    /** Centroid of all compound members' world positions. */
+    private getCompoundCenter(target: Spacecraft): THREE.Vector3 {
+        const members = target.getCompoundMembers();
+        const center = new THREE.Vector3();
+        for (const m of members) center.add(m.getWorldPosition());
+        if (members.length > 0) center.divideScalar(members.length);
+        return center;
+    }
+
+    /** Bounding radius from a given center that encloses all compound members. */
+    private getCompoundBoundingRadius(target: Spacecraft, center: THREE.Vector3): number {
+        const members = target.getCompoundMembers();
+        let maxR = 0;
+        for (const m of members) {
+            const d = m.getWorldPosition().distanceTo(center);
+            const dims = m.getFullDimensions();
+            const r = Math.max(dims.x, dims.y, dims.z);
+            maxR = Math.max(maxR, d + r);
+        }
+        return maxR;
     }
 
     // Compute the world-space position of a port's outer face (tip of the cylinder)

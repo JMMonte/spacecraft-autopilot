@@ -23,7 +23,7 @@ import {
     noopSimulationRuntimeStatePort,
     SimulationRuntimeStatePort,
 } from '../domain/runtimeStatePort';
-import { type SceneObjectConfig, SCENE_PRESETS, getScenePreset } from '../config/scenePresets';
+import { type SceneObjectConfig, type DockingPair, SCENE_PRESETS, getScenePreset } from '../config/scenePresets';
 
 export interface WorldConfig {
     debug?: boolean;
@@ -46,6 +46,7 @@ export interface WorldConfig {
         solarParams?: Record<string, unknown>; // for solar type
         thrusterStrengths?: number[];  // optional 24-entry per-thruster max (N)
     }>;
+    initialDocking?: DockingPair[];
     initialFocus?: number;
 }
 
@@ -90,7 +91,7 @@ export class BasicWorld implements SpacecraftRegistry {
     private stats: Stats | null = null;
     private grid: InfiniteGrid | null = null;
     private runtimeState: SimulationRuntimeStatePort;
-    private dockingOrchestrator = new DockingOrchestrator();
+    public dockingOrchestrator = new DockingOrchestrator();
     private inputRouter!: InputRouter;
 
     constructor(
@@ -361,6 +362,23 @@ export class BasicWorld implements SpacecraftRegistry {
             }));
         } else {
             this.addSpacecraftFromBlueprint(createMoverBlueprint('Alpha'), new THREE.Vector3(0, 0, 2));
+        }
+
+        // Process pre-docking pairs (must run after all spacecraft are created)
+        const dockingPairs = this.config.initialDocking;
+        if (dockingPairs && dockingPairs.length > 0) {
+            for (const pair of dockingPairs) {
+                const source = this.spacecraft[pair.sourceIndex];
+                const target = this.spacecraft[pair.targetIndex];
+                if (!source || !target) {
+                    this.log.warn(`Pre-dock skipped: invalid indices ${pair.sourceIndex}→${pair.targetIndex}`);
+                    continue;
+                }
+                const ok = source.dock(pair.sourcePort, target, pair.targetPort);
+                if (!ok) {
+                    this.log.warn(`Pre-dock failed: ${source.name}.${pair.sourcePort} → ${target.name}.${pair.targetPort}`);
+                }
+            }
         }
 
         // Initialize active spacecraft
@@ -946,6 +964,22 @@ export class BasicWorld implements SpacecraftRegistry {
             }));
         } else {
             this.addSpacecraftFromBlueprint(createMoverBlueprint('Alpha'), new THREE.Vector3(0, 0, 2));
+        }
+
+        // Process pre-docking pairs
+        if (sceneConfig.initialDocking && sceneConfig.initialDocking.length > 0) {
+            for (const pair of sceneConfig.initialDocking) {
+                const source = this.spacecraft[pair.sourceIndex];
+                const target = this.spacecraft[pair.targetIndex];
+                if (!source || !target) {
+                    this.log.warn(`Pre-dock skipped: invalid indices ${pair.sourceIndex}→${pair.targetIndex}`);
+                    continue;
+                }
+                const ok = source.dock(pair.sourcePort, target, pair.targetPort);
+                if (!ok) {
+                    this.log.warn(`Pre-dock failed: ${source.name}.${pair.sourcePort} → ${target.name}.${pair.targetPort}`);
+                }
+            }
         }
 
         // Zero out any velocities induced by physics stepping during async load

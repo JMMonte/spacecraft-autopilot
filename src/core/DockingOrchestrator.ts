@@ -6,7 +6,14 @@ import type { Spacecraft } from './spacecraft';
  * when alignment/proximity thresholds are met.
  */
 export class DockingOrchestrator {
+    private _enabled = true;
+
+    /** Disable passive docking (e.g. during a scripted docking sequence). */
+    public setEnabled(enabled: boolean): void { this._enabled = enabled; }
+    public get enabled(): boolean { return this._enabled; }
+
     performPassiveDocking(spacecraftList: ReadonlyArray<Spacecraft>): void {
+        if (!this._enabled) return;
         const list = spacecraftList;
         const n = list.length;
         for (let i = 0; i < n; i++) {

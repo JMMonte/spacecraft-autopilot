@@ -11,6 +11,17 @@ import type { AsteroidSystemConfig } from '../objects/AsteroidSystem';
 
 // ─── Scene config (subset of WorldConfig relevant to object population) ──────
 
+export interface DockingPair {
+    /** Index of the guest spacecraft in the initialSpacecraft array */
+    sourceIndex: number;
+    /** Port ID on the guest spacecraft */
+    sourcePort: string;
+    /** Index of the host spacecraft in the initialSpacecraft array */
+    targetIndex: number;
+    /** Port ID on the host spacecraft */
+    targetPort: string;
+}
+
 export interface SceneObjectConfig {
     asteroids?: Array<{
         position: { x: number; y: number; z: number };
@@ -30,6 +41,8 @@ export interface SceneObjectConfig {
         solarParams?: Record<string, unknown>;
         thrusterStrengths?: number[];
     }>;
+    /** Pre-dock spacecraft at scene load. Pairs are processed in order. */
+    initialDocking?: DockingPair[];
     initialFocus?: number;
 }
 
@@ -117,9 +130,11 @@ function randomAsteroids(
 export const SCENE_PRESETS: ScenePreset[] = [
     {
         id: 'default',
-        name: 'Default',
-        description: 'Mixed fleet: 7 movers, 2 hubs, 1 coupler, 2 solar spacecraft',
+        name: 'Default — Assembled Station',
+        description: 'Pre-assembled station (Hub-1 ↔ Coupler ↔ Hub-2) with movers, solar arrays, and Golf as free-flyer',
         config: {
+            // Index: 0       1       2         3       4      5      6      7          8        9        10       11
+            // Name:  Alpha   Bravo   Charlie   Delta   Echo   Hub-1  Hub-2  Coupler-1  Solar-1  Solar-2  Foxtrot  Golf
             initialSpacecraft: [
                 { name: 'Alpha',     blueprintType: 'mover', position: { x: 0,   y: 0, z: 20  }, width: 1, height: 1, depth: 2 },
                 { name: 'Bravo',     blueprintType: 'mover', position: { x: 0,   y: 0, z: -20 }, width: 1, height: 1, depth: 2 },
@@ -129,12 +144,47 @@ export const SCENE_PRESETS: ScenePreset[] = [
                 { name: 'Hub-1',     blueprintType: 'node',  position: { x: 0,   y: 0, z: 0   }, portCount: 6, width: 1 },
                 { name: 'Hub-2',     blueprintType: 'node',  position: { x: 80,  y: 0, z: 0   }, portCount: 4, width: 1 },
                 { name: 'Coupler-1', blueprintType: 'node',  position: { x: -40, y: 0, z: -20 }, portCount: 2, width: 1 },
-                { name: 'Solar-1',   blueprintType: 'solar', position: { x: -40, y: 0, z: 0   }, solarParams: { panelCount: 6, placement: 'both', startDeployed: false } },
-                { name: 'Solar-2',   blueprintType: 'solar', position: { x: 40,  y: 0, z: 0   }, solarParams: { panelCount: 4, placement: 'both', startDeployed: false } },
+                { name: 'Solar-1',   blueprintType: 'solar', position: { x: -40, y: 0, z: 0   }, solarParams: { panelCount: 6, placement: 'both', startDeployed: true } },
+                { name: 'Solar-2',   blueprintType: 'solar', position: { x: 40,  y: 0, z: 0   }, solarParams: { panelCount: 4, placement: 'both', startDeployed: true } },
                 { name: 'Foxtrot',   blueprintType: 'mover', position: { x: 0,   y: 0, z: -40 }, width: 1, height: 1, depth: 2 },
-                { name: 'Golf',      blueprintType: 'mover', position: { x: 80,  y: 0, z: 20  }, width: 1, height: 1, depth: 1.5 },
+                { name: 'Golf',      blueprintType: 'mover', position: { x: 30,  y: 0, z: 20  }, width: 1, height: 1, depth: 1.5 },
             ],
-            initialFocus: 0,
+            // Station topology (Hub-1 is compound root — 6 ports):
+            //
+            //                        Echo (top)
+            //                        Echo (top)
+            //                          |
+            //   Solar-1 ←left— Hub-1 —right→ Coupler-1 —back→ Hub-2 —right→ Solar-2
+            //                    |                              |  \
+            //                 Foxtrot                       Charlie  Delta
+            //                 (bottom)                       (back)  (left)
+            //                    |front
+            //                  Alpha ←front— Golf (front of station)
+            //                    |back
+            //                  Bravo
+            //
+            // Hub-1: front→Alpha, back→Bravo, left→Solar-1, right→Coupler-1, top→Echo, bottom→Foxtrot
+            // Alpha: back→Hub-1, front→Golf
+            // Coupler-1: front→Hub-1(right), back→Hub-2(front)
+            // Hub-2: front→Coupler-1, back→Charlie, left→Delta, right→Solar-2
+            initialDocking: [
+                // Dock to Hub-1 (index 5) — central hub, 6 ports
+                { sourceIndex: 0,  sourcePort: 'back',  targetIndex: 5, targetPort: 'front' },  // Alpha.back    → Hub-1.front
+                { sourceIndex: 1,  sourcePort: 'front', targetIndex: 5, targetPort: 'back' },   // Bravo.front   → Hub-1.back
+                { sourceIndex: 4,  sourcePort: 'back',  targetIndex: 5, targetPort: 'top' },    // Echo.back     → Hub-1.top
+                { sourceIndex: 10, sourcePort: 'front', targetIndex: 5, targetPort: 'bottom' }, // Foxtrot.front → Hub-1.bottom
+                { sourceIndex: 8,  sourcePort: 'back',  targetIndex: 5, targetPort: 'left' },   // Solar-1.back  → Hub-1.left
+                { sourceIndex: 7,  sourcePort: 'front', targetIndex: 5, targetPort: 'right' },  // Coupler.front → Hub-1.right
+                // Dock to Coupler-1 (index 7) — bridge to Hub-2
+                { sourceIndex: 6,  sourcePort: 'front', targetIndex: 7, targetPort: 'back' },   // Hub-2.front   → Coupler.back
+                // Dock to Hub-2 (index 6) — secondary hub, 4 ports
+                { sourceIndex: 2,  sourcePort: 'front', targetIndex: 6, targetPort: 'back' },   // Charlie.front → Hub-2.back
+                { sourceIndex: 3,  sourcePort: 'front', targetIndex: 6, targetPort: 'left' },   // Delta.front   → Hub-2.left
+                { sourceIndex: 9,  sourcePort: 'back',  targetIndex: 6, targetPort: 'right' },  // Solar-2.back  → Hub-2.right
+                // Dock Golf to Alpha's free front port
+                { sourceIndex: 11, sourcePort: 'back',  targetIndex: 0, targetPort: 'front' },  // Golf.back     → Alpha.front
+            ],
+            initialFocus: 11, // Golf — docked at front of station
         },
     },
 
@@ -166,10 +216,11 @@ export const SCENE_PRESETS: ScenePreset[] = [
     {
         id: 'station',
         name: 'Station Assembly',
-        description: '4 movers + 3 hubs + 2 couplers for building a station',
+        description: 'Pre-assembled cross-shaped station: 3 hubs + 2 couplers + 4 movers, Builder-1 free',
         config: {
+            // Index: 0          1          2          3          4      5      6      7          8
             initialSpacecraft: [
-                { name: 'Builder-1',  blueprintType: 'mover', position: { x: -15, y: 0,  z: 15  }, width: 1, height: 1, depth: 2 },
+                { name: 'Builder-1',  blueprintType: 'mover', position: { x: 30,  y: 0,  z: 0   }, width: 1, height: 1, depth: 2 },
                 { name: 'Builder-2',  blueprintType: 'mover', position: { x: 15,  y: 0,  z: 15  }, width: 1, height: 1, depth: 2 },
                 { name: 'Builder-3',  blueprintType: 'mover', position: { x: -15, y: 0,  z: -15 }, width: 1, height: 1, depth: 2 },
                 { name: 'Builder-4',  blueprintType: 'mover', position: { x: 15,  y: 0,  z: -15 }, width: 1, height: 1, depth: 2 },
@@ -179,7 +230,18 @@ export const SCENE_PRESETS: ScenePreset[] = [
                 { name: 'Coupler-1',  blueprintType: 'node',  position: { x: 5,   y: 0,  z: 0   }, portCount: 2, width: 1 },
                 { name: 'Coupler-2',  blueprintType: 'node',  position: { x: -5,  y: 0,  z: 0   }, portCount: 2, width: 1 },
             ],
-            initialFocus: 0,
+            // Hub-A(center) → Coupler-1 → Hub-B(top) with Builder-2
+            //                → Coupler-2 → Hub-C(bottom) with Builder-3, Builder-4
+            initialDocking: [
+                { sourceIndex: 7, sourcePort: 'front', targetIndex: 4, targetPort: 'top' },    // Coupler-1 → Hub-A.top
+                { sourceIndex: 5, sourcePort: 'front', targetIndex: 7, targetPort: 'back' },   // Hub-B     → Coupler-1.back
+                { sourceIndex: 8, sourcePort: 'front', targetIndex: 4, targetPort: 'bottom' }, // Coupler-2 → Hub-A.bottom
+                { sourceIndex: 6, sourcePort: 'front', targetIndex: 8, targetPort: 'back' },   // Hub-C     → Coupler-2.back
+                { sourceIndex: 1, sourcePort: 'front', targetIndex: 5, targetPort: 'back' },   // Builder-2 → Hub-B.back
+                { sourceIndex: 2, sourcePort: 'front', targetIndex: 6, targetPort: 'back' },   // Builder-3 → Hub-C.back
+                { sourceIndex: 3, sourcePort: 'front', targetIndex: 4, targetPort: 'front' },  // Builder-4 → Hub-A.front
+            ],
+            initialFocus: 0, // Builder-1 — free-flying
         },
     },
 

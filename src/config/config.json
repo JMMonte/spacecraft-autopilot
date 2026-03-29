@@ -13,7 +13,7 @@
         { "name": "Solar-1",   "blueprintType": "solar", "position": { "x": -40, "y": 0,   "z": 0   }, "solarParams": { "panelCount": 6, "placement": "both", "startDeployed": false } },
         { "name": "Solar-2",   "blueprintType": "solar", "position": { "x": 40,  "y": 0,   "z": 0   }, "solarParams": { "panelCount": 4, "placement": "both", "startDeployed": false } },
         { "name": "Foxtrot",   "blueprintType": "mover", "position": { "x": 0,   "y": 0,   "z": -40 }, "width": 1, "height": 1, "depth": 2 },
-        { "name": "Golf",      "blueprintType": "mover", "position": { "x": 80,  "y": 0,   "z": 20  }, "width": 1, "height": 1, "depth": 1.5 }
+        { "name": "Golf",      "blueprintType": "mover", "position": { "x": 30,  "y": 0,   "z": 20  }, "width": 1, "height": 1, "depth": 1.5 }
     ],
     "initialFocus": 0,
     "_asteroidSystem_disabled": {

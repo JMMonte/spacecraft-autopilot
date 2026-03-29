@@ -578,7 +578,12 @@ export class DockingTestHarness {
         const results: Array<{ op: string; success: boolean; elapsed: number; error?: string }> = [];
         const allCraft = this.world.getSpacecraftList();
 
-        console.log(`[DOCK-SEQ] Starting sequence of ${ops.length} docking operations`);
+        // Disable passive auto-docking during the sequence to prevent port stealing
+        const orchestrator = this.world.dockingOrchestrator;
+        const wasEnabled = orchestrator.enabled;
+        orchestrator.setEnabled(false);
+
+        console.log(`[DOCK-SEQ] Starting sequence of ${ops.length} docking operations (passive docking suspended)`);
 
         for (let i = 0; i < ops.length; i++) {
             if (this.sequenceAborted) {
@@ -604,6 +609,22 @@ export class DockingTestHarness {
                 const err = `Target spacecraft "${op.target}" not found`;
                 console.error(`[DOCK-SEQ] ${err}`);
                 results.push({ op: `${op.source} → ${op.target}`, success: false, elapsed: 0, error: err });
+                continue;
+            }
+
+            // Validate port availability before switching focus
+            const srcPort = source.dockingPorts[op.sourcePort];
+            const tgtPort = target.dockingPorts[op.targetPort];
+            if (!srcPort || srcPort.isOccupied) {
+                const err = `Source port "${op.sourcePort}" on "${op.source}" is ${!srcPort ? 'missing' : 'already occupied'}`;
+                console.error(`[DOCK-SEQ] ${err}`);
+                results.push({ op: `${op.source}:${op.sourcePort} → ${op.target}:${op.targetPort}`, success: false, elapsed: 0, error: err });
+                continue;
+            }
+            if (!tgtPort || tgtPort.isOccupied) {
+                const err = `Target port "${op.targetPort}" on "${op.target}" is ${!tgtPort ? 'missing' : 'already occupied'}`;
+                console.error(`[DOCK-SEQ] ${err}`);
+                results.push({ op: `${op.source}:${op.sourcePort} → ${op.target}:${op.targetPort}`, success: false, elapsed: 0, error: err });
                 continue;
             }
 
@@ -651,8 +672,11 @@ export class DockingTestHarness {
             failed: results.filter(r => !r.success).length,
             results,
         };
+        // Restore passive docking
+        orchestrator.setEnabled(wasEnabled);
+
         console.log(`\n[DOCK-SEQ] ═══════════════════════════════════════════`);
-        console.log(`[DOCK-SEQ] SEQUENCE COMPLETE: ${summary.succeeded}/${summary.total} successful`);
+        console.log(`[DOCK-SEQ] SEQUENCE COMPLETE: ${summary.succeeded}/${summary.total} successful (passive docking restored)`);
         console.log(`[DOCK-SEQ] ═══════════════════════════════════════════`);
         return JSON.stringify(summary, null, 2);
     }
@@ -664,7 +688,9 @@ export class DockingTestHarness {
         if (this.activeCraft?.dockingController?.isDocking()) {
             this.activeCraft.dockingController.cancelDocking();
         }
-        return JSON.stringify({ ok: true, message: 'Sequence abort requested' });
+        // Restore passive docking
+        this.world.dockingOrchestrator.setEnabled(true);
+        return JSON.stringify({ ok: true, message: 'Sequence abort requested, passive docking restored' });
     }
 
     private waitForDockingComplete(
