@@ -677,7 +677,7 @@ class RapierPhysics implements PhysicsEngine {
       if (typeof options?.restitution === 'number') cd.setRestitution(options.restitution);
       if (typeof options?.friction === 'number') cd.setFriction(options.friction);
       const collider = this.world.createCollider(cd, rb);
-      return collider?.handle ?? collider;
+      return collider; // Return the Collider object, not just the handle
     } catch (_) {
       return undefined;
     }

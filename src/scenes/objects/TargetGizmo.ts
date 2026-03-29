@@ -130,12 +130,21 @@ export class TargetGizmo {
 
   public dispose(): void {
     try { this.controls.detach(); } catch {}
+    try { this.controls.dispose(); } catch {}
     try { this.scene.remove(this.helper); } catch {}
-    try { this.scene.remove(this.group); } catch {}
-    try { (this.marker.geometry as THREE.BufferGeometry)?.dispose?.(); } catch {}
     try {
-      const m = this.marker.material as THREE.Material;
-      m.dispose?.();
+      this.group.traverse((child) => {
+        const mesh = child as THREE.Mesh & { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] };
+        if (mesh.geometry) {
+          mesh.geometry.dispose?.();
+        }
+        if (Array.isArray(mesh.material)) {
+          for (const material of mesh.material) material.dispose?.();
+        } else if (mesh.material) {
+          mesh.material.dispose?.();
+        }
+      });
     } catch {}
+    try { this.scene.remove(this.group); } catch {}
   }
 }

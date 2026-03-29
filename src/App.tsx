@@ -8,6 +8,7 @@ import { createLogger } from './utils/logger';
 import { simulationRuntimeStatePort } from './state/simulationRuntimeStatePort';
 import { AutopilotLLMInterface } from './controllers/autopilot/AutopilotLLMInterface';
 import { installDockingTestHarness } from './debug/DockingTestHarness';
+import { createSolarSpacecraftBlueprint } from './scenes/modules/blueprints';
 
 export function App() {
     const log = createLogger('ui:App');
@@ -28,12 +29,18 @@ export function App() {
         return newSpacecraft;
     }, [world]);
 
-    const createNodeSpacecraft = useCallback((portCount?: 2 | 4 | 6) => {
+    const createBlueprint = useCallback((bp: import('./components/windows/SpacecraftListWindow').BlueprintType) => {
         if (!world) return;
-        const node = world.addNodeSpacecraft(undefined, portCount ?? 4);
-        log.debug('Creating new node spacecraft with', portCount ?? 4, 'ports');
-        world.setActiveSpacecraft(node);
-        return node;
+        if (bp.kind === 'node') {
+            const node = world.addNodeSpacecraft(undefined, bp.portCount);
+            log.debug('Creating node spacecraft with', bp.portCount, 'ports');
+            world.setActiveSpacecraft(node);
+        } else if (bp.kind === 'solar') {
+            const sbp = createSolarSpacecraftBlueprint('Solar');
+            const sc = world.addSpacecraftFromBlueprint(sbp);
+            log.debug('Creating solar spacecraft');
+            world.setActiveSpacecraft(sc);
+        }
     }, [world]);
 
     useEffect(() => {
@@ -213,7 +220,7 @@ export function App() {
                     loadingProgress={loadingProgress}
                     loadingStatus={loadingStatus}
                     onCreateNewSpacecraft={createNewSpacecraft}
-                    onCreateNodeSpacecraft={createNodeSpacecraft}
+                    onCreateBlueprint={createBlueprint}
                     spacecraftListVersion={spacecraftListVersion}
                 />
             )}

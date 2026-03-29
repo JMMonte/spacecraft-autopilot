@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { EndStructureDimensions, PlacementType, StartPoints, EndPoints } from './types';
 
+export type TrussShape = 'round' | 'square';
+
 export class TrussManager {
+    public trussShape: TrussShape = 'round';
+
     constructor(
         private boxWidth: number,
         private boxHeight: number,
@@ -14,8 +18,11 @@ export class TrussManager {
         const midPoint = new THREE.Vector3();
         midPoint.addVectors(start, end).multiplyScalar(0.5);
         const length = start.distanceTo(end);
-        const geometry = new THREE.CylinderGeometry(this.trussRadius, this.trussRadius, length, 16, 1, false);
-        
+        const r = this.trussRadius;
+        const geometry = this.trussShape === 'square'
+            ? new THREE.BoxGeometry(r * 2, length, r * 2)
+            : new THREE.CylinderGeometry(r, r, length, 16, 1, false);
+
         const beam = new THREE.Mesh(geometry, material.clone());
         beam.position.copy(midPoint);
         beam.lookAt(start);

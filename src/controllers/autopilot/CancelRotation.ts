@@ -5,6 +5,9 @@ import type { Spacecraft } from '../../core/spacecraft';
 import { PIDController } from '../pidController';
 
 export class CancelRotation extends AutopilotMode {
+    /** True while actively correcting (hysteresis state). */
+    private correcting = false;
+
     constructor(
         spacecraft: Spacecraft,
         config: AutopilotConfig,
@@ -21,13 +24,21 @@ export class CancelRotation extends AutopilotMode {
         const q = this.spacecraft.getWorldOrientationRef();
         const qInv = this.tmpQuatA.copy(q).invert();
         const worldAngularVel = this.spacecraft.getWorldAngularVelocityRef();
+        const omegaSq = worldAngularVel.lengthSq();
 
-        // Dynamic deadband: minimum angular velocity achievable in one physics frame
-        // based on actual torque capability and inertia.
-        const dyn = this.getDynamicAngularAccelCap();
-        const omegaDeadband = Math.max(0.0005, dyn.alphaMax * (1 / 60) * 2);
-        if (worldAngularVel.lengthSq() < omegaDeadband * omegaDeadband) {
-            return out;
+        // Hysteresis deadband: start correcting at 0.005 rad/s, stop at 0.001 rad/s
+        const startThreshold = 0.005;
+        const stopThreshold = 0.001;
+        if (this.correcting) {
+            if (omegaSq < stopThreshold * stopThreshold) {
+                this.correcting = false;
+                return out;
+            }
+        } else {
+            if (omegaSq < startThreshold * startThreshold) {
+                return out;
+            }
+            this.correcting = true;
         }
 
         // Convert global angular velocity to local space (no allocations)

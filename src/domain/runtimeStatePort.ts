@@ -1,13 +1,13 @@
-export type UiRuntimeState = {
+export type UiRuntimeState = Readonly<{
   gridVisible: boolean;
   cameraMode: 'follow' | 'free';
-};
+}>;
 
-export type TraceRuntimeSettings = {
+export type TraceRuntimeSettings = Readonly<{
   gradientEnabled: boolean;
   gradientMode: 'velocity' | 'acceleration' | 'forceAbs' | 'forceNet';
   palette: 'turbo' | 'viridis';
-};
+}>;
 
 export interface SimulationRuntimeStatePort {
   getUiState(): UiRuntimeState;
@@ -16,16 +16,35 @@ export interface SimulationRuntimeStatePort {
   subscribeTraceSettings(listener: (settings: TraceRuntimeSettings) => void): () => void;
 }
 
-const defaultUiState: UiRuntimeState = {
+function freezeUiState(state: { gridVisible: boolean; cameraMode: 'follow' | 'free' }): UiRuntimeState {
+  return Object.freeze({
+    gridVisible: state.gridVisible,
+    cameraMode: state.cameraMode,
+  });
+}
+
+function freezeTraceSettings(state: {
+  gradientEnabled: boolean;
+  gradientMode: 'velocity' | 'acceleration' | 'forceAbs' | 'forceNet';
+  palette: 'turbo' | 'viridis';
+}): TraceRuntimeSettings {
+  return Object.freeze({
+    gradientEnabled: state.gradientEnabled,
+    gradientMode: state.gradientMode,
+    palette: state.palette,
+  });
+}
+
+const defaultUiState = freezeUiState({
   gridVisible: true,
   cameraMode: 'follow',
-};
+});
 
-const defaultTraceSettings: TraceRuntimeSettings = {
+const defaultTraceSettings = freezeTraceSettings({
   gradientEnabled: false,
   gradientMode: 'velocity',
   palette: 'turbo',
-};
+});
 
 export const noopSimulationRuntimeStatePort: SimulationRuntimeStatePort = {
   getUiState: () => defaultUiState,

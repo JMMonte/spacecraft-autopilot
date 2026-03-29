@@ -9,8 +9,7 @@ import { LoadingOverlay } from './LoadingOverlay';
 // Import window components
 import { TelemetryWindow } from './windows/TelemetryWindow';
 import { ArtificialHorizonWindow } from './windows/ArtificialHorizonWindow';
-import { DimensionsWindow } from './windows/DimensionsWindow';
-import { RCSControlsWindow } from './windows/RCSControlsWindow';
+import { SpacecraftConfigWindow } from './windows/SpacecraftConfigWindow';
 import { HelperArrowsWindow } from './windows/HelperArrowsWindow';
 import { PIDControllerWindow } from './windows/PIDControllerWindow';
 import { AutopilotWindow } from './windows/AutopilotWindow';
@@ -23,17 +22,17 @@ import { ChartWindow } from './windows/ChartWindow';
 import type { ChartSource } from './windows/ChartWindow';
 import { Spacecraft } from '../core/spacecraft';
 import { useSettings } from '../state/store';
+import { setTelemetrySnapshot } from './windows/telemetrySnapshotStore';
 // FOV inputs now live inside DockingCameraView
 import { useElementSize } from '../hooks/useElementSize';
 import { SpacecraftController } from '../controllers/spacecraftController';
 
-type WindowKey = 'telemetry' | 'horizon' | 'dimensions' | 'rcs' | 'arrows' | 'pid' | 'autopilot' | 'spacecraftList' | 'docking' | 'dockingCameras' | 'settings' | 'chart';
+type WindowKey = 'telemetry' | 'horizon' | 'spacecraftConfig' | 'arrows' | 'pid' | 'autopilot' | 'spacecraftList' | 'docking' | 'dockingCameras' | 'settings' | 'chart';
 
 interface WindowStates extends Record<string, boolean> {
     telemetry: boolean;
     horizon: boolean;
-    dimensions: boolean;
-    rcs: boolean;
+    spacecraftConfig: boolean;
     arrows: boolean;
     pid: boolean;
     autopilot: boolean;
@@ -54,17 +53,8 @@ interface CockpitProps {
     loadingProgress?: number;
     loadingStatus?: string;
     onCreateNewSpacecraft?: () => void;
-    onCreateNodeSpacecraft?: (portCount?: 2 | 4 | 6) => void;
+    onCreateBlueprint?: (bp: import('./windows/SpacecraftListWindow').BlueprintType) => void;
     spacecraftListVersion?: number;
-}
-
-interface TelemetryValues {
-    position: THREE.Vector3;
-    velocity: THREE.Vector3;
-    orientation: THREE.Quaternion;
-    angularVelocity: THREE.Vector3;
-    mass: number;
-    thrusterStatus: boolean[];
 }
 
 interface AutopilotState {
@@ -87,8 +77,7 @@ const defaultWindowSize = { width: 280, height: 240 };
 const windowSizeHints: Record<WindowKey, { width: number; height: number }> = {
     telemetry: { width: 280, height: 260 },
     horizon: { width: 280, height: 280 },
-    dimensions: { width: 280, height: 240 },
-    rcs: { width: 280, height: 240 },
+    spacecraftConfig: { width: 280, height: 340 },
     arrows: { width: 260, height: 220 },
     pid: { width: 320, height: 360 },
     autopilot: { width: 340, height: 380 },
@@ -126,15 +115,14 @@ const calculateInitialPositions = (viewportWidth: number): WindowPositions => {
     return {
         telemetry: { x: leftX, y: currentLeftY },
         horizon: { x: leftX, y: currentLeftY },
-        dimensions: { x: rightX, y: currentRightY },
-        rcs: { x: rightX, y: currentRightY + titleBarHeight },
-        pid: { x: rightX, y: currentRightY + titleBarHeight * 2 },
-        arrows: { x: rightX, y: currentRightY + titleBarHeight * 3 },
-        autopilot: { x: rightX, y: currentRightY + titleBarHeight * 4 + padding * 2 },
+        spacecraftConfig: { x: rightX, y: currentRightY },
+        pid: { x: rightX, y: currentRightY + titleBarHeight },
+        arrows: { x: rightX, y: currentRightY + titleBarHeight * 2 },
+        autopilot: { x: rightX, y: currentRightY + titleBarHeight * 3 + padding * 2 },
         spacecraftList: { x: rightX, y: currentRightY },
         docking: { x: leftX, y: currentLeftY + horizonHeight + padding * 2 },
         dockingCameras: { x: leftX + 270, y: currentLeftY + horizonHeight + padding * 2 },
-        settings: { x: rightX, y: currentRightY + titleBarHeight * 5 + padding * 2 },
+        settings: { x: rightX, y: currentRightY + titleBarHeight * 4 + padding * 2 },
         chart: { x: leftX + 270, y: currentLeftY },
     };
 };
@@ -145,7 +133,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
     loadingProgress = 100,
     loadingStatus = '',
     onCreateNewSpacecraft,
-    onCreateNodeSpacecraft,
+    onCreateBlueprint,
     spacecraftListVersion = 0
 }) => {
     // Get the world instance directly from the spacecraft
@@ -160,14 +148,20 @@ export const Cockpit: React.FC<CockpitProps> = ({
             const av = spacecraft?.objects?.boxBody?.angularVelocity;
             return av ? Math.sqrt(av.x * av.x + av.y * av.y + av.z * av.z) : null;
         }},
+        { id: 'fuel', label: 'fuel %', color: '#22d3ee', axis: 'right', sample: () => {
+            const tank = spacecraft?.getFuelTank?.();
+            return tank ? tank.fuelLevel * 100 : null;
+        }},
+        { id: 'fuel.kg', label: 'fuel kg', color: '#a78bfa', axis: 'right', sample: () => {
+            return spacecraft?.getFuelTank?.()?.fuelMass ?? null;
+        }},
     ], [spacecraft]);
 
     // State
     const [visibleWindows, setVisibleWindows] = useState<WindowStates>({
         telemetry: false,
         horizon: true,
-        dimensions: false,
-        rcs: false,
+        spacecraftConfig: false,
         arrows: false,
         pid: false,
         autopilot: true,
@@ -179,33 +173,30 @@ export const Cockpit: React.FC<CockpitProps> = ({
     });
     const horizonVisible = visibleWindows.horizon;
     const [windowPositions, setWindowPositions] = useState<WindowPositions>(calculateInitialPositions(typeof window !== 'undefined' ? window.innerWidth : 1024));
-    const [telemetryValues, setTelemetryValues] = useState<TelemetryValues>({
-        position: new THREE.Vector3(),
-        velocity: new THREE.Vector3(),
-        orientation: new THREE.Quaternion(),
-        angularVelocity: new THREE.Vector3(),
-        mass: 0,
-        thrusterStatus: []
-    });
     const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
 
     // Z-order management for draggable windows
     const initialZ = 100;
     const [zCounter, setZCounter] = useState<number>(initialZ + 10);
     const [windowZ, setWindowZ] = useState<Record<WindowKey, number>>({
-        spacecraftList: initialZ + 1,
-        telemetry:      initialZ + 2,
-        horizon:        initialZ + 3,
-        dimensions:     initialZ + 4,
-        rcs:            initialZ + 5,
-        arrows:         initialZ + 6,
-        pid:            initialZ + 7,
-        autopilot:      initialZ + 8,
-        docking:        initialZ + 9,
-        dockingCameras: initialZ + 10,
+        spacecraftList:   initialZ + 1,
+        telemetry:        initialZ + 2,
+        horizon:          initialZ + 3,
+        spacecraftConfig: initialZ + 4,
+        arrows:           initialZ + 5,
+        pid:              initialZ + 6,
+        autopilot:        initialZ + 7,
+        docking:          initialZ + 8,
+        dockingCameras:   initialZ + 9,
         settings:       initialZ + 11,
         chart:          initialZ + 12,
     });
+
+    useEffect(() => {
+        return () => {
+            setTelemetrySnapshot(null);
+        };
+    }, []);
 
     const bringWindowToFront = (key: WindowKey) => {
         setWindowZ(prev => ({ ...prev, [key]: zCounter + 1 }));
@@ -397,7 +388,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
             const quaternion = spacecraft.objects.box?.quaternion ?? { x: 0, y: 0, z: 0, w: 1 };
 
             // Update telemetry values for display
-            setTelemetryValues({
+            setTelemetrySnapshot({
                 position: spacecraft.objects.box.position,
                 velocity: new THREE.Vector3(
                     Number((v.x ?? 0).toFixed?.(2) ?? v.x ?? 0),
@@ -416,7 +407,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                     Number((av.z ?? 0).toFixed?.(2) ?? av.z ?? 0)
                 ),
                 mass: spacecraft.getMass() ?? 0,
-                thrusterStatus: spacecraft.getThrusterStatus() ?? []
+                thrusterStatus: [...(spacecraft.getThrusterStatus() ?? [])]
             });
 
             // Update horizon directly for smoother motion
@@ -900,7 +891,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                                 world={world}
                                 activeSpacecraft={spacecraft}
                                 onCreateSpacecraft={onCreateNewSpacecraft ?? (() => { })}
-                                onCreateNodeSpacecraft={onCreateNodeSpacecraft ?? (() => { })}
+                                onCreateBlueprint={onCreateBlueprint ?? (() => { })}
                                 onSelectSpacecraft={handleSelectSpacecraft}
                                 onDeleteSpacecraft={handleDeleteSpacecraft}
                                 version={spacecraftListVersion}
@@ -918,7 +909,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             zIndex={windowZ.telemetry}
                             onFocus={() => bringWindowToFront('telemetry')}
                         >
-                            <TelemetryWindow telemetry={telemetryValues} />
+                            <TelemetryWindow />
                         </DraggableWindow>
                     )}
 
@@ -936,29 +927,16 @@ export const Cockpit: React.FC<CockpitProps> = ({
                         </DraggableWindow>
                     )}
 
-                    {visibleWindows.dimensions && (
+                    {visibleWindows.spacecraftConfig && (
                         <DraggableWindow
-                            title="Spacecraft Dimensions"
-                            defaultPosition={windowPositions.dimensions}
-                            onPositionChange={(pos: WindowPosition) => updateWindowPosition('dimensions', pos)}
-                            isVisible={visibleWindows.dimensions}
-                            zIndex={windowZ.dimensions}
-                            onFocus={() => bringWindowToFront('dimensions')}
+                            title="Spacecraft Config"
+                            defaultPosition={windowPositions.spacecraftConfig}
+                            onPositionChange={(pos: WindowPosition) => updateWindowPosition('spacecraftConfig', pos)}
+                            isVisible={visibleWindows.spacecraftConfig}
+                            zIndex={windowZ.spacecraftConfig}
+                            onFocus={() => bringWindowToFront('spacecraftConfig')}
                         >
-                            <DimensionsWindow spacecraft={spacecraft} />
-                        </DraggableWindow>
-                    )}
-
-                    {visibleWindows.rcs && (
-                        <DraggableWindow
-                            title="RCS Thrust"
-                            defaultPosition={windowPositions.rcs}
-                            onPositionChange={(pos: WindowPosition) => updateWindowPosition('rcs', pos)}
-                            isVisible={visibleWindows.rcs}
-                            zIndex={windowZ.rcs}
-                            onFocus={() => bringWindowToFront('rcs')}
-                        >
-                            <RCSControlsWindow spacecraft={spacecraft} />
+                            <SpacecraftConfigWindow spacecraft={spacecraft} />
                         </DraggableWindow>
                     )}
 

@@ -1,11 +1,10 @@
 import React from 'react';
-import { 
-  BarChart2, 
-  Crosshair, 
-  Ruler, 
-  Rocket, 
-  ArrowRight, 
-  Settings, 
+import {
+  BarChart2,
+  Crosshair,
+  Rocket,
+  ArrowRight,
+  Settings,
   Cpu,
   Plus,
   List,
@@ -26,8 +25,7 @@ interface TopBarProps {
 const WINDOW_ICONS = {
   telemetry: BarChart2,
   horizon: Crosshair,
-  dimensions: Ruler,
-  rcs: Rocket,
+  spacecraftConfig: Rocket,
   arrows: ArrowRight,
   pid: Settings,
   autopilot: Cpu,

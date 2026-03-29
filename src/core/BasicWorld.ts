@@ -6,6 +6,10 @@ import { LENS_FLARE_LAYER } from '../effects/lensFlareConfig';
 import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
 import { Spacecraft, type SpacecraftOptions } from './spacecraft';
+import type { SpacecraftBlueprint } from '../scenes/modules/SpacecraftBlueprint';
+import { createMoverBlueprint } from '../scenes/modules/blueprints';
+import { SpacecraftListNotifier } from './spacecraftListNotifier';
+import { removeSpacecraftAndController } from './spacecraftLifecycle';
 import { SpacecraftController } from '../controllers/spacecraftController';
 import { DockingOrchestrator } from './DockingOrchestrator';
 import { InputRouter } from './InputRouter';
@@ -64,8 +68,7 @@ export class BasicWorld implements SpacecraftRegistry {
     private dt: number;
     private onLoadProgress: (progress: number) => void;
     private onLoadStatus: (status: string) => void;
-    private spacecraftListVersion: number;
-    private onSpacecraftListChange: ((version: number) => void) | null;
+    private spacecraftListNotifier: SpacecraftListNotifier;
     private onActiveSpacecraftChange: ((spacecraft: Spacecraft) => void) | null;
     private loadingQueue: Map<string, LoadingQueueItem>;
     private currentFile: string;
@@ -101,8 +104,7 @@ export class BasicWorld implements SpacecraftRegistry {
         this.dt = 1.0 / 60.0;
         this.onLoadProgress = () => {};
         this.onLoadStatus = () => {};
-        this.spacecraftListVersion = 0;
-        this.onSpacecraftListChange = null;
+        this.spacecraftListNotifier = new SpacecraftListNotifier();
         this.onActiveSpacecraftChange = null;
         this.loadingQueue = new Map();
         this.currentFile = '';
@@ -157,6 +159,10 @@ export class BasicWorld implements SpacecraftRegistry {
         if (this.lights && typeof (this.lights as any).markMaterialsDirty === 'function') {
             try { (this.lights as any).markMaterialsDirty(); } catch {}
         }
+    }
+
+    private emitSpacecraftListChanged(): void {
+        this.spacecraftListNotifier.emit();
     }
 
     private updateLoadingStatus(): void {
@@ -317,14 +323,14 @@ export class BasicWorld implements SpacecraftRegistry {
                     spacecraftConfig.position.y,
                     spacecraftConfig.position.z
                 );
-                const sc = this.addSpacecraft(
-                    initialPosition,
-                    spacecraftConfig.width,
-                    spacecraftConfig.height,
-                    spacecraftConfig.depth,
-                    spacecraftConfig.initialConeVisibility,
-                    spacecraftConfig.name
+                const bp = createMoverBlueprint(
+                    spacecraftConfig.name ?? 'Spacecraft',
+                    spacecraftConfig.width, spacecraftConfig.height, spacecraftConfig.depth,
                 );
+                const sc = this.addSpacecraftFromBlueprint(bp, initialPosition);
+                if (spacecraftConfig.initialConeVisibility) {
+                    sc.rcsVisuals.showCones();
+                }
                 // Apply per-thruster strengths when provided
                 if (Array.isArray(spacecraftConfig.thrusterStrengths) && spacecraftConfig.thrusterStrengths.length === 24) {
                     try { sc.spacecraftController?.setThrusterStrengths(spacecraftConfig.thrusterStrengths); } catch {}
@@ -332,7 +338,7 @@ export class BasicWorld implements SpacecraftRegistry {
                 return sc;
             }));
         } else {
-            await this.addSpacecraft(new THREE.Vector3(0, 0, 2));
+            this.addSpacecraftFromBlueprint(createMoverBlueprint('Alpha'), new THREE.Vector3(0, 0, 2));
         }
 
         // Initialize active spacecraft
@@ -365,38 +371,9 @@ export class BasicWorld implements SpacecraftRegistry {
     }
 
     public createNewSpacecraft(): Spacecraft {
-        const maxAttempts = 50;
-        let attempt = 0;
-        let randomPosition: THREE.Vector3;
-        const width = 1, height = 1, depth = 2;
-        const defaultRange = 20; // Increased from 10 and made symmetric
-
-        // Keep trying new positions until we find one that doesn't overlap
-        do {
-            randomPosition = new THREE.Vector3(
-                (Math.random() - 0.5) * defaultRange,  // x between -10 and 10
-                (Math.random() - 0.5) * defaultRange,  // y between -10 and 10
-                (Math.random() - 0.5) * defaultRange   // z also between -10 and 10, no longer forcing positive
-            );
-            attempt++;
-
-            // If we can't find a non-overlapping position after many attempts,
-            // gradually increase the placement area
-            if (attempt > maxAttempts) {
-                const scale = 1 + (attempt - maxAttempts) / 10;
-                randomPosition.x *= scale;
-                randomPosition.y *= scale;
-                randomPosition.z *= scale;
-            }
-        } while (this.isPositionOverlapping(randomPosition, width, height, depth) && attempt < maxAttempts * 2);
-
-        this.log.debug('Creating new spacecraft at position:', randomPosition);
-        const newSpacecraft = this.addSpacecraft(
-            randomPosition,
-            width, height, depth,
-            false,
-            `Spacecraft ${this.spacecraft.length + 1}`
-        );
+        const name = `Spacecraft ${this.spacecraft.length + 1}`;
+        const bp = createMoverBlueprint(name);
+        const newSpacecraft = this.addSpacecraftFromBlueprint(bp);
         
         return newSpacecraft;
     }
@@ -458,10 +435,7 @@ export class BasicWorld implements SpacecraftRegistry {
             this.setActiveSpacecraft(spacecraft);
         }
         
-        this.spacecraftListVersion++;
-        if (this.onSpacecraftListChange) {
-            this.onSpacecraftListChange(this.spacecraftListVersion);
-        }
+        this.emitSpacecraftListChanged();
         
         return spacecraft;
     }
@@ -529,26 +503,85 @@ export class BasicWorld implements SpacecraftRegistry {
             this.setActiveSpacecraft(spacecraft);
         }
 
-        this.spacecraftListVersion++;
-        if (this.onSpacecraftListChange) {
-            this.onSpacecraftListChange(this.spacecraftListVersion);
+        this.emitSpacecraftListChanged();
+
+        return spacecraft;
+    }
+
+    /**
+     * Create a spacecraft from a blueprint (module system).
+     * This is the preferred way to create spacecraft with custom modules
+     * like solar panels, antennas, etc.
+     */
+    public addSpacecraftFromBlueprint(
+        blueprint: SpacecraftBlueprint,
+        position?: THREE.Vector3,
+    ): Spacecraft {
+        let pos: THREE.Vector3;
+        if (position) {
+            pos = position;
+        } else {
+            const defaultRange = 20;
+            const maxAttempts = 50;
+            let attempt = 0;
+            do {
+                pos = new THREE.Vector3(
+                    (Math.random() - 0.5) * defaultRange,
+                    (Math.random() - 0.5) * defaultRange,
+                    (Math.random() - 0.5) * defaultRange,
+                );
+                attempt++;
+                if (attempt > maxAttempts) {
+                    const scale = 1 + (attempt - maxAttempts) / 10;
+                    pos.multiplyScalar(scale);
+                }
+            } while (this.isPositionOverlapping(pos, blueprint.width, blueprint.height, blueprint.depth) && attempt < maxAttempts * 2);
         }
+
+        const hasRcs = blueprint.modules.some(m => m.type === 'rcs');
+        const options: SpacecraftOptions = {
+            includeThrusters: hasRcs,
+            name: blueprint.name,
+            blueprint,
+        };
+
+        const spacecraft = new Spacecraft(
+            {},
+            this.camera.scene as ThreeScene,
+            pos,
+            blueprint.width, blueprint.height, blueprint.depth,
+            this, this.physics, this.runtimeState,
+            options,
+        );
+        spacecraft.registry = this;
+
+        if (hasRcs) {
+            spacecraft.rcsVisuals.showCones();
+        }
+
+        this.spacecraft.push(spacecraft);
+        this.spacecraftControllers.push(spacecraft.spacecraftController);
+        this.markShadowMaterialsDirty();
+
+        if (!this.activeSpacecraft) {
+            this.setActiveSpacecraft(spacecraft);
+        }
+
+        this.emitSpacecraftListChanged();
 
         return spacecraft;
     }
 
     public deleteSpacecraft(spacecraftToDelete: Spacecraft): void {
         if (!spacecraftToDelete || spacecraftToDelete === this.activeSpacecraft) return;
-        
-        const index = this.spacecraft.indexOf(spacecraftToDelete);
-        if (index > -1) {
-            this.spacecraft.splice(index, 1);
-            spacecraftToDelete.cleanup?.();
-            
-            this.spacecraftListVersion++;
-            if (this.onSpacecraftListChange) {
-                this.onSpacecraftListChange(this.spacecraftListVersion);
-            }
+
+        if (removeSpacecraftAndController(
+            this.spacecraft,
+            this.spacecraftControllers,
+            spacecraftToDelete,
+            () => spacecraftToDelete.cleanup?.()
+        )) {
+            this.emitSpacecraftListChanged();
         }
     }
 
@@ -596,17 +629,12 @@ export class BasicWorld implements SpacecraftRegistry {
     }
 
     public setSpacecraftListChangeCallback(callback: (version: number) => void): void {
-        this.onSpacecraftListChange = callback;
+        this.spacecraftListNotifier.setVersionListener(callback);
     }
 
     /** SpacecraftRegistry implementation: subscribe to list changes, returns unsubscribe fn. */
     public onSpacecraftListChanged(callback: () => void): () => void {
-        const prev = this.onSpacecraftListChange;
-        this.onSpacecraftListChange = (version: number) => {
-            try { prev?.(version); } catch {}
-            try { callback(); } catch {}
-        };
-        return () => { this.onSpacecraftListChange = prev; };
+        return this.spacecraftListNotifier.subscribe(callback);
     }
 
     public setActiveSpacecraftChangeCallback(callback: (spacecraft: Spacecraft) => void): void {
@@ -662,7 +690,7 @@ export class BasicWorld implements SpacecraftRegistry {
             }
 
             // Update spacecraft
-            this.spacecraft.forEach(spacecraft => spacecraft.update());
+            this.spacecraft.forEach(spacecraft => spacecraft.update(deltaTime));
 
             // Update spacecraft controllers
             // Apply forces (manual + autopilot) for all spacecraft so

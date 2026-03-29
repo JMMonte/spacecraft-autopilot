@@ -7,6 +7,12 @@ import { DockingPortManager, type PortConfig } from './dockingPort';
 import { FuelTankManager } from './fuelTank';
 import type { PhysicsEngine } from '../../physics';
 import type { RigidBody } from '../../physics/types';
+import type { SpacecraftModule, ModuleBuildContext } from '../modules/SpacecraftModule';
+import type { SpacecraftBlueprint } from '../modules/SpacecraftBlueprint';
+import { createModule } from '../modules/ModuleRegistry';
+import { TrussModule } from '../modules/TrussModule';
+import { FuelTankModule } from '../modules/FuelTankModule';
+import { DockingPortModule } from '../modules/DockingPortModule';
 
 type BoxBodyFacade = {
     position: THREE.Vector3;
@@ -34,6 +40,13 @@ export class SpacecraftModel {
     public rcsVisuals!: RCSVisuals;
     public onRCSVisualsUpdate?: (newRcsVisuals: RCSVisuals) => void;
     public modelOptions: SpacecraftModelOptions;
+
+    /** Modules attached to this spacecraft (blueprint path only). */
+    public modules: SpacecraftModule[] = [];
+    /** Total module mass contribution. */
+    public moduleMass = 0;
+    /** Current body material preset name. */
+    public bodyPreset: string = 'blue-gold';
 
     private scene: THREE.Scene;
     // no direct physics world reference
@@ -143,15 +156,18 @@ export class SpacecraftModel {
         this.physics = physics;
 
         // Initialize default values or use config if provided
+        // Material densities
         this.aluminumDensity = config?.materials.aluminumDensity ?? 2700;
         this.carbonFiberDensity = config?.materials.carbonFiberDensity ?? 1600;
-        this.fuelDensity = config?.materials.fuelDensity ?? 1000;
-        this.panelThickness = config?.panelThickness ?? 0.01;
+        this.fuelDensity = config?.materials.fuelDensity ?? 1000; // hydrazine ~1000 kg/m³
+        // Hull panels: 2mm aluminum honeycomb sandwich (effective ~30% solid density)
+        this.panelThickness = config?.panelThickness ?? 0.002;
         this.trussRadius = config?.truss.radius ?? 0.05;
         this.trussLength = config?.truss.length ?? 1;
         this.numberOfTrusses = config?.truss.numberOfTrusses ?? 12;
         this.numberOfDockingPorts = config?.dockingPort.numberOfDockingPorts ?? 2;
-        this.tankThickness = config?.tank.thickness ?? 0.01;
+        // Tank shell: 3mm carbon fiber composite
+        this.tankThickness = config?.tank.thickness ?? 0.003;
 
         const dockingPortRadius = config?.dockingPort.radius ?? this.defaultDockingPortRadius;
         const dockingPortLength = config?.dockingPort.length ?? this.defaultDockingPortLength;
@@ -204,6 +220,191 @@ export class SpacecraftModel {
                 endHeight: dockingPortRadius
             }
         );
+    }
+
+    // ── Fuel tank toggle ──────────────────────────────────────────
+
+    /** Toggle the legacy fuel tank on/off and rebuild geometry. */
+    public setFuelTankEnabled(enabled: boolean): void {
+        this.modelOptions.includeFuelTank = enabled;
+        if (enabled) {
+            this.fuelTankManager.manageFuelTank(
+                this.box,
+                this.materialManager.getMaterial('fuelTank'),
+                Math.max(Math.min(this.boxWidth, this.boxHeight) / 2 - this.trussRadius - 0.01, 0.1),
+                Math.max(this.boxDepth - 0.2, 0.1),
+            );
+        } else {
+            this.fuelTankManager.cleanup();
+        }
+    }
+
+    public isFuelTankEnabled(): boolean {
+        return this.modelOptions.includeFuelTank ?? false;
+    }
+
+    // ── Runtime configuration ─────────────────────────────────────
+
+    /**
+     * Set the body material preset and apply to the box mesh.
+     * Presets: 'blue-gold' (default), 'gold-silver', 'silver', 'white'
+     */
+    public setBodyPreset(preset: string): void {
+        this.bodyPreset = preset;
+        this.box.material = this.materialManager.getBoxMaterialsByPreset(preset);
+        // Rebuild trusses to match the new body preset
+        this.rebuildTrusses();
+    }
+
+    /** Get the current truss shape. */
+    public getTrussShape(): import('../objects/truss').TrussShape {
+        return this.trussManager.trussShape;
+    }
+
+    /** Set the truss shape and rebuild all trusses. */
+    public setTrussShape(shape: import('../objects/truss').TrussShape): void {
+        this.trussManager.trussShape = shape;
+        this.rebuildTrusses();
+    }
+
+    /** Rebuild all trusses with current shape, using the body-preset-aware truss material. */
+    private rebuildTrusses(): void {
+        this.trussManager.removeTrussFromBox(this.box);
+        this.trussManager.removeAllEndStructureTrusses(this.box);
+        const trussMat = this.getTrussMaterialForPreset();
+        this.trussManager.addTrussToBox(this.box, trussMat);
+        this.trussManager.updateEndStructure(
+            this.box,
+            trussMat,
+            {
+                margin: 0.1,
+                structureDepth: this.dockingPortDepth,
+                endWidth: this.dockingPortRadius,
+                endHeight: this.dockingPortRadius,
+            },
+        );
+        // Reapply body material preset
+        if (this.bodyPreset !== 'blue-gold') {
+            this.box.material = this.materialManager.getBoxMaterialsByPreset(this.bodyPreset);
+        }
+    }
+
+    /** Get a truss material that matches the current body preset. */
+    private getTrussMaterialForPreset(): THREE.Material {
+        switch (this.bodyPreset) {
+            case 'gold-silver':
+            case 'silver':
+                return this.materialManager.getMaterial('truss'); // silver
+            case 'gold':
+                return this.materialManager.getMaterial('gold');
+            case 'white':
+                return this.materialManager.getMaterial('truss');
+            default:
+                return this.materialManager.getMaterial('truss');
+        }
+    }
+
+    // ── Blueprint factory ─────────────────────────────────────────
+
+    /**
+     * Build a SpacecraftModel from a blueprint, using the module system.
+     * The model's box + physics are created normally; modules are then
+     * instantiated from the blueprint declarations and built in order.
+     */
+    static fromBlueprint(
+        scene: THREE.Scene,
+        blueprint: SpacecraftBlueprint,
+        physics?: PhysicsEngine,
+    ): SpacecraftModel {
+        const model = new SpacecraftModel(
+            scene, {}, blueprint.width, blueprint.height, blueprint.depth,
+            undefined, physics, {
+                // If blueprint has an RCS module, include thrusters
+                includeThrusters: blueprint.modules.some(m => m.type === 'rcs'),
+                includeFuelTank: blueprint.modules.some(m => m.type === 'fuelTank'),
+            },
+        );
+
+        // Create modules from declarations
+        const modules: SpacecraftModule[] = [];
+        for (const decl of blueprint.modules) {
+            modules.push(createModule(decl, blueprint.depth));
+        }
+        model.modules = modules;
+
+        // Build context
+        const ctx: ModuleBuildContext = {
+            box: model.box,
+            boxWidth: model.boxWidth,
+            boxHeight: model.boxHeight,
+            boxDepth: model.boxDepth,
+            scene,
+            getMaterial: (name: string) => model.materialManager.getMaterial(name),
+            physics: physics ?? null,
+            rigid: model.rigid ?? null,
+        };
+
+        // Wire cross-module dependencies before build
+        const trussModule = modules.find((m): m is TrussModule => m.type === 'truss');
+        const dockingModule = modules.find((m): m is DockingPortModule => m.type === 'dockingPorts');
+        const fuelTankModule = modules.find((m): m is FuelTankModule => m.type === 'fuelTank');
+
+        if (trussModule && dockingModule) {
+            trussModule.setDockingPortRadius(dockingModule.dockingPortRadius);
+        }
+        if (fuelTankModule && dockingModule) {
+            fuelTankModule.setDependencies(0.05, dockingModule.dockingPortDepth);
+        }
+
+        // Initialize the fuel tank module's fuel state even though legacy constructor
+        // built the geometry. The module needs to know tank volume for fuel tracking.
+        if (fuelTankModule) {
+            fuelTankModule.initFuelState(
+                model.boxWidth, model.boxHeight, model.boxDepth,
+                0.05, dockingModule?.dockingPortDepth ?? 0.3,
+            );
+        }
+
+        // Build all modules (skip truss/fuelTank/dockingPorts — those were built by the legacy constructor).
+        // Only build genuinely new module types.
+        let totalModuleMass = 0;
+        for (const mod of modules) {
+            // Skip types already handled by legacy constructor
+            if (mod.type === 'truss' || mod.type === 'fuelTank' || mod.type === 'dockingPorts' || mod.type === 'rcs') {
+                continue;
+            }
+            const result = mod.build(ctx);
+            totalModuleMass += result.mass;
+        }
+        model.moduleMass = totalModuleMass;
+
+        // Swap hull materials if solar panels are present
+        if (modules.some(m => m.type === 'solarPanel')) {
+            model.setBodyPreset('gold-silver');
+        }
+
+        return model;
+    }
+
+    /** Get the build context for this model (used by Spacecraft to build modules post-construction). */
+    public getModuleBuildContext(): ModuleBuildContext {
+        return {
+            box: this.box,
+            boxWidth: this.boxWidth,
+            boxHeight: this.boxHeight,
+            boxDepth: this.boxDepth,
+            scene: this.scene,
+            getMaterial: (name: string) => this.materialManager.getMaterial(name),
+            physics: this.physics ?? null,
+            rigid: this.rigid ?? null,
+        };
+    }
+
+    /** Update all modules that have an update method. */
+    public updateModules(dt: number): void {
+        for (const mod of this.modules) {
+            mod.update?.(dt);
+        }
     }
 
     private createBox(): void {
@@ -261,17 +462,27 @@ export class SpacecraftModel {
     }
 
     private calculatePanelMass(): number {
+        // Honeycomb sandwich panels: effective density ~800 kg/m³ (not solid aluminum)
+        const honeycombDensity = 800;
         const sideAreas = 2 * (this.boxHeight * this.boxDepth) + 2 * (this.boxWidth * this.boxDepth);
-        return this.aluminumDensity * sideAreas * this.panelThickness;
+        return honeycombDensity * sideAreas * this.panelThickness;
     }
 
     private calculateTrussMass(): number {
-        const volumePerTruss = Math.PI * Math.pow(this.trussRadius, 2) * this.trussLength;
+        // Hollow tube: outer radius R, wall thickness t = 2mm
+        const t = 0.002;
+        const R = this.trussRadius;
+        const innerR = Math.max(R - t, 0);
+        const volumePerTruss = Math.PI * (R * R - innerR * innerR) * this.trussLength;
         return this.aluminumDensity * volumePerTruss * this.numberOfTrusses;
     }
 
     private calculateDockingPortMass(): number {
-        const volumePerPort = Math.PI * Math.pow(this.dockingPortRadius, 2) * this.dockingPortLength;
+        // Hollow cylinder: wall thickness 3mm
+        const t = 0.003;
+        const R = this.dockingPortRadius;
+        const innerR = Math.max(R - t, 0);
+        const volumePerPort = Math.PI * (R * R - innerR * innerR) * this.dockingPortLength;
         return this.aluminumDensity * volumePerPort * this.numberOfDockingPorts;
     }
 
@@ -287,9 +498,10 @@ export class SpacecraftModel {
     }
 
     public updateBox(width: number, height: number, depth: number): void {
-        width = Math.max(width, 1);
-        height = Math.max(height, 1);
-        depth = Math.max(depth, 1.2);
+        width = Math.max(width, 0.1);
+        height = Math.max(height, 0.1);
+        depth = Math.max(depth, 0.1);
+        const activeThrusters = this.rcsVisuals?.getConeMeshes().map((mesh) => mesh?.visible || false) ?? [];
 
         // Clean up old RCS visuals if they exist
         if (this.rcsVisuals) {
@@ -303,6 +515,9 @@ export class SpacecraftModel {
         this.boxHeight = height;
         this.boxDepth = depth;
 
+        // Preserve truss shape across manager recreation
+        const prevTrussShape = this.trussManager.trussShape;
+
         // Update managers with new dimensions
         this.trussManager = new TrussManager(
             width,
@@ -311,12 +526,19 @@ export class SpacecraftModel {
             this.trussRadius,
             this.dockingPortRadius
         );
+        this.trussManager.trussShape = prevTrussShape;
+        this.dockingPortManager.removeDockingPorts(this.box, this.boxBody, this.physics);
         this.dockingPortManager = new DockingPortManager(depth, this.dockingPortRadius, this.dockingPortLength, this.dockingPortDepth, this.aluminumDensity);
+        this.fuelTankManager.cleanup();
         this.fuelTankManager = new FuelTankManager(width, height, depth, this.trussRadius, this.dockingPortDepth);
 
-        // Update components
+        // Remove ALL old trusses (both main and end-structure) before rebuilding
         this.trussManager.removeTrussFromBox(this.box);
-        this.trussManager.addTrussToBox(this.box, this.materialManager.getMaterial('truss'));
+        this.trussManager.removeAllEndStructureTrusses(this.box);
+
+        // Rebuild components
+        const trussMat = this.getTrussMaterialForPreset();
+        this.trussManager.addTrussToBox(this.box, trussMat);
         this.dockingPortManager.updateDockingPorts(
             this.box,
             this.boxBody,
@@ -335,7 +557,7 @@ export class SpacecraftModel {
 
         this.trussManager.updateEndStructure(
             this.box,
-            this.materialManager.getMaterial('endStructure'),
+            trussMat,
             {
                 margin: 0.1,
                 structureDepth: this.dockingPortDepth,
@@ -343,6 +565,19 @@ export class SpacecraftModel {
                 endHeight: this.dockingPortRadius
             }
         );
+
+        // Rebuild all modules with the new dimensions
+        const ctx = this.getModuleBuildContext();
+        for (const mod of this.modules) {
+            // Skip types handled by legacy managers above
+            if (mod.type === 'truss' || mod.type === 'fuelTank' || mod.type === 'dockingPorts' || mod.type === 'rcs') continue;
+            mod.rebuild?.(ctx);
+        }
+
+        // Reapply body material preset (box geometry replacement resets materials)
+        if (this.bodyPreset !== 'blue-gold') {
+            this.box.material = this.materialManager.getBoxMaterialsByPreset(this.bodyPreset);
+        }
 
         // Update facade for dimensions and mass
         this.boxBody.shapes[0].halfExtents = { x: width / 2, y: height / 2, z: depth / 2 };
@@ -371,17 +606,12 @@ export class SpacecraftModel {
                 getNative: <T>() => this.boxBody as unknown as T,
             } as unknown as RigidBody);
 
-            // Copy over any active thruster states from the old visuals if they exist
-            if (this.rcsVisuals) {
-                const oldThrusterStates = this.rcsVisuals.getConeMeshes().map(mesh => mesh?.visible || false);
-                oldThrusterStates.forEach((isActive, index) => {
-                    if (isActive) {
-                        // Recreate visual effect without adding physics impulse
-                        newRcsVisuals.applyForce(index, 100, 0);
-                    }
-                });
-            }
-
+            activeThrusters.forEach((isActive, index) => {
+                if (isActive) {
+                    // Restore the visual-only firing state without applying an impulse.
+                    newRcsVisuals.applyForce(index, 100, 0);
+                }
+            });
             this.rcsVisuals = newRcsVisuals;
 
             if (this.onRCSVisualsUpdate) {
@@ -392,6 +622,13 @@ export class SpacecraftModel {
 
     public update(): void {
         if (this.rigid) {
+            // Prevent Rapier from sleeping player-controlled bodies.
+            // Skip for redirected (guest) bodies in compound docking — their
+            // original native body should stay disabled.
+            if (!this.rigid.isRedirected?.()) {
+                try { (this.rigid.getNative<any>())?.wakeUp?.(); } catch {}
+            }
+
             const p = this.rigid.getPosition();
             const q = this.rigid.getQuaternion();
             this.box.position.set(p.x, p.y, p.z);
@@ -410,6 +647,12 @@ export class SpacecraftModel {
     }
 
     public cleanup(): void {
+        // Clean up modules
+        for (const mod of this.modules) {
+            mod.cleanup();
+        }
+        this.modules = [];
+
         // Clean up Three.js objects
         this.box.geometry.dispose();
         if (Array.isArray(this.box.material)) {

@@ -9,8 +9,7 @@ interface Windows {
 export const WINDOWS: Windows = {
   telemetry: { label: 'Flight Telemetry' },
   horizon: { label: 'Attitude Indicator' },
-  dimensions: { label: 'Spacecraft Dimensions' },
-  rcs: { label: 'RCS Thrust' },
+  spacecraftConfig: { label: 'Spacecraft Config' },
   arrows: { label: 'Visualization Aids' },
   pid: { label: 'PID Tuning' },
   autopilot: { label: 'Autopilot & Targeting' },

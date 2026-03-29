@@ -14,7 +14,8 @@ pnpm install              # Install deps (pnpm 10+, Node 22.x required)
 pnpm run dev              # Dev server on :3000
 pnpm run build            # Production build → dist/
 pnpm run check:ts         # TypeScript check (no emit)
-pnpm run test             # All tests (unit + integration + architecture)
+pnpm run test             # TypeScript + unit + integration + architecture
+pnpm run validate         # CI contract: test + build
 pnpm run test:unit        # Unit tests only
 pnpm run test:integration # Integration tests
 pnpm run test:architecture # Import boundary enforcement
@@ -88,6 +89,7 @@ Five modes, orchestrated by `src/controllers/autopilot/Autopilot.ts`:
 - `DockingOrchestrator.ts` — Passive proximity detection, triggers `dock()` when thresholds met
 - `DockingInfo.ts` — Builds per-frame docking telemetry (port positions, directions, distances)
 - `DockingUtils.ts` — Orientation quaternion computation for port-to-port alignment
+- `BasicWorld.onSpacecraftListChanged()` — Multi-subscriber registry hook used by docking controllers to track spacecraft additions/removals safely
 
 **Compound body architecture (`spacecraft.ts`):**
 - `dock(ourPort, otherSpacecraft, theirPort)` — Merges guest into compound body:
@@ -129,7 +131,7 @@ Five modes, orchestrated by `src/controllers/autopilot/Autopilot.ts`:
 - No Redux. Custom store in `appState.ts` with `getState()/subscribe()/setState()`.
 - React hooks: `useAutopilot()`, `useUi()`, `useSettings()`, `useTraceSettings()`
 - State shape: `{ autopilot, ui, settings, traces, traceSettings, dockingPlan? }`
-- `simulationRuntimeStatePort.ts` provides equality-checked read-only access for the simulation layer
+- `simulationRuntimeStatePort.ts` provides equality-checked, frozen snapshots for the simulation layer
 
 ### Theming
 

@@ -746,6 +746,9 @@ export class Autopilot implements IAutopilot {
         return this.forcesBuffer;
     }
 
+    /** When true, suppress global state emission (used by follower sync to avoid store conflicts). */
+    public suppressStateEmit = false;
+
     public setMode(mode: AutopilotModeName, enabled: boolean = true): void {
         this.log.debug('setMode called:', mode, enabled);
         this.activeAutopilots = ModeRegistry.exclusiveEnable(this.activeAutopilots, mode, enabled);
@@ -771,14 +774,16 @@ export class Autopilot implements IAutopilot {
                 this.log.warn('Autopilot onStateChange callback error:', err);
             }
         }
-        // Push to global store for UI subscriptions
-        try {
-            emitAutopilotStateChanged({
-                enabled: this.isEnabled,
-                activeAutopilots: { ...this.activeAutopilots },
-            });
-        } catch (err) {
-            this.log.warn('Autopilot state event publish error:', err);
+        // Push to global store for UI subscriptions (skip for followers to avoid store conflicts)
+        if (!this.suppressStateEmit) {
+            try {
+                emitAutopilotStateChanged({
+                    enabled: this.isEnabled,
+                    activeAutopilots: { ...this.activeAutopilots },
+                });
+            } catch (err) {
+                this.log.warn('Autopilot state event publish error:', err);
+            }
         }
         // Legacy DOM event removed; React store handles subscriptions
 

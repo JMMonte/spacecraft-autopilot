@@ -14,7 +14,8 @@ pnpm install              # Install (pnpm 10+, Node 22.x)
 pnpm run dev              # Dev server :3000
 pnpm run build            # Production → dist/
 pnpm run check:ts         # TypeScript check
-pnpm run test             # All tests (unit + integration + architecture)
+pnpm run test             # TypeScript + unit + integration + architecture
+pnpm run validate         # CI contract: test + build
 pnpm run test:unit        # Unit tests
 pnpm run test:integration # Integration tests
 pnpm run test:architecture # Import boundary enforcement
@@ -89,7 +90,7 @@ Orchestrated by `Autopilot.ts`. Force calculations offloaded to web worker. LLM 
 
 ### State Management
 
-Custom store in `appState.ts` — NOT Redux. React hooks via `useSyncExternalStore`. Domain events for cross-layer communication.
+Custom store in `appState.ts` — NOT Redux. React hooks via `useSyncExternalStore`. Domain events for cross-layer communication. `simulationRuntimeStatePort.ts` exposes frozen runtime snapshots so simulation code cannot mutate UI state in place.
 
 ## Conventions
 

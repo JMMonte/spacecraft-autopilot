@@ -181,8 +181,15 @@ export class GoToPosition extends AutopilotMode {
         const omniFactor = aMin / aMax; // 1.0 = perfectly uniform, <1 = asymmetric
         const brakeSafety = 0.5 + 0.3 * omniFactor; // 0.5-0.8 range
         const aBrake = aMin * brakeSafety;
-        const vMaxConfig = this.config.limits.maxLinearVelocity ?? 8.0;
-        const vMax = this.speedLimitOverride !== null ? Math.min(vMaxConfig, this.speedLimitOverride) : vMaxConfig;
+        // Dynamic max speed: scales with distance so long traversals are faster.
+        // Base limit from config, then scale up logarithmically for distances > 10m.
+        const vMaxBase = this.config.limits.maxLinearVelocity ?? 8.0;
+        const vMaxDynamic = distance > 10
+            ? vMaxBase * (1 + Math.log10(distance / 10))  // 8 m/s at 10m, 16 at 100m, 24 at 1000m
+            : vMaxBase;
+        const vMax = this.speedLimitOverride !== null
+            ? Math.min(vMaxDynamic, this.speedLimitOverride)
+            : vMaxDynamic;
         const vBrake = Math.sqrt(2 * aBrake * Math.max(0, distance - dynStopDist));
         const vDesired = Math.min(vMax, vBrake);
 

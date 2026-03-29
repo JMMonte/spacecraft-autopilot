@@ -257,12 +257,14 @@ export class RCSVisuals {
         
         // Create exhaust cone (the visible part when firing)
         const exhaustCone = new THREE.Mesh(this.thrusterGeometry.coneGeometry, this.thrusterMaterials.exhaustConeMaterial);
+        exhaustCone.name = 'exhaust';
         exhaustCone.visible = false;
         // Visual-only HUD-like exhaust should never occlude lens flare
         (exhaustCone as any).userData = { ...(exhaustCone as any).userData, lensflare: 'no-occlusion', lensflareTransmission: 1.0 };
         
         // Create nozzle cone (the physical part)
         const nozzleCone = new THREE.Mesh(this.thrusterGeometry.nozzleConeGeometry, this.thrusterMaterials.nozzleConeMaterial);
+        nozzleCone.name = 'nozzle';
         nozzleCone.rotateX(Math.PI);
         nozzleCone.position.y = -this.coneHeight / 2;
         nozzleCone.castShadow = true;
@@ -316,20 +318,19 @@ export class RCSVisuals {
         // Remove entire thruster groups from the scene
         this.thrusterGroups.forEach(group => {
             if (group && group.parent) {
-                // Dispose of all meshes in the group
-                group.traverse(child => {
-                    if (child instanceof THREE.Mesh) {
-                        if (child.geometry) child.geometry.dispose();
-                        if (Array.isArray(child.material)) {
-                            child.material.forEach(m => m.dispose());
-                        } else if (child.material) {
-                            child.material.dispose();
-                        }
-                    }
-                });
                 group.parent.remove(group);
+                group.clear();
             }
         });
+
+        // Dispose shared thruster resources once. Child meshes all reference the
+        // same geometries/materials, so disposing per group would double-free them.
+        this.thrusterGeometry.coneGeometry.dispose();
+        this.thrusterGeometry.nozzleConeGeometry.dispose();
+        this.thrusterMaterials.nozzleConeMaterial.dispose();
+        const exhaustMap = this.thrusterMaterials.exhaustConeMaterial.map;
+        exhaustMap?.dispose?.();
+        this.thrusterMaterials.exhaustConeMaterial.dispose();
 
         // Dispose particles
         this.activeParticles.forEach(p => {
@@ -394,6 +395,69 @@ export class RCSVisuals {
             }
             this.activeParticles = [];
         }
+    }
+
+    /**
+     * Scale all thruster nozzle groups proportionally to thrust.
+     * Radius scales with sqrt, length scales with pow(0.7).
+     * The nozzle tip (hull-facing end at Y=0) stays anchored;
+     * we compensate each child's Y position for the length scale.
+     */
+    public setNozzleScale(thrust: number, baseThrust: number = 100): void {
+        const ratio = Math.max(thrust, 0.1) / baseThrust;
+        const rs = Math.max(Math.sqrt(ratio), 0.4);        // X, Z — radius (min 40%)
+        const ls = Math.max(Math.pow(ratio, 0.7), 0.3);    // Y — nozzle length (min 30%)
+
+        const baseNozzleY = -this.coneHeight / 2; // original nozzle position
+
+        for (const group of this.thrusterGroups) {
+            group.scale.set(rs, ls, rs);
+
+            // Compensate nozzle position: the group Y-scale multiplies
+            // child.position.y, so divide the original position by ls
+            // to keep the nozzle's wide end anchored at Y=0 (hull surface).
+            const nozzle = group.getObjectByName('nozzle');
+            if (nozzle) {
+                nozzle.position.y = baseNozzleY / ls;
+            }
+
+            // Position exhaust cone at the nozzle tip (narrow end, away from hull).
+            // Nozzle tip in visual space = -coneHeight * (1 + ls) / 2
+            // In group space (pre-scale): exhaustY * ls = tipVisualY
+            // → exhaustY = -coneHeight * (1 + ls) / (2 * ls)
+            const exhaust = group.getObjectByName('exhaust');
+            if (exhaust) {
+                exhaust.position.y = -this.coneHeight * (1 + ls) / (2 * ls);
+            }
+        }
+    }
+
+    /**
+     * Change the exhaust cone color for all thrusters.
+     * Rebuilds the gradient texture with the new target color.
+     */
+    public setExhaustColor(hex: number): void {
+        const r = (hex >> 16) & 0xff;
+        const g = (hex >> 8) & 0xff;
+        const b = hex & 0xff;
+        const lines = 12;
+        const colorsArray = new Uint8Array(lines * 4);
+        for (let i = 0; i < lines; i++) {
+            const scale = Math.log(i + 1) / Math.log(lines);
+            colorsArray.set([
+                Math.round(255 + (r - 255) * scale),
+                Math.round(255 + (g - 255) * scale),
+                Math.round(255 + (b - 255) * scale),
+                Math.round(255 * (1 - i / (lines - 1))),
+            ], i * 4);
+        }
+        const tex = new THREE.DataTexture(colorsArray, 1, lines, THREE.RGBAFormat);
+        tex.flipY = false;
+        tex.premultiplyAlpha = false;
+        tex.needsUpdate = true;
+        this.thrusterMaterials.exhaustConeMaterial.map?.dispose();
+        this.thrusterMaterials.exhaustConeMaterial.map = tex;
+        this.thrusterMaterials.exhaustConeMaterial.needsUpdate = true;
     }
 
     public getThrusterData(): ThrusterData[] {

@@ -63,24 +63,40 @@ export const DockingCameraView: React.FC<DockingCameraViewProps> = ({ world, spa
 
   useEffect(() => {
     let raf: number;
+    let lastRender = 0;
+    const minFrameMs = 1000 / 30;
+    let lastWidth = 0;
+    let lastHeight = 0;
+    let lastDpr = 0;
     const loop = () => {
       const renderer = rendererRef.current;
       if (renderer && world && spacecraft) {
+        if (width <= 0 || height <= 0) {
+          raf = requestAnimationFrame(loop);
+          return;
+        }
+
         const cam = spacecraft.getDockingPortCamera(portId);
         const scene = world.camera?.scene as THREE.Scene;
         if (cam && scene) {
           const w = Math.max(1, Math.floor(width || 200));
           const h = Math.max(1, Math.floor(height || 150));
-          const size = renderer.getSize(new THREE.Vector2());
-          if (size.x !== w || size.y !== h) {
-            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          if (lastWidth !== w || lastHeight !== h || lastDpr !== dpr) {
             renderer.setPixelRatio(dpr);
             renderer.setSize(w, h, false);
+            lastWidth = w;
+            lastHeight = h;
+            lastDpr = dpr;
           }
-          // Keep camera aspect up to date
-          cam.aspect = w / h;
-          cam.updateProjectionMatrix();
-          renderer.render(scene, cam);
+          const now = performance.now();
+          if (now - lastRender >= minFrameMs) {
+            lastRender = now;
+            // Keep camera aspect up to date
+            cam.aspect = w / h;
+            cam.updateProjectionMatrix();
+            renderer.render(scene, cam);
+          }
         }
       }
       raf = requestAnimationFrame(loop);

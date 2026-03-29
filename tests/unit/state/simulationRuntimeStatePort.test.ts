@@ -54,3 +54,72 @@ test('trace adapter reflects current state and notifies only on trace changes', 
   );
   unsub();
 });
+
+test('runtime snapshots are frozen and do not expose live store objects', () => {
+  const uiSnapshot = simulationRuntimeStatePort.getUiState();
+  const traceSnapshot = simulationRuntimeStatePort.getTraceSettings();
+
+  assert.ok(Object.isFrozen(uiSnapshot));
+  assert.ok(Object.isFrozen(traceSnapshot));
+
+  assert.throws(() => {
+    (uiSnapshot as { cameraMode: 'follow' | 'free' }).cameraMode = 'free';
+  }, TypeError);
+
+  assert.throws(() => {
+    (traceSnapshot as { palette: 'turbo' | 'viridis' }).palette = 'viridis';
+  }, TypeError);
+
+  setCameraMode('free');
+  setTraceSettings({ palette: 'viridis' });
+
+  assert.equal(simulationRuntimeStatePort.getUiState().cameraMode, 'free');
+  assert.equal(simulationRuntimeStatePort.getTraceSettings().palette, 'viridis');
+  assert.equal(uiSnapshot.cameraMode, 'follow');
+  assert.equal(traceSnapshot.palette, 'turbo');
+});
+
+test('runtime subscribers receive frozen snapshots that stay detached from later store updates', () => {
+  const uiSnapshots: Array<{ cameraMode: 'follow' | 'free'; gridVisible: boolean }> = [];
+  const traceSnapshots: Array<{
+    gradientEnabled: boolean;
+    gradientMode: 'velocity' | 'forceNet';
+    palette: 'turbo' | 'viridis';
+  }> = [];
+
+  const unsubscribeUi = simulationRuntimeStatePort.subscribeUiState((state) => {
+    uiSnapshots.push(state as { cameraMode: 'follow' | 'free'; gridVisible: boolean });
+  });
+  const unsubscribeTrace = simulationRuntimeStatePort.subscribeTraceSettings((state) => {
+    traceSnapshots.push(state as {
+      gradientEnabled: boolean;
+      gradientMode: 'velocity' | 'forceNet';
+      palette: 'turbo' | 'viridis';
+    });
+  });
+
+  setCameraMode('free');
+  setTraceSettings({ palette: 'viridis' });
+
+  const uiSnapshot = uiSnapshots.at(-1)!;
+  const traceSnapshot = traceSnapshots.at(-1)!;
+
+  assert.ok(Object.isFrozen(uiSnapshot));
+  assert.ok(Object.isFrozen(traceSnapshot));
+
+  assert.throws(() => {
+    uiSnapshot.cameraMode = 'follow';
+  }, TypeError);
+  assert.throws(() => {
+    traceSnapshot.palette = 'turbo';
+  }, TypeError);
+
+  setCameraMode('follow');
+  setTraceSettings({ palette: 'turbo' });
+
+  assert.equal(uiSnapshot.cameraMode, 'free');
+  assert.equal(traceSnapshot.palette, 'viridis');
+
+  unsubscribeUi();
+  unsubscribeTrace();
+});

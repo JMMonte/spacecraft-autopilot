@@ -9,6 +9,11 @@ import type { PhysicsEngine } from '../physics';
 import { emitTraceSamplesCleared } from '../domain/simulationEvents';
 import type { SimulationRuntimeStatePort } from '../domain/runtimeStatePort';
 import type { SpacecraftRegistry } from '../domain/spacecraftRegistry';
+import type { SpacecraftBlueprint, FuelType } from '../scenes/modules/SpacecraftBlueprint';
+import { FUEL_TYPES } from '../scenes/modules/SpacecraftBlueprint';
+import type { SpacecraftModule } from '../scenes/modules/SpacecraftModule';
+import { SolarPanelModule } from '../scenes/modules/SolarPanelModule';
+import { FuelTankModule } from '../scenes/modules/FuelTankModule';
 
 interface DockingPortInfo {
     position: THREE.Vector3;
@@ -31,6 +36,8 @@ export interface SpacecraftOptions {
     includeThrusters?: boolean;
     /** Display name */
     name?: string;
+    /** If provided, build from blueprint (module system) instead of legacy flags. */
+    blueprint?: SpacecraftBlueprint;
 }
 
 export class Spacecraft {
@@ -73,13 +80,18 @@ export class Spacecraft {
         this.physics = physics;
         this.initialPosition = initialPosition;
 
-        this.objects = new SpacecraftModel(scene, world, width, height, depth, undefined, physics, {
-            includeThrusters: options?.includeThrusters,
-            includeFuelTank: options?.includeThrusters, // nodes have neither thrusters nor fuel tank
-        });
+        // ── Blueprint path vs legacy path ────────────────────────────
+        if (options?.blueprint) {
+            this.objects = SpacecraftModel.fromBlueprint(scene, options.blueprint, physics);
+        } else {
+            this.objects = new SpacecraftModel(scene, world, width, height, depth, undefined, physics, {
+                includeThrusters: options?.includeThrusters,
+                includeFuelTank: options?.includeThrusters, // nodes have neither thrusters nor fuel tank
+            });
+        }
 
         // If custom port configs are provided, rebuild docking ports on the model
-        if (options?.ports) {
+        if (options?.ports && !options?.blueprint) {
             const dockingPortDepth = this.objects.dockingPortDepth;
             this.objects.setPortConfigs(options.ports.map(p => ({
                 id: p.id,
@@ -92,7 +104,7 @@ export class Spacecraft {
             })));
         }
 
-        if (options?.includeThrusters === false) {
+        if (options?.includeThrusters === false && !options?.blueprint) {
             // Create a no-op stub that satisfies the RCSVisuals interface
             this.rcsVisuals = {
                 update(_dt: number) {},
@@ -176,11 +188,26 @@ export class Spacecraft {
             this.rcsVisuals = newRcsVisuals;
             // Propagate new thruster transforms into controller/autopilot
             try { this.spacecraftController?.refreshThrusterGroups?.(); } catch {}
+            // Reapply fuel-type exhaust color
+            this.applyFuelExhaustColor();
         };
+
+        // Apply initial exhaust color from fuel type
+        this.applyFuelExhaustColor();
     }
 
-    public update(): void {
+    /** Apply the current fuel type's exhaust color to RCS visuals. */
+    private applyFuelExhaustColor(): void {
+        const tank = this.getFuelTank();
+        if (tank) {
+            const color = FUEL_TYPES[tank.fuelType].exhaustColor;
+            try { this.rcsVisuals?.setExhaustColor?.(color); } catch {}
+        }
+    }
+
+    public update(dt = 1 / 60): void {
         this.objects.update();
+        this.objects.updateModules(dt);
         this.dockingController.update();
         // Update trace line regardless of autopilot state
         if (this.helpers) {
@@ -189,10 +216,123 @@ export class Spacecraft {
     }
 
     public cleanup(): void {
+        this.dockingController.cleanup?.();
         this.objects.cleanup?.();
         this.rcsVisuals.cleanup?.();
-        this.helpers.cleanup?.();
         this.spacecraftController.cleanup?.();
+    }
+
+    // ── Module accessors ────────────────────────────────────────────
+
+    /** Get a module by type from this spacecraft's module list. */
+    public getModule<T extends SpacecraftModule>(type: string): T | undefined {
+        return this.objects.modules.find(m => m.type === type) as T | undefined;
+    }
+
+    /** Get all solar panel modules. */
+    public getSolarPanels(): SolarPanelModule[] {
+        return this.objects.modules.filter((m): m is SolarPanelModule => m.type === 'solarPanel');
+    }
+
+    /** Deploy all solar panels. */
+    public deploySolarPanels(): void {
+        for (const panel of this.getSolarPanels()) panel.deploy();
+    }
+
+    /** Retract all solar panels. */
+    public retractSolarPanels(): void {
+        for (const panel of this.getSolarPanels()) panel.retract();
+    }
+
+    /**
+     * Change the fuel type — updates tank, thrust scaling, and exhaust color.
+     */
+    public setFuelType(fuelType: FuelType): void {
+        const tank = this.getFuelTank();
+        if (!tank) return;
+        const oldFactor = FUEL_TYPES[tank.fuelType].thrustFactor;
+        tank.setFuelType(fuelType);
+        const newFactor = FUEL_TYPES[fuelType].thrustFactor;
+        // Scale thrust proportionally to the fuel type's thrust factor
+        if (oldFactor > 0) {
+            const currentThrust = this.spacecraftController.getThrust();
+            this.spacecraftController.setThrust(currentThrust * (newFactor / oldFactor));
+        }
+        // Update exhaust color
+        this.rcsVisuals?.setExhaustColor?.(FUEL_TYPES[fuelType].exhaustColor);
+    }
+
+    /** Get the fuel tank module (if any). */
+    public getFuelTank(): FuelTankModule | undefined {
+        return this.objects.modules.find((m): m is FuelTankModule => m.type === 'fuelTank');
+    }
+
+    /**
+     * Find a fuel tank with fuel — checks self first, then docked spacecraft.
+     * Returns the first non-empty FuelTankModule, or null.
+     */
+    public findFuelSource(): FuelTankModule | null {
+        const self = this.getFuelTank();
+        if (self && !self.isEmpty) return self;
+        // Check docked spacecraft
+        for (const port of Object.values(this.dockingPorts)) {
+            if (port.dockedTo) {
+                const tank = port.dockedTo.spacecraft.getFuelTank();
+                if (tank && !tank.isEmpty) return tank;
+            }
+        }
+        // Self tank might be empty but still exist
+        if (self) return self;
+        return null;
+    }
+
+    /**
+     * Check if this spacecraft has fuel access — either directly (has a fuel tank
+     * with fuel) or via a docked spacecraft, or legacy fuel tank.
+     */
+    public hasFuelAccess(): boolean {
+        // Check module-based tanks
+        const tank = this.findFuelSource();
+        if (tank && !tank.isEmpty) return true;
+        // Check legacy path (non-blueprint spacecraft with includeFuelTank — infinite fuel)
+        if (!this.getFuelTank() && this.objects.modelOptions.includeFuelTank) return true;
+        // Check docked spacecraft legacy path
+        for (const port of Object.values(this.dockingPorts)) {
+            if (port.dockedTo) {
+                const docked = port.dockedTo.spacecraft;
+                if (!docked.getFuelTank() && docked.objects.modelOptions.includeFuelTank) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Consume fuel for thrust. Returns the fraction of requested force that
+     * could actually be applied (0..1). Legacy spacecraft have infinite fuel.
+     */
+    public consumeFuel(totalForce: number, dt: number): number {
+        if (totalForce <= 0 || dt <= 0) return 1;
+        const tank = this.findFuelSource();
+        if (tank) {
+            const actual = tank.consumeFuel(totalForce, dt);
+            return totalForce > 0 ? actual / totalForce : 1;
+        }
+        // Legacy path: infinite fuel
+        return 1;
+    }
+
+    /** Get fuel level (0..1) for display. Legacy = 1 (infinite). */
+    public getFuelLevel(): number {
+        const tank = this.getFuelTank();
+        if (tank) return tank.fuelLevel;
+        // Check docked
+        for (const port of Object.values(this.dockingPorts)) {
+            if (port.dockedTo) {
+                const t = port.dockedTo.spacecraft.getFuelTank();
+                if (t) return t.fuelLevel;
+            }
+        }
+        return this.objects.modelOptions.includeFuelTank ? 1 : 0;
     }
 
     // Conversion helpers removed; all math uses THREE types
@@ -402,8 +542,27 @@ export class Spacecraft {
                     rotation: { x: localOffsetRot.x, y: localOffsetRot.y, z: localOffsetRot.z, w: localOffsetRot.w },
                 };
 
+                // Grab the guest's ORIGINAL native body BEFORE redirect (after redirect, getNative returns host)
+                const guestOrigNative = guestCraft.objects.rigid.getNative<any>();
+
                 // Redirect guest wrapper to ROOT body
                 guestCraft.objects.rigid.redirectTo!(rootRigid, offset);
+
+                // Remove all colliders from the guest's now-disabled original body
+                // to prevent phantom contact resolution (Rapier still resolves contacts
+                // against disabled bodies' colliders, causing energy injection/vibration).
+                try {
+                    const physWorld = this.physics?.getNativeWorld?.() as any;
+                    if (guestOrigNative && physWorld) {
+                        const n = guestOrigNative.numColliders?.() ?? 0;
+                        for (let i = n - 1; i >= 0; i--) {
+                            try {
+                                const col = guestOrigNative.collider(i);
+                                physWorld.removeCollider(col, false);
+                            } catch {}
+                        }
+                    }
+                } catch {}
 
                 // Immediately sync the guest's mesh to the computed position/orientation
                 // (getWorldPosition/Orientation read from mesh, not physics proxy)

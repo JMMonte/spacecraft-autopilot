@@ -1,18 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import * as THREE from 'three';
-
-interface TelemetryWindowProps {
-  telemetry: {
-    position: THREE.Vector3;
-    velocity: THREE.Vector3;
-    orientation: THREE.Quaternion;
-    angularVelocity: THREE.Vector3;
-    mass: number;
-    thrusterStatus: boolean[];
-  } | null;
-}
+import { useTelemetrySnapshot } from './telemetrySnapshotStore';
+import { TOGGLE_GROUP, TOGGLE_OPTION, TOGGLE_ACTIVE, TOGGLE_INACTIVE } from '../ui/styles';
 
 const _euler = new THREE.Euler();
+const _invQuat = new THREE.Quaternion();
+const _vec = new THREE.Vector3();
 
 function quatToEulerDeg(q: THREE.Quaternion): { pitch: number; yaw: number; roll: number } {
   _euler.setFromQuaternion(q, 'YXZ');
@@ -22,6 +15,14 @@ function quatToEulerDeg(q: THREE.Quaternion): { pitch: number; yaw: number; roll
     roll:  THREE.MathUtils.radToDeg(_euler.z),
   };
 }
+
+/** Transform a world-space vector to body-local frame using inverse of the orientation quaternion. */
+function worldToBody(v: THREE.Vector3, orientation: THREE.Quaternion): THREE.Vector3 {
+  _invQuat.copy(orientation).invert();
+  return _vec.copy(v).applyQuaternion(_invQuat);
+}
+
+type RefFrame = 'world' | 'body';
 
 /** Compact row: label + x/y/z values + optional magnitude. */
 function VectorRow({ label, v, decimals = 2, unit, showMag }: {
@@ -46,7 +47,7 @@ function VectorRow({ label, v, decimals = 2, unit, showMag }: {
 }
 
 /** One row: direction label + a dot per thruster. */
-function ThrusterGroup({ label, indices, status }: { label: string; indices: number[]; status: boolean[] }) {
+function ThrusterGroup({ label, indices, status }: { label: string; indices: number[]; status: readonly boolean[] }) {
   const active = indices.filter(i => status[i]).length;
   return (
     <div className="flex items-center gap-1">
@@ -60,24 +61,44 @@ function ThrusterGroup({ label, indices, status }: { label: string; indices: num
   );
 }
 
-export const TelemetryWindow: React.FC<TelemetryWindowProps> = ({ telemetry }) => {
+export const TelemetryWindow: React.FC = () => {
+  const telemetry = useTelemetrySnapshot();
+  const [refFrame, setRefFrame] = useState<RefFrame>('world');
   if (!telemetry) return null;
 
   const att = quatToEulerDeg(telemetry.orientation);
 
+  // Compute displayed vectors based on reference frame
+  const isBody = refFrame === 'body';
+  const vel = isBody ? worldToBody(telemetry.velocity, telemetry.orientation).clone() : telemetry.velocity;
+  const angVel = isBody ? worldToBody(telemetry.angularVelocity, telemetry.orientation).clone() : telemetry.angularVelocity;
+  const axisLabels = isBody ? { x: 'fwd', y: 'up', z: 'rgt' } : { x: 'x', y: 'y', z: 'z' };
+
   return (
     <div className="flex flex-col gap-1 text-[10px]">
+      {/* Reference frame toggle */}
+      <div className={`${TOGGLE_GROUP} h-5 self-start`}>
+        <button
+          className={`px-2 leading-5 ${TOGGLE_OPTION} ${refFrame === 'world' ? TOGGLE_ACTIVE : TOGGLE_INACTIVE}`}
+          onClick={() => setRefFrame('world')}
+        >World</button>
+        <button
+          className={`px-2 leading-5 ${TOGGLE_OPTION} ${refFrame === 'body' ? TOGGLE_ACTIVE : TOGGLE_INACTIVE}`}
+          onClick={() => setRefFrame('body')}
+        >Body</button>
+      </div>
+
       {/* Axis header */}
       <div className="flex items-baseline gap-2 text-white/50">
         <span className="w-14 shrink-0" />
-        <span>x</span>
-        <span>y</span>
-        <span>z</span>
+        <span>{axisLabels.x}</span>
+        <span>{axisLabels.y}</span>
+        <span>{axisLabels.z}</span>
       </div>
 
       <VectorRow label="Position" v={telemetry.position} decimals={1} />
-      <VectorRow label="Velocity" v={telemetry.velocity} decimals={2} unit="m/s" showMag />
-      <VectorRow label="Ang. vel" v={telemetry.angularVelocity} decimals={3} unit="rad/s" showMag />
+      <VectorRow label="Velocity" v={vel} decimals={2} unit="m/s" showMag />
+      <VectorRow label="Ang. vel" v={angVel} decimals={3} unit="rad/s" showMag />
 
       {/* Attitude in degrees */}
       <div className="flex items-baseline gap-2 text-[10px]">

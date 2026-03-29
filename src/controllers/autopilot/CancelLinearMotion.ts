@@ -5,6 +5,9 @@ import { PIDController } from '../pidController';
 import type { ThrusterGroups } from '../../config/spacecraftConfig';
 
 export class CancelLinearMotion extends AutopilotMode {
+    /** True while actively correcting (hysteresis state). */
+    private correcting = false;
+
     constructor(
         spacecraft: Spacecraft,
         config: AutopilotConfig,
@@ -22,14 +25,21 @@ export class CancelLinearMotion extends AutopilotMode {
         // Relative to reference (if provided)
         const refVel = this.referenceVelocityWorld || this.tmpVecC.set(0, 0, 0);
         const relVelocity = this.tmpVecA.copy(currentVelocity).sub(refVel);
+        const speedSq = relVelocity.lengthSq();
 
-        // Dynamic deadband: minimum delta-v achievable in one physics frame
-        // based on actual thruster capability and mass.
-        const caps = this.getDynamicCaps();
-        const minAccel = Math.min(caps.linAccel.x, caps.linAccel.y, caps.linAccel.z);
-        const velocityDeadband = Math.max(0.002, minAccel * (1 / 60) * 2);
-        if (relVelocity.lengthSq() < velocityDeadband * velocityDeadband) {
-            return out;
+        // Hysteresis deadband: start correcting at 0.02 m/s, stop at 0.005 m/s
+        const startThreshold = 0.02;
+        const stopThreshold = 0.005;
+        if (this.correcting) {
+            if (speedSq < stopThreshold * stopThreshold) {
+                this.correcting = false;
+                return out;
+            }
+        } else {
+            if (speedSq < startThreshold * startThreshold) {
+                return out;
+            }
+            this.correcting = true;
         }
 
         const qInv = this.tmpQuatA.copy(q).invert();
@@ -60,4 +70,4 @@ export class CancelLinearMotion extends AutopilotMode {
         this.applyTranslationalForcesToThrusterGroupsInPlace(localForce, out);
         return out;
     }
-} 
+}

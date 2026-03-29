@@ -1,30 +1,41 @@
 import { useMemo, useState } from 'react';
-import { Plus, Trash2, Box } from 'lucide-react';
+import { Plus, Trash2, ChevronDown } from 'lucide-react';
 import { EMPTY_STATE } from '../ui/styles';
 import { BasicWorld } from '../../core/BasicWorld';
 import { Spacecraft } from '../../core/spacecraft';
+
+export type BlueprintType =
+  | { kind: 'node'; portCount: 2 | 4 | 6 }
+  | { kind: 'solar' };
 
 interface SpacecraftListWindowProps {
   world: BasicWorld | null;
   activeSpacecraft: Spacecraft | null;
   onCreateSpacecraft?: () => void;
-  onCreateNodeSpacecraft?: (portCount?: 2 | 4 | 6) => void;
+  onCreateBlueprint?: (bp: BlueprintType) => void;
   onSelectSpacecraft: (spacecraft: Spacecraft) => void;
   onDeleteSpacecraft: (spacecraft: Spacecraft) => void;
   version: number;
 }
 
-const NODE_TYPES: Array<{ ports: 2 | 4 | 6; label: string; desc: string }> = [
-  { ports: 2, label: '2p', desc: 'Coupler' },
-  { ports: 4, label: '4p', desc: 'Node' },
-  { ports: 6, label: '6p', desc: 'Hub' },
+interface BlueprintMenuItem {
+  label: string;
+  detail?: string;
+  value: BlueprintType;
+}
+
+const BLUEPRINT_MENU: BlueprintMenuItem[] = [
+  { label: 'Coupler', detail: '2 ports', value: { kind: 'node', portCount: 2 } },
+  { label: 'Node', detail: '4 ports', value: { kind: 'node', portCount: 4 } },
+  { label: 'Hub', detail: '6 ports', value: { kind: 'node', portCount: 6 } },
+  { label: 'Solar', detail: 'panels', value: { kind: 'solar' } },
 ];
 
 export function SpacecraftListWindow({
   world,
   activeSpacecraft,
   onCreateSpacecraft,
-  onCreateNodeSpacecraft,
+  onCreateBlueprint,
   onSelectSpacecraft,
   onDeleteSpacecraft,
   version
@@ -33,7 +44,7 @@ export function SpacecraftListWindow({
     return world?.getSpacecraftList() ?? [];
   }, [world, version]);
 
-  const [nodeMenuOpen, setNodeMenuOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <div className="flex flex-col gap-1 text-[10px]">
@@ -49,22 +60,23 @@ export function SpacecraftListWindow({
         <div className="relative flex-1">
           <button
             className="w-full px-1 py-0.5 text-[10px] text-white/70 hover:text-white/90 hover:bg-white/10 rounded transition-colors flex items-center justify-center gap-1"
-            onClick={() => setNodeMenuOpen(!nodeMenuOpen)}
-            disabled={!onCreateNodeSpacecraft}
+            onClick={() => setMenuOpen(!menuOpen)}
+            disabled={!onCreateBlueprint}
           >
-            <Box size={12} />
-            Node
+            <Plus size={12} />
+            More
+            <ChevronDown size={10} />
           </button>
-          {nodeMenuOpen && (
+          {menuOpen && (
             <div className="absolute top-full left-0 right-0 mt-0.5 bg-black/90 border border-white/20 rounded z-50 overflow-hidden">
-              {NODE_TYPES.map(nt => (
+              {BLUEPRINT_MENU.map(item => (
                 <button
-                  key={nt.ports}
+                  key={item.label}
                   className="w-full px-2 py-1 text-left text-[10px] text-white/70 hover:text-white hover:bg-white/10 transition-colors flex justify-between"
-                  onClick={() => { onCreateNodeSpacecraft?.(nt.ports); setNodeMenuOpen(false); }}
+                  onClick={() => { onCreateBlueprint?.(item.value); setMenuOpen(false); }}
                 >
-                  <span>{nt.desc}</span>
-                  <span className="text-white/40">{nt.ports} ports</span>
+                  <span>{item.label}</span>
+                  {item.detail && <span className="text-white/40">{item.detail}</span>}
                 </button>
               ))}
             </div>
@@ -79,7 +91,7 @@ export function SpacecraftListWindow({
             const portCount = Object.keys(spacecraft.dockingPorts).length;
             return (
               <div
-                key={spacecraft.name}
+                key={spacecraft.uuid}
                 className={`flex items-center gap-2 px-1 py-0.5 rounded transition-colors ${
                   isActive
                     ? 'bg-accent-30 text-white'

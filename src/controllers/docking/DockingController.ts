@@ -25,6 +25,8 @@ export class DockingController {
     private collisionSpacecraft: Spacecraft[] = [];  // For collision avoidance
     private _lastVisualUpdateMs: number = 0;
     private _visualUpdateIntervalMs: number = 100; // update visuals every 100ms
+    private spacecraftListUnsubscribe: (() => void) | null = null;
+    private isCleanedUp: boolean = false;
     
     // Thresholds moved to shared DockingUtils for reuse across systems
 
@@ -36,14 +38,10 @@ export class DockingController {
         const registry = spacecraft.registry ?? spacecraft.basicWorld;
         if (registry) {
             this.updateSpacecraftLists(registry.getSpacecraftList() as Spacecraft[]);
-            if ('onSpacecraftListChanged' in registry) {
-                registry.onSpacecraftListChanged(() => {
+            if ('onSpacecraftListChanged' in registry && typeof registry.onSpacecraftListChanged === 'function') {
+                this.spacecraftListUnsubscribe = registry.onSpacecraftListChanged(() => {
                     const reg = spacecraft.registry ?? spacecraft.basicWorld;
                     if (reg) this.updateSpacecraftLists(reg.getSpacecraftList() as Spacecraft[]);
-                });
-            } else if (spacecraft.basicWorld?.setSpacecraftListChangeCallback) {
-                spacecraft.basicWorld.setSpacecraftListChangeCallback(() => {
-                    if (spacecraft.basicWorld) this.updateSpacecraftLists(spacecraft.basicWorld.getSpacecraftList());
                 });
             }
         }
@@ -254,9 +252,13 @@ export class DockingController {
         // Always operate relative to the target spacecraft during docking
         if (autopilot) {
             autopilot.setReferenceObject(this.targetSpacecraft);
-            // Exclude the entire target compound (target + all docked to it) from obstacle avoidance.
-            // The standoff point placement handles body clearance.
-            autopilot.setObstacleExclusions(this.targetSpacecraft.getCompoundMembers());
+            // Only exclude the target from obstacle avoidance during close phases (align/dock).
+            // During approach, the target body IS an obstacle to route around.
+            if (this.phase === 'align' || this.phase === 'dock') {
+                autopilot.setObstacleExclusions(this.targetSpacecraft.getCompoundMembers());
+            } else {
+                autopilot.setObstacleExclusions([]);
+            }
         }
 
         // Gather current info for guidance and physical checks
@@ -319,7 +321,8 @@ export class DockingController {
                     cancelLinearMotion: { enabled: false }
                 });
                 // Transition to align phase when close enough
-                const dist = this.spacecraft.getWorldPosition().distanceTo(approachPos);
+                const ourPos = this.spacecraft.getWorldPosition();
+                const dist = ourPos.distanceTo(approachPos);
                 const orientErr = this.getOrientationErrorRad(targetQuat);
                 const distThresh = Math.max(0.2, Math.min(2.0, safeDistance * 0.06));
                 const orientThresh = 5 * Math.PI / 180; // 5 degrees
@@ -460,15 +463,27 @@ export class DockingController {
             this.trajectoryVisualizer.clearDebugObjects();
             try { emitDockingPlanChanged({ plan: null }); } catch {}
 
-            const autopilot = this.spacecraft.spacecraftController?.autopilot;
-            if (autopilot) {
-                autopilot.setGoToSpeedLimit(null);
-                autopilot.setObstacleExclusions([]);
-                autopilot.resetAllModes();
-                autopilot.setReferenceObject(null);
-                autopilot.setEnabled(false);
-                this.spacecraft.spacecraftController?.resetThrusterLatch?.();
+            // Reset autopilot on BOTH spacecraft to prevent PID state from causing vibration
+            for (const craft of [this.spacecraft, this.targetSpacecraft]) {
+                const ap = craft.spacecraftController?.autopilot;
+                if (ap) {
+                    ap.setGoToSpeedLimit(null);
+                    ap.setObstacleExclusions([]);
+                    ap.resetAllModes();
+                    ap.setReferenceObject(null);
+                    ap.setEnabled(false);
+                }
+                craft.spacecraftController?.resetThrusterLatch?.();
             }
+
+            // Zero residual velocity on the compound body to prevent post-dock drift/vibration
+            try {
+                const rigid = this.spacecraft.objects.rigid;
+                if (rigid) {
+                    rigid.setLinearVelocity({ x: 0, y: 0, z: 0 });
+                    rigid.setAngularVelocity({ x: 0, y: 0, z: 0 });
+                }
+            } catch {}
         } else {
             this.cancelDocking();
         }
@@ -527,7 +542,26 @@ export class DockingController {
     }
 
     public cleanup(): void {
+        if (this.isCleanedUp) return;
+        this.isCleanedUp = true;
+
+        try {
+            this.spacecraftListUnsubscribe?.();
+        } catch {}
+        this.spacecraftListUnsubscribe = null;
+
+        try {
+            this.cancelDocking();
+        } catch {}
+
         this.trajectoryVisualizer.cleanup();
+        this.visualSpacecraft = [];
+        this.collisionSpacecraft = [];
+        this.targetSpacecraft = null;
+        this._ourPortId = null;
+        this._targetPortId = null;
+        this.phase = 'idle';
+        this.trajectory = null;
     }
 
     public getTrajectory(): Trajectory | null {

@@ -35,6 +35,7 @@ export class SpacecraftController {
     private manualAllocator!: ManualAllocator;
     // Cluster-aware scaling
     private baseThrust!: number;
+    private isClusterScaling = false;
     // Reserved for future: per-thruster custom caps provided by user/config
     // no waypoint planner
 
@@ -174,10 +175,15 @@ export class SpacecraftController {
 
         this.keysPressed[event.code] = true;
 
-        // Manual thruster forces are derived from keysPressed in calculateManualForces()
-
-        // Autopilot toggles
-        this.handleAutopilotControl(event.code);
+        // If docked, forward autopilot key events to the cluster leader
+        // so toggles take effect on the leader (which syncs to followers).
+        const leader = this.getClusterLeader();
+        if (leader && leader !== this.spacecraft) {
+            const leaderCtrl = leader.spacecraftController as SpacecraftController | undefined;
+            leaderCtrl?.handleAutopilotControl(event.code);
+        } else {
+            this.handleAutopilotControl(event.code);
+        }
     }
 
     public handleKeyUp(event: KeyboardEvent): void {
@@ -185,15 +191,20 @@ export class SpacecraftController {
         this.keysPressed[event.code] = false;
     }
 
-    private handleAutopilotControl(code: string): void {
-        this.log.debug('Handling autopilot control for key:', code);
-        
-        // Ensure autopilot is enabled
-        if (!this.autopilot.getAutopilotEnabled()) {
-            this.log.debug('Enabling autopilot');
-            this.autopilot.setEnabled(true);
-        }
+    /** Get the cluster leader spacecraft (or null if not docked). */
+    private getClusterLeader(): import('../core/spacecraft').Spacecraft | null {
+        const partners = this.spacecraft.getDockedSpacecrafts?.() || [];
+        if (!partners.length) return null;
+        const cluster = [this.spacecraft, ...partners];
+        return [...cluster].sort((a, b) => {
+            const aEn = a.spacecraftController?.autopilot?.getAutopilotEnabled?.() ? 1 : 0;
+            const bEn = b.spacecraftController?.autopilot?.getAutopilotEnabled?.() ? 1 : 0;
+            if (aEn !== bEn) return bEn - aEn;
+            return a.uuid.localeCompare(b.uuid);
+        })[0];
+    }
 
+    public handleAutopilotControl(code: string): void {
         // Map keys to autopilot modes
         const keyModeMap: { [key: string]: () => void } = {
             'KeyT': () => {
@@ -238,7 +249,12 @@ export class SpacecraftController {
         // act as one. Leader mirrors its modes/targets into followers.
         this.syncDockedAutopilots();
 
-        // no waypoint-following orchestration
+        // If no fuel access, zero all forces (thrusters disabled)
+        if (!this.spacecraft.hasFuelAccess()) {
+            this.combinedForcesBuffer.fill(0);
+            this.spacecraft.rcsVisuals.update(dt);
+            return new Array(24).fill(false);
+        }
 
         // 1) Manual forces from user
         const manualForces = this.calculateManualForces();
@@ -306,6 +322,8 @@ export class SpacecraftController {
             const ctrl = craft.spacecraftController as SpacecraftController | undefined;
             const ap = ctrl?.autopilot;
             if (!ap) continue;
+            // Suppress store emission from followers to avoid overwriting leader state
+            ap.suppressStateEmit = true;
             // Ensure enabled
             ap.setEnabled(true);
             // Mirror targets
@@ -317,6 +335,7 @@ export class SpacecraftController {
             ap.setMode('cancelLinearMotion', !!active.cancelLinearMotion);
             ap.setMode('cancelRotation', !!active.cancelRotation);
             ap.setMode('pointToPosition', !!active.pointToPosition);
+
         }
     }
 
@@ -333,9 +352,13 @@ export class SpacecraftController {
         const selfMass = Math.max(1e-6, this.spacecraft.getMass?.() || 0);
         const scale = Math.max(1, totalMass / selfMass);
 
-        // Scale thrust budget
+        // Scale thrust budget (skip nozzle visual resize — this is logical, not physical)
         const newThrust = this.baseThrust * scale;
-        if (Math.abs(newThrust - this.thrust) > 1e-6) this.setThrust(newThrust);
+        if (Math.abs(newThrust - this.thrust) > 1e-6) {
+            this.isClusterScaling = true;
+            this.setThrust(newThrust);
+            this.isClusterScaling = false;
+        }
 
         // Do not scale per-thruster physical caps here; keep hardware limits.
     }
@@ -411,6 +434,15 @@ export class SpacecraftController {
 
     private applyForcesToThrusters(forces: number[], dt: number): boolean[] {
         const { visibility, applied } = this.thrusterPWM.apply(forces, dt);
+
+        // Consume fuel — scale applied forces if fuel is insufficient
+        let totalForce = 0;
+        for (let i = 0; i < 24; i++) totalForce += applied[i];
+        const fuelFraction = this.spacecraft.consumeFuel(totalForce, dt);
+        if (fuelFraction < 1) {
+            for (let i = 0; i < 24; i++) applied[i] *= fuelFraction;
+            if (fuelFraction <= 0) visibility.fill(false);
+        }
 
         // Apply forces to RCS visuals and update cone mesh visibility
         for (let i = 0; i < 24; i++) {
@@ -513,6 +545,10 @@ export class SpacecraftController {
         try { this.autopilot?.setThrusterStrengths?.(this.thrusterMax); } catch (err) { this.log.warn('setThrust: autopilot strengths update failed', err); }
         try { this.manualAllocator?.setThrust?.(value); } catch (err) { this.log.warn('setThrust: manualAllocator thrust update failed', err); }
         try { this.manualAllocator?.setThrusterMax?.(this.thrusterMax); } catch (err) { this.log.warn('setThrust: manualAllocator max update failed', err); }
+        // Scale nozzle visuals proportionally to thrust (skip during cluster scaling — that's logical, not physical)
+        if (!this.isClusterScaling) {
+            try { this.spacecraft.rcsVisuals?.setNozzleScale?.(value, this.baseThrust); } catch {}
+        }
     }
 
     /**

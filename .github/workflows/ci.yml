@@ -5,23 +5,26 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: 10.16.0
+          run_install: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - name: TypeScript Check
-        run: pnpm run check:ts
-      - name: Unit Tests
-        run: pnpm run test:unit
-      - name: Architecture Tests
-        run: pnpm run test:architecture
-      - name: Build
-        run: pnpm run build
+      - name: Validate
+        run: pnpm run validate

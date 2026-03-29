@@ -14,7 +14,6 @@
 
 - [ ] **SettingsWindow.tsx enhancements** — theme selector, attitude sphere texture picker, and thruster effects toggles (point lights + exhaust particles) are done. Could still add: camera mode toggle (follow/free), grid visibility toggle, trace settings, performance display options. Low priority since these controls exist in other windows (HelperArrowsWindow has grid/trace, top bar has camera mode).
 - [ ] **Unit tests for ObstacleAvoidance** — the tangent-point math (where the critical bug is) has zero unit tests. Write targeted tests before attempting the fix.
-- [ ] **CI/CD pipeline** — no GitHub Actions. Need at minimum: TypeScript check, test suite, build verification on PRs.
 
 ## Medium Priority — Performance
 
