@@ -15,6 +15,7 @@
 import * as THREE from 'three';
 import type { Autopilot } from './Autopilot';
 import type { Spacecraft } from '../../core/spacecraft';
+import type { BasicWorld } from '../../core/BasicWorld';
 import type { AutopilotModeName } from './types';
 
 // ─── Plain JSON geometry types ────────────────────────────────────────────────
@@ -45,7 +46,10 @@ export type AutopilotCommandName =
     | 'set_target_position'
     | 'set_target_orientation'
     | 'disable'
-    | 'get_status';
+    | 'get_status'
+    | 'list_scenes'
+    | 'load_scene'
+    | 'get_current_scene';
 
 export interface AutopilotCommand {
     action: AutopilotCommandName;
@@ -123,23 +127,25 @@ export interface ToolDefinition {
 export class AutopilotLLMInterface {
     private autopilot: Autopilot;
     private spacecraft: Spacecraft;
+    private world: BasicWorld | null;
 
-    constructor(autopilot: Autopilot, spacecraft: Spacecraft) {
+    constructor(autopilot: Autopilot, spacecraft: Spacecraft, world?: BasicWorld | null) {
         this.autopilot = autopilot;
         this.spacecraft = spacecraft;
+        this.world = world ?? null;
     }
 
     // ── Self-describing tool list ─────────────────────────────────────────
 
     /** Returns tool definitions ready for LLM function-calling. */
     getTools(): ToolDefinition[] {
-        return TOOL_DEFINITIONS;
+        return [...TOOL_DEFINITIONS, ...this.getSceneToolDefinitions()];
     }
 
     // ── Single command entry point ────────────────────────────────────────
 
     /** Execute an autopilot command from plain JSON. Returns a result with status. */
-    execute(command: AutopilotCommand): CommandResult {
+    async execute(command: AutopilotCommand): Promise<CommandResult> {
         const { action, params = {} } = command;
 
         try {
@@ -176,6 +182,15 @@ export class AutopilotLLMInterface {
 
                 case 'get_status':
                     return this.ok('get_status', 'Current autopilot status.');
+
+                case 'list_scenes':
+                    return this.doListScenes();
+
+                case 'load_scene':
+                    return await this.doLoadScene(params as { preset_id: string });
+
+                case 'get_current_scene':
+                    return this.doGetCurrentScene();
 
                 default:
                     return this.fail(action, `Unknown action "${action}". Use get_status to see available commands.`);
@@ -305,6 +320,67 @@ export class AutopilotLLMInterface {
     private disableAll(): CommandResult {
         this.autopilot.resetAllModes();
         return this.ok('disable', 'All autopilot modes disabled.');
+    }
+
+    // ── Scene commands ─────────────────────────────────────────────────────
+
+    private doListScenes(): CommandResult {
+        if (!this.world) return this.fail('list_scenes', 'No world reference available.');
+        const presets = this.world.getScenePresets();
+        return { success: true, action: 'list_scenes', message: `${presets.length} scene presets available.`, status: this.getStatus(), data: presets } as any;
+    }
+
+    private async doLoadScene(p: { preset_id: string }): Promise<CommandResult> {
+        if (!this.world) return this.fail('load_scene', 'No world reference available.');
+        if (!p.preset_id || typeof p.preset_id !== 'string') {
+            return this.fail('load_scene', '"preset_id" is required.');
+        }
+        const loaded = await this.world.loadScenePreset(p.preset_id);
+        if (!loaded) {
+            const available = this.world.getScenePresets().map(s => s.id).join(', ');
+            return this.fail('load_scene', `Unknown preset "${p.preset_id}". Available: ${available}`);
+        }
+        const scCount = this.world.getSpacecraftList().length;
+        // Note: after scene load, this LLM interface's spacecraft/autopilot refs are stale.
+        // The caller (App.tsx) will recreate the interface for the new active spacecraft.
+        return { success: true, action: 'load_scene', message: `Scene "${p.preset_id}" loaded with ${scCount} spacecraft.`, status: this.getStatus() };
+    }
+
+    private doGetCurrentScene(): CommandResult {
+        if (!this.world) return this.fail('get_current_scene', 'No world reference available.');
+        const presetId = this.world.getCurrentScenePresetId();
+        const scCount = this.world.getSpacecraftList().length;
+        return { success: true, action: 'get_current_scene', message: `Current scene: ${presetId ?? 'custom'}, ${scCount} spacecraft.`, status: this.getStatus(), data: { preset_id: presetId, spacecraftCount: scCount, availablePresets: this.world.getScenePresets() } } as any;
+    }
+
+    private getSceneToolDefinitions(): ToolDefinition[] {
+        if (!this.world) return [];
+        const presetIds = this.world.getScenePresets().map(p => p.id);
+        return [
+            {
+                name: 'list_scenes',
+                description: 'List all available scene presets with id, name, and description.',
+                parameters: { type: 'object', properties: {}, required: [] },
+            },
+            {
+                name: 'load_scene',
+                description:
+                    'Load a scene preset by id, replacing all spacecraft and asteroids. ' +
+                    'Use list_scenes first to see available ids.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        preset_id: { type: 'string', description: 'The scene preset id to load.', enum: presetIds },
+                    },
+                    required: ['preset_id'],
+                },
+            },
+            {
+                name: 'get_current_scene',
+                description: 'Get info about the current scene: preset id, spacecraft count, available presets.',
+                parameters: { type: 'object', properties: {}, required: [] },
+            },
+        ];
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

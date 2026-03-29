@@ -23,8 +23,9 @@ import {
     noopSimulationRuntimeStatePort,
     SimulationRuntimeStatePort,
 } from '../domain/runtimeStatePort';
+import { type SceneObjectConfig, SCENE_PRESETS, getScenePreset } from '../config/scenePresets';
 
-interface WorldConfig {
+export interface WorldConfig {
     debug?: boolean;
     physicsEngine?: 'rapier';
     asteroids?: Array<{
@@ -288,33 +289,31 @@ export class BasicWorld implements SpacecraftRegistry {
             (this as any)._storeUnsubs.push(unsub);
         } catch {}
 
-        // Prefer asteroid system if provided; else spawn standalone asteroids
+        // Spawn asteroid system and/or standalone asteroids (both supported)
         if (this.config.asteroidSystem) {
             this.asteroidSystem = new AsteroidSystem(this.camera.scene, this.physics, this.config.asteroidSystem);
             this.markShadowMaterialsDirty();
-        } else {
-            const asteroidConfigs = this.config.asteroids || [];
-            if (asteroidConfigs.length > 0) {
-                asteroidConfigs.forEach((cfg) => {
-                    // Defensive runtime validation even though types require these
-                    if (typeof cfg.diameter !== 'number') {
-                        this.log.error('Asteroid entry missing diameter:', cfg);
-                        return;
-                    }
-                    if (!cfg.model) {
-                        this.log.error('Asteroid entry missing model id:', cfg);
-                        return;
-                    }
-                    const pos = new THREE.Vector3(cfg.position.x, cfg.position.y, cfg.position.z);
-                    const asteroid = new AsteroidModel(this.camera.scene, { position: pos, diameter: cfg.diameter, model: cfg.model, physics: this.physics });
-                    // Give standalone asteroids a gentle spin (random axis, ~12h period)
-                    const axis = new THREE.Vector3(Math.random(), Math.random(), Math.random()).normalize();
-                    const spinPeriod = 12 * 3600; // seconds
-                    asteroid.setSpin(axis, (2 * Math.PI) / spinPeriod);
-                    this.asteroids.push(asteroid);
-                });
-                this.markShadowMaterialsDirty();
-            }
+        }
+        const asteroidConfigs = this.config.asteroids || [];
+        if (asteroidConfigs.length > 0) {
+            asteroidConfigs.forEach((cfg) => {
+                if (typeof cfg.diameter !== 'number') {
+                    this.log.error('Asteroid entry missing diameter:', cfg);
+                    return;
+                }
+                if (!cfg.model) {
+                    this.log.error('Asteroid entry missing model id:', cfg);
+                    return;
+                }
+                const pos = new THREE.Vector3(cfg.position.x, cfg.position.y, cfg.position.z);
+                // Standalone asteroids are static — no physics body needed (obstacle avoidance uses AABBs)
+                const asteroid = new AsteroidModel(this.camera.scene, { position: pos, diameter: cfg.diameter, model: cfg.model });
+                const axis = new THREE.Vector3(Math.random(), Math.random(), Math.random()).normalize();
+                const spinPeriod = 12 * 3600; // seconds
+                asteroid.setSpin(axis, (2 * Math.PI) / spinPeriod);
+                this.asteroids.push(asteroid);
+            });
+            this.markShadowMaterialsDirty();
         }
 
         // Initialize spacecraft after scene and physics are ready
@@ -734,8 +733,9 @@ export class BasicWorld implements SpacecraftRegistry {
             if (this.asteroidSystem) {
                 (this as any)._t = ((this as any)._t ?? 0) + deltaTime;
                 this.asteroidSystem.update((this as any)._t);
-            } else {
-                // Advance spins then sync from physics
+            }
+            // Advance spins then sync from physics for standalone asteroids
+            if (this.asteroids.length > 0) {
                 this.asteroids.forEach(a => { a.advance(deltaTime); a.update(); });
             }
 
@@ -844,4 +844,143 @@ export class BasicWorld implements SpacecraftRegistry {
     public getGridVisible(): boolean {
         return !!this.grid?.mesh.visible;
     }
+
+    // ── Scene preset management ──────────────────────────────────────────
+
+    /** Remove all spacecraft and asteroids from the scene, preserving renderer/physics/lights. */
+    public clearScene(): void {
+        // Remove spacecraft rigid bodies from physics world before cleanup
+        for (const sc of [...this.spacecraft]) {
+            try {
+                if (this.physics.removeBody && sc.objects?.rigid) {
+                    this.physics.removeBody(sc.objects.rigid);
+                }
+                sc.cleanup();
+            } catch {}
+        }
+        this.spacecraft.length = 0;
+        this.spacecraftControllers.length = 0;
+        this.activeSpacecraft = null;
+
+        // Clean up asteroid system
+        if (this.asteroidSystem) {
+            this.asteroidSystem.dispose();
+            this.asteroidSystem = null;
+        }
+        // Clean up standalone asteroids
+        for (const a of this.asteroids) {
+            try { a.dispose(); } catch {}
+        }
+        this.asteroids.length = 0;
+        (this as any)._t = 0;
+
+        this.emitSpacecraftListChanged();
+    }
+
+    /**
+     * Load a scene configuration: clears the current scene and spawns objects from config.
+     * This reuses the existing renderer, physics engine, lights, and grid.
+     */
+    public async loadSceneConfig(sceneConfig: SceneObjectConfig): Promise<void> {
+        this.clearScene();
+        this._currentPresetId = null;
+
+        // Spawn asteroid system and/or standalone asteroids (both supported)
+        if (sceneConfig.asteroidSystem) {
+            this.asteroidSystem = new AsteroidSystem(this.camera.scene, this.physics, sceneConfig.asteroidSystem);
+            this.markShadowMaterialsDirty();
+        }
+        if (sceneConfig.asteroids && sceneConfig.asteroids.length > 0) {
+            for (const cfg of sceneConfig.asteroids) {
+                if (typeof cfg.diameter !== 'number' || !cfg.model) continue;
+                const pos = new THREE.Vector3(cfg.position.x, cfg.position.y, cfg.position.z);
+                const asteroid = new AsteroidModel(this.camera.scene, { position: pos, diameter: cfg.diameter, model: cfg.model });
+                const axis = new THREE.Vector3(Math.random(), Math.random(), Math.random()).normalize();
+                const spinPeriod = 12 * 3600;
+                asteroid.setSpin(axis, (2 * Math.PI) / spinPeriod);
+                this.asteroids.push(asteroid);
+            }
+            this.markShadowMaterialsDirty();
+        }
+
+        // Spawn spacecraft
+        const initialSpacecraft = sceneConfig.initialSpacecraft || [];
+        if (initialSpacecraft.length > 0) {
+            await Promise.all(initialSpacecraft.map(async spacecraftConfig => {
+                const initialPosition = new THREE.Vector3(
+                    spacecraftConfig.position.x,
+                    spacecraftConfig.position.y,
+                    spacecraftConfig.position.z
+                );
+                const bpType = spacecraftConfig.blueprintType ?? 'mover';
+                let bp: SpacecraftBlueprint;
+                switch (bpType) {
+                    case 'node':
+                        bp = createNodeBlueprint(
+                            spacecraftConfig.portCount ?? 4,
+                            spacecraftConfig.width ?? 1,
+                        );
+                        if (spacecraftConfig.name) bp.name = spacecraftConfig.name;
+                        break;
+                    case 'solar':
+                        bp = createSolarSpacecraftBlueprint(
+                            spacecraftConfig.name ?? 'Solar',
+                            spacecraftConfig.solarParams,
+                        );
+                        break;
+                    default:
+                        bp = createMoverBlueprint(
+                            spacecraftConfig.name ?? 'Spacecraft',
+                            spacecraftConfig.width, spacecraftConfig.height, spacecraftConfig.depth,
+                        );
+                        break;
+                }
+                const sc = this.addSpacecraftFromBlueprint(bp, initialPosition);
+                if (spacecraftConfig.initialConeVisibility) {
+                    sc.rcsVisuals.showCones();
+                }
+                if (Array.isArray(spacecraftConfig.thrusterStrengths) && spacecraftConfig.thrusterStrengths.length === 24) {
+                    try { sc.spacecraftController?.setThrusterStrengths(spacecraftConfig.thrusterStrengths); } catch {}
+                }
+                return sc;
+            }));
+        } else {
+            this.addSpacecraftFromBlueprint(createMoverBlueprint('Alpha'), new THREE.Vector3(0, 0, 2));
+        }
+
+        // Zero out any velocities induced by physics stepping during async load
+        for (const sc of this.spacecraft) {
+            try {
+                sc.objects.boxBody?.velocity?.set(0, 0, 0);
+                sc.objects.boxBody?.angularVelocity?.set(0, 0, 0);
+            } catch {}
+        }
+
+        // Set active spacecraft
+        const focusIndex = sceneConfig.initialFocus ?? 0;
+        if (this.spacecraft[focusIndex]) {
+            this.setActiveSpacecraft(this.spacecraft[focusIndex]);
+        }
+    }
+
+    /** Load a named scene preset by id. Returns true if found and loaded. */
+    public async loadScenePreset(presetId: string): Promise<boolean> {
+        const preset = getScenePreset(presetId);
+        if (!preset) return false;
+        await this.loadSceneConfig(preset.config);
+        this._currentPresetId = presetId;
+        return true;
+    }
+
+    /** List available scene presets (metadata only, no full configs). */
+    public getScenePresets(): Array<{ id: string; name: string; description: string }> {
+        return SCENE_PRESETS.map(p => ({ id: p.id, name: p.name, description: p.description }));
+    }
+
+    /** Get the current active preset id, if known. */
+    public getCurrentScenePresetId(): string | null {
+        return this._currentPresetId;
+    }
+
+    private _currentPresetId: string | null = 'default';
 }

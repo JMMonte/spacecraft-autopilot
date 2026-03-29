@@ -7,6 +7,7 @@ import { useElementSize } from './hooks/useElementSize';
 import { createLogger } from './utils/logger';
 import { simulationRuntimeStatePort } from './state/simulationRuntimeStatePort';
 import { AutopilotLLMInterface } from './controllers/autopilot/AutopilotLLMInterface';
+import { SceneLLMInterface } from './controllers/autopilot/SceneLLMInterface';
 import { installDockingTestHarness } from './debug/DockingTestHarness';
 import { createSolarSpacecraftBlueprint } from './scenes/modules/blueprints';
 
@@ -28,6 +29,12 @@ export function App() {
         world.setActiveSpacecraft(newSpacecraft);
         return newSpacecraft;
     }, [world]);
+
+    const handleSceneLoad = useCallback((_presetId: string) => {
+        // Scene load triggers spacecraft list change + active spacecraft change callbacks,
+        // which update React state automatically. Force a version bump for safety.
+        setSpacecraftListVersion(prev => prev + 1);
+    }, []);
 
     const createBlueprint = useCallback((bp: import('./components/windows/SpacecraftListWindow').BlueprintType) => {
         if (!world) return;
@@ -86,10 +93,14 @@ export function App() {
                     // Expose LLM control interface on window for external tooling
                     const llm = new AutopilotLLMInterface(
                         initialSpacecraft.spacecraftController.autopilot,
-                        initialSpacecraft
+                        initialSpacecraft,
+                        worldInstance
                     );
                     (window as any).__autopilot = llm;
                 }
+
+                // Expose scene control interface on window for external tooling
+                (window as any).__scene = new SceneLLMInterface(worldInstance);
 
                 // Install docking test harness for text-based live testing
                 installDockingTestHarness(worldInstance);
@@ -123,7 +134,8 @@ export function App() {
             if (spacecraft?.spacecraftController?.autopilot) {
                 (window as any).__autopilot = new AutopilotLLMInterface(
                     spacecraft.spacecraftController.autopilot,
-                    spacecraft
+                    spacecraft,
+                    world
                 );
             }
         };
@@ -221,6 +233,7 @@ export function App() {
                     loadingStatus={loadingStatus}
                     onCreateNewSpacecraft={createNewSpacecraft}
                     onCreateBlueprint={createBlueprint}
+                    onSceneLoad={handleSceneLoad}
                     spacecraftListVersion={spacecraftListVersion}
                 />
             )}

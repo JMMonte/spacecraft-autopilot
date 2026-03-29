@@ -73,6 +73,9 @@ export interface PhysicsEngine {
     }
   ): unknown;
 
+  // Remove a rigid body from the physics world entirely
+  removeBody?(body: RigidBody): void;
+
   // Disable/enable a body (remove from simulation stepping)
   disableBody?(body: RigidBody): void;
   enableBody?(body: RigidBody): void;

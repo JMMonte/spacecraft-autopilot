@@ -54,6 +54,7 @@ interface CockpitProps {
     loadingStatus?: string;
     onCreateNewSpacecraft?: () => void;
     onCreateBlueprint?: (bp: import('./windows/SpacecraftListWindow').BlueprintType) => void;
+    onSceneLoad?: (presetId: string) => void;
     spacecraftListVersion?: number;
 }
 
@@ -134,6 +135,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
     loadingStatus = '',
     onCreateNewSpacecraft,
     onCreateBlueprint,
+    onSceneLoad,
     spacecraftListVersion = 0
 }) => {
     // Get the world instance directly from the spacecraft
@@ -873,6 +875,8 @@ export const Cockpit: React.FC<CockpitProps> = ({
                         visibleWindows={visibleWindows}
                         onToggleWindow={toggleWindow}
                         onCreateNewSpacecraft={onCreateNewSpacecraft ?? (() => { })}
+                        world={world}
+                        onSceneLoad={onSceneLoad}
                     />
                 </div>
 
@@ -1044,7 +1048,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             zIndex={windowZ.settings}
                             onFocus={() => bringWindowToFront('settings')}
                         >
-                            <SettingsWindow world={world} />
+                            <SettingsWindow world={world} onSceneLoad={onSceneLoad} />
                         </DraggableWindow>
                     )}
                     {visibleWindows.chart && (

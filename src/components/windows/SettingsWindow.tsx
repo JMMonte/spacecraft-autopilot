@@ -1,4 +1,4 @@
-import React, { ChangeEvent } from 'react';
+import React, { ChangeEvent, useState } from 'react';
 import {
   useSettings,
   setUiTheme,
@@ -9,9 +9,11 @@ import {
 import { BasicWorld } from '../../core/BasicWorld';
 import { Spacecraft } from '../../core/spacecraft';
 import { CHECKBOX, SECTION_HEADER, FIELD_LABEL, SELECT, TOGGLE_GROUP, TOGGLE_OPTION, TOGGLE_ACTIVE, TOGGLE_INACTIVE } from '../ui/styles';
+import { SCENE_PRESETS } from '../../config/scenePresets';
 
 interface SettingsWindowProps {
   world: BasicWorld | null;
+  onSceneLoad?: (presetId: string) => void;
 }
 
 const THEMES: { id: 'a' | 'b' | 'c'; label: string }[] = [
@@ -26,8 +28,9 @@ const TEXTURES: { path: string; label: string }[] = [
   { path: '/images/textures/pF3BC6V.png', label: 'Alternate B' },
 ];
 
-export const SettingsWindow: React.FC<SettingsWindowProps> = ({ world }) => {
+export const SettingsWindow: React.FC<SettingsWindowProps> = ({ world, onSceneLoad }) => {
   const settings = useSettings();
+  const [loadingScene, setLoadingScene] = useState(false);
 
   const applyToAll = (fn: (sc: Spacecraft) => void) => {
     const list = world?.getSpacecraftList?.() ?? [];
@@ -46,8 +49,38 @@ export const SettingsWindow: React.FC<SettingsWindowProps> = ({ world }) => {
     applyToAll(sc => sc.rcsVisuals?.setThrusterParticlesEnabled(enabled));
   };
 
+  const currentPresetId = world?.getCurrentScenePresetId() ?? 'default';
+
+  const handleSceneChange = async (e: ChangeEvent<HTMLSelectElement>) => {
+    const presetId = e.target.value;
+    if (!world || loadingScene) return;
+    setLoadingScene(true);
+    try {
+      await world.loadScenePreset(presetId);
+      onSceneLoad?.(presetId);
+    } finally {
+      setLoadingScene(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-1 p-1 text-white/90 text-[10px]">
+      {/* Scene Preset */}
+      <div className="flex flex-col gap-0.5">
+        <label className={SECTION_HEADER}>Scene</label>
+        <select
+          value={currentPresetId}
+          onChange={handleSceneChange}
+          disabled={loadingScene}
+          className={SELECT}
+        >
+          {SCENE_PRESETS.map(({ id, name, description }) => (
+            <option key={id} value={id} title={description}>{name}</option>
+          ))}
+        </select>
+        {loadingScene && <span className="text-white/50 text-[9px]">Loading...</span>}
+      </div>
+
       {/* Theme */}
       <div className="flex flex-col gap-0.5">
         <label className={SECTION_HEADER}>Theme</label>

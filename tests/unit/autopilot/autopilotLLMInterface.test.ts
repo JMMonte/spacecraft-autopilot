@@ -159,8 +159,8 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: go_to_position ───────────────────────────────────────────
 
-    test('go_to_position sets target and activates mode', () => {
-        const result = llm.execute({
+    test('go_to_position sets target and activates mode', async () => {
+        const result = await llm.execute({
             action: 'go_to_position',
             params: { position: { x: 100, y: 0, z: -50 } },
         });
@@ -173,8 +173,8 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: point_at_position ────────────────────────────────────────
 
-    test('point_at_position sets target and activates pointing mode', () => {
-        const result = llm.execute({
+    test('point_at_position sets target and activates pointing mode', async () => {
+        const result = await llm.execute({
             action: 'point_at_position',
             params: { position: { x: 0, y: 50, z: 0 } },
         });
@@ -184,8 +184,8 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: match_orientation ────────────────────────────────────────
 
-    test('match_orientation sets quaternion and activates mode', () => {
-        const result = llm.execute({
+    test('match_orientation sets quaternion and activates mode', async () => {
+        const result = await llm.execute({
             action: 'match_orientation',
             params: { orientation: { x: 0, y: 0.707, z: 0, w: 0.707 } },
         });
@@ -196,24 +196,24 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: cancel_rotation ──────────────────────────────────────────
 
-    test('cancel_rotation activates rotation damping', () => {
-        const result = llm.execute({ action: 'cancel_rotation' });
+    test('cancel_rotation activates rotation damping', async () => {
+        const result = await llm.execute({ action: 'cancel_rotation' });
         assert.equal(result.success, true);
         assert.equal(autopilot._state.modes.cancelRotation, true);
     });
 
     // ── execute: cancel_linear_motion ─────────────────────────────────────
 
-    test('cancel_linear_motion activates braking', () => {
-        const result = llm.execute({ action: 'cancel_linear_motion' });
+    test('cancel_linear_motion activates braking', async () => {
+        const result = await llm.execute({ action: 'cancel_linear_motion' });
         assert.equal(result.success, true);
         assert.equal(autopilot._state.modes.cancelLinearMotion, true);
     });
 
     // ── execute: stop_all_motion ──────────────────────────────────────────
 
-    test('stop_all_motion activates both cancel modes', () => {
-        const result = llm.execute({ action: 'stop_all_motion' });
+    test('stop_all_motion activates both cancel modes', async () => {
+        const result = await llm.execute({ action: 'stop_all_motion' });
         assert.equal(result.success, true);
         assert.equal(autopilot._state.modes.cancelRotation, true);
         assert.equal(autopilot._state.modes.cancelLinearMotion, true);
@@ -221,8 +221,8 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: follow_path ──────────────────────────────────────────────
 
-    test('follow_path sets waypoints and activates goToPosition', () => {
-        const result = llm.execute({
+    test('follow_path sets waypoints and activates goToPosition', async () => {
+        const result = await llm.execute({
             action: 'follow_path',
             params: {
                 waypoints: [
@@ -237,8 +237,8 @@ describe('AutopilotLLMInterface', () => {
         assert.equal(autopilot._state.pathWaypoints?.length, 3);
     });
 
-    test('follow_path rejects fewer than 2 waypoints', () => {
-        const result = llm.execute({
+    test('follow_path rejects fewer than 2 waypoints', async () => {
+        const result = await llm.execute({
             action: 'follow_path',
             params: { waypoints: [{ x: 0, y: 0, z: 0 }] },
         });
@@ -248,8 +248,8 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: set_target_position ──────────────────────────────────────
 
-    test('set_target_position sets target without activating any mode', () => {
-        const result = llm.execute({
+    test('set_target_position sets target without activating any mode', async () => {
+        const result = await llm.execute({
             action: 'set_target_position',
             params: { position: { x: 42, y: 0, z: 0 } },
         });
@@ -260,8 +260,8 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: set_target_orientation ────────────────────────────────────
 
-    test('set_target_orientation sets quaternion without activating any mode', () => {
-        const result = llm.execute({
+    test('set_target_orientation sets quaternion without activating any mode', async () => {
+        const result = await llm.execute({
             action: 'set_target_orientation',
             params: { orientation: { x: 0, y: 0, z: 1, w: 0 } },
         });
@@ -272,12 +272,12 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: disable ──────────────────────────────────────────────────
 
-    test('disable turns off all modes', () => {
+    test('disable turns off all modes', async () => {
         // First enable something
-        llm.execute({ action: 'cancel_rotation' });
+        await llm.execute({ action: 'cancel_rotation' });
         assert.equal(autopilot._state.enabled, true);
         // Now disable
-        const result = llm.execute({ action: 'disable' });
+        const result = await llm.execute({ action: 'disable' });
         assert.equal(result.success, true);
         assert.equal(autopilot._state.enabled, false);
         assert.ok(result.status.activeModes.length === 0);
@@ -285,9 +285,9 @@ describe('AutopilotLLMInterface', () => {
 
     // ── execute: get_status ───────────────────────────────────────────────
 
-    test('get_status returns current state without side effects', () => {
+    test('get_status returns current state without side effects', async () => {
         const before = llm.getStatus();
-        const result = llm.execute({ action: 'get_status' });
+        const result = await llm.execute({ action: 'get_status' });
         const after = llm.getStatus();
         assert.equal(result.success, true);
         assert.deepEqual(before, after);
@@ -295,20 +295,20 @@ describe('AutopilotLLMInterface', () => {
 
     // ── Error handling ────────────────────────────────────────────────────
 
-    test('unknown action returns failure with helpful message', () => {
-        const result = llm.execute({ action: 'warp_drive' as any });
+    test('unknown action returns failure with helpful message', async () => {
+        const result = await llm.execute({ action: 'warp_drive' as any });
         assert.equal(result.success, false);
         assert.ok(result.message.includes('Unknown action'));
     });
 
-    test('missing required param returns failure', () => {
-        const result = llm.execute({ action: 'go_to_position', params: {} });
+    test('missing required param returns failure', async () => {
+        const result = await llm.execute({ action: 'go_to_position', params: {} });
         assert.equal(result.success, false);
         assert.ok(result.message.includes('position'));
     });
 
-    test('invalid vec3 returns failure', () => {
-        const result = llm.execute({
+    test('invalid vec3 returns failure', async () => {
+        const result = await llm.execute({
             action: 'go_to_position',
             params: { position: { x: 'not a number', y: 0, z: 0 } },
         });
@@ -316,8 +316,8 @@ describe('AutopilotLLMInterface', () => {
         assert.ok(result.message.includes('numeric'));
     });
 
-    test('invalid quaternion returns failure', () => {
-        const result = llm.execute({
+    test('invalid quaternion returns failure', async () => {
+        const result = await llm.execute({
             action: 'match_orientation',
             params: { orientation: { x: 0, y: 0, z: 0 } }, // missing w
         });
@@ -326,7 +326,7 @@ describe('AutopilotLLMInterface', () => {
 
     // ── Result always includes status ─────────────────────────────────────
 
-    test('every result includes full status snapshot', () => {
+    test('every result includes full status snapshot', async () => {
         const actions: AutopilotCommand[] = [
             { action: 'get_status' },
             { action: 'cancel_rotation' },
@@ -335,7 +335,7 @@ describe('AutopilotLLMInterface', () => {
             { action: 'warp_drive' as any }, // unknown — still gets status
         ];
         for (const cmd of actions) {
-            const result = llm.execute(cmd);
+            const result = await llm.execute(cmd);
             assert.ok(result.status, `${cmd.action}: result.status is missing`);
             assert.ok(typeof result.status.enabled === 'boolean', `${cmd.action}: status.enabled missing`);
             assert.ok(result.status.spacecraft, `${cmd.action}: status.spacecraft missing`);
@@ -345,8 +345,8 @@ describe('AutopilotLLMInterface', () => {
 
     // ── JSON round-trip ───────────────────────────────────────────────────
 
-    test('command results survive JSON round-trip', () => {
-        const result = llm.execute({
+    test('command results survive JSON round-trip', async () => {
+        const result = await llm.execute({
             action: 'go_to_position',
             params: { position: { x: 10, y: 20, z: 30 } },
         });

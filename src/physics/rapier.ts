@@ -683,6 +683,22 @@ class RapierPhysics implements PhysicsEngine {
     }
   }
 
+  // Remove a rigid body from the physics world entirely
+  removeBody(body: RigidBody): void {
+    const rb = body.getNative<any>();
+    if (!rb) return;
+    // Remove from bodies set
+    for (const entry of this.bodies) {
+      if (entry.rb === rb) { this.bodies.delete(entry); break; }
+    }
+    // Remove from Rapier world
+    try {
+      if (typeof this.world.removeRigidBody === 'function') {
+        this.world.removeRigidBody(rb);
+      }
+    } catch (_) {}
+  }
+
   // Disable a body: remove from stepping cache and disable in Rapier
   disableBody(body: RigidBody): void {
     const rb = body.getNative<any>();
