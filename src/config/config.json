@@ -2,25 +2,21 @@
     "debug": true,
     "physicsEngine": "rapier",
     "initialSpacecraft": [
-        {
-            "name": "Alpha",
-            "position": { "x": 0, "y": 0, "z": 2 },
-            "width": 1,
-            "height": 1,
-            "depth": 2,
-            "initialConeVisibility": false
-        },
-        {
-            "name": "Bravo",
-            "position": { "x": -2, "y": 2, "z": -3 },
-            "width": 1,
-            "height": 1,
-            "depth": 1,
-            "initialConeVisibility": false
-        }
+        { "name": "Alpha",     "blueprintType": "mover", "position": { "x": 0,   "y": 0,   "z": 20  }, "width": 1, "height": 1, "depth": 2 },
+        { "name": "Bravo",     "blueprintType": "mover", "position": { "x": 0,   "y": 0,   "z": -20 }, "width": 1, "height": 1, "depth": 2 },
+        { "name": "Charlie",   "blueprintType": "mover", "position": { "x": 40,  "y": 0,   "z": 20  }, "width": 1, "height": 1, "depth": 1.5 },
+        { "name": "Delta",     "blueprintType": "mover", "position": { "x": 40,  "y": 0,   "z": -20 }, "width": 1, "height": 1, "depth": 2 },
+        { "name": "Echo",      "blueprintType": "mover", "position": { "x": -40, "y": 0,   "z": 20  }, "width": 1, "height": 1, "depth": 1.5 },
+        { "name": "Hub-1",     "blueprintType": "node",  "position": { "x": 0,   "y": 0,   "z": 0   }, "portCount": 6, "width": 1 },
+        { "name": "Hub-2",     "blueprintType": "node",  "position": { "x": 80,  "y": 0,   "z": 0   }, "portCount": 4, "width": 1 },
+        { "name": "Coupler-1", "blueprintType": "node",  "position": { "x": -40, "y": 0,   "z": -20 }, "portCount": 2, "width": 1 },
+        { "name": "Solar-1",   "blueprintType": "solar", "position": { "x": -40, "y": 0,   "z": 0   }, "solarParams": { "panelCount": 6, "placement": "both", "startDeployed": false } },
+        { "name": "Solar-2",   "blueprintType": "solar", "position": { "x": 40,  "y": 0,   "z": 0   }, "solarParams": { "panelCount": 4, "placement": "both", "startDeployed": false } },
+        { "name": "Foxtrot",   "blueprintType": "mover", "position": { "x": 0,   "y": 0,   "z": -40 }, "width": 1, "height": 1, "depth": 2 },
+        { "name": "Golf",      "blueprintType": "mover", "position": { "x": 80,  "y": 0,   "z": 20  }, "width": 1, "height": 1, "depth": 1.5 }
     ],
     "initialFocus": 0,
-    "asteroidSystem": {
+    "_asteroidSystem_disabled": {
         "timeScale": 1,
         "substeps": 2,
         "origin": { "x": 0, "y": 0, "z": -600 },

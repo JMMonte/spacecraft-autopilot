@@ -886,6 +886,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             isVisible={visibleWindows.spacecraftList}
                             zIndex={windowZ.spacecraftList}
                             onFocus={() => bringWindowToFront('spacecraftList')}
+                            onClose={() => toggleWindow('spacecraftList')}
                         >
                             <SpacecraftListWindow
                                 world={world}
@@ -908,6 +909,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             isVisible={visibleWindows.telemetry}
                             zIndex={windowZ.telemetry}
                             onFocus={() => bringWindowToFront('telemetry')}
+                            onClose={() => toggleWindow('telemetry')}
                         >
                             <TelemetryWindow />
                         </DraggableWindow>
@@ -922,6 +924,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             isVisible={visibleWindows.horizon}
                             zIndex={windowZ.horizon}
                             onFocus={() => bringWindowToFront('horizon')}
+                            onClose={() => toggleWindow('horizon')}
                         >
                             <ArtificialHorizonWindow horizonRef={horizonRef} />
                         </DraggableWindow>
@@ -935,6 +938,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             isVisible={visibleWindows.spacecraftConfig}
                             zIndex={windowZ.spacecraftConfig}
                             onFocus={() => bringWindowToFront('spacecraftConfig')}
+                            onClose={() => toggleWindow('spacecraftConfig')}
                         >
                             <SpacecraftConfigWindow spacecraft={spacecraft} />
                         </DraggableWindow>
@@ -948,6 +952,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             isVisible={visibleWindows.arrows}
                             zIndex={windowZ.arrows}
                             onFocus={() => bringWindowToFront('arrows')}
+                            onClose={() => toggleWindow('arrows')}
                         >
                             <HelperArrowsWindow spacecraft={spacecraft} world={world} />
                         </DraggableWindow>
@@ -961,6 +966,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             isVisible={visibleWindows.pid}
                             zIndex={windowZ.pid}
                             onFocus={() => bringWindowToFront('pid')}
+                            onClose={() => toggleWindow('pid')}
                         >
                             <PIDControllerWindow 
                                 controller={controller?.getAutopilot()?.getOrientationPidController() ?? null}
@@ -981,6 +987,7 @@ export const Cockpit: React.FC<CockpitProps> = ({
                             isVisible={visibleWindows.autopilot}
                             zIndex={windowZ.autopilot}
                             onFocus={() => bringWindowToFront('autopilot')}
+                            onClose={() => toggleWindow('autopilot')}
                         >
                             <AutopilotWindow
                                 spacecraft={spacecraft}

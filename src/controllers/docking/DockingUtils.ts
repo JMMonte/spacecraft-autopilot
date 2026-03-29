@@ -89,6 +89,9 @@ export function canDockWithinThresholds(
 
 // Build a world quaternion that aligns `who`'s selected port axis with the opposite of the target port axis,
 // then matches roll using the target spacecraft's up projected into the port plane.
+// IMPORTANT: This must NOT depend on `who`'s current orientation — only on `who`'s port LOCAL direction
+// and `target`'s world pose. Otherwise the target quaternion shifts every frame as `who` rotates,
+// creating a "chasing its own tail" oscillation.
 export function computeDesiredDockQuatFor(
     who: Spacecraft,
     whoPort: DockingPortId | null,
@@ -96,16 +99,23 @@ export function computeDesiredDockQuatFor(
     targetPort: DockingPortId | null
 ): THREE.Quaternion | null {
     if (!who || !whoPort || !target || !targetPort) return null;
-    const ourDir = who.getDockingPortWorldDirection(whoPort);
+
+    // Get our port's LOCAL direction (does not depend on who's current orientation)
+    const ourPortLocal = who.getDockingPortLocalDirection?.(whoPort);
+    if (!ourPortLocal || ourPortLocal.lengthSq() < 1e-12) return null;
+
+    // Get target port's WORLD direction (depends only on target's orientation)
     const targetPortDir = target.getDockingPortWorldDirection(targetPort);
-    if (!ourDir || !targetPortDir) return null;
-    if (ourDir.lengthSq() < 1e-12 || targetPortDir.lengthSq() < 1e-12) return null;
+    if (!targetPortDir || targetPortDir.lengthSq() < 1e-12) return null;
+
+    // We want our port to face opposite to the target port: zAim = -targetPortDir
     const zAim = targetPortDir.clone().multiplyScalar(-1).normalize();
-    const qCurr = who.getWorldOrientation();
-    // Align axis first
-    const ourDirN = ourDir.clone().normalize();
-    const qAlign = new THREE.Quaternion().setFromUnitVectors(ourDirN, zAim);
-    const qAfter = new THREE.Quaternion().multiplyQuaternions(qAlign, qCurr);
+    const ourDirLocalN = ourPortLocal.clone().normalize();
+
+    // Compute quaternion that rotates our local port direction to the desired world direction.
+    // qTarget * ourDirLocal = zAim  →  qTarget = rotation(ourDirLocal → zAim)
+    const qAlign = new THREE.Quaternion().setFromUnitVectors(ourDirLocalN, zAim);
+
     // Roll match: target up projected into plane orthogonal to zAim
     const targetUpWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(target.getWorldOrientation());
     const desiredUp = targetUpWorld.clone().sub(zAim.clone().multiplyScalar(targetUpWorld.dot(zAim)));
@@ -114,15 +124,20 @@ export function computeDesiredDockQuatFor(
         desiredUp.copy(fallback.sub(zAim.clone().multiplyScalar(fallback.dot(zAim))));
     }
     desiredUp.normalize();
-    const ourUpAfter = new THREE.Vector3(0, 1, 0).applyQuaternion(qAfter);
-    const ourUpProj = ourUpAfter.clone().sub(zAim.clone().multiplyScalar(ourUpAfter.dot(zAim))).normalize();
+
+    // Our local up after alignment
+    const ourUpAfter = new THREE.Vector3(0, 1, 0).applyQuaternion(qAlign);
+    const ourUpProj = ourUpAfter.clone().sub(zAim.clone().multiplyScalar(ourUpAfter.dot(zAim)));
+    if (ourUpProj.lengthSq() < 1e-8) return qAlign;
+    ourUpProj.normalize();
+
     const dot = THREE.MathUtils.clamp(ourUpProj.dot(desiredUp), -1, 1);
     let roll = Math.acos(dot);
     const cross = new THREE.Vector3().crossVectors(ourUpProj, desiredUp);
     const sign = Math.sign(cross.dot(zAim));
     roll *= sign || 1;
     const qRoll = new THREE.Quaternion().setFromAxisAngle(zAim, roll);
-    const qTarget = new THREE.Quaternion().multiplyQuaternions(qRoll, qAfter);
+    const qTarget = new THREE.Quaternion().multiplyQuaternions(qRoll, qAlign);
     return qTarget;
 }
 

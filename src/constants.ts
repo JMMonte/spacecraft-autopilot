@@ -14,6 +14,7 @@ export const WINDOWS: Windows = {
   pid: { label: 'PID Tuning' },
   autopilot: { label: 'Autopilot & Targeting' },
   spacecraftList: { label: 'Spacecraft Manager' },
+  docking: { label: 'Docking Guidance' },
   dockingCameras: { label: 'Dock Cameras & Lights' },
   settings: { label: 'Display Settings' },
   chart: { label: 'Chart' },

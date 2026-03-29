@@ -91,6 +91,23 @@ Five modes, orchestrated by `src/controllers/autopilot/Autopilot.ts`:
 - `DockingUtils.ts` — Orientation quaternion computation for port-to-port alignment
 - `BasicWorld.onSpacecraftListChanged()` — Multi-subscriber registry hook used by docking controllers to track spacecraft additions/removals safely
 
+**Approach phase separation (IMPORTANT):**
+- During **approach**, only GoToPosition is active — OrientationMatch is NOT engaged. This prevents thruster fighting since both modes share the same 24 RCS thrusters.
+- Orientation alignment happens in the **align phase** after arrival at the standoff point.
+- Speed limiting during approach: distance-based limit kicks in at 4x safe distance, ramping from 1.5 m/s down to 0.5 m/s near target.
+
+**Dynamic standoff distance:**
+- `safeDistance = max(3.0, maxTargetExtent + ourDepth)` — grows with compound body size so the approach point is always clear of the target's geometry.
+
+**Target quaternion computation:**
+- `computeDesiredDockQuatFor` in `DockingUtils.ts` uses the port's **LOCAL direction** (`getDockingPortLocalDirection`) instead of the current world orientation. This produces a stable target quaternion that does not shift as the spacecraft rotates during approach.
+
+**Obstacle exclusions during docking:**
+- `Autopilot.setObstacleExclusions(spacecraft[])` — Excludes spacecraft from `PathManager.collectObstacles()`
+- `DockingController` excludes the **entire target compound** (target + all docked to it) during **all docking phases** (approach, align, and dock)
+- The standoff distance accounts for compound body extent
+- Cleared on cancel/complete
+
 **Compound body architecture (`spacecraft.ts`):**
 - `dock(ourPort, otherSpacecraft, theirPort)` — Merges guest into compound body:
   1. Resolves compound root (prefers hub with more ports)
@@ -101,10 +118,12 @@ Five modes, orchestrated by `src/controllers/autopilot/Autopilot.ts`:
 - `undock(portId)` — Detaches guest, creates new rigid body, restores individual physics
 - `getCompoundMembers()` — Walks docked partners transitively to find all members
 
-**Obstacle exclusions during docking:**
-- `Autopilot.setObstacleExclusions(spacecraft[])` — Excludes spacecraft from `PathManager.collectObstacles()`
-- `DockingController` excludes the **entire target compound** (target + all docked to it) during approach and dock phases
-- Cleared on cancel/complete
+**CompoundThrusterTable:**
+- Delegates to `computeThrusterGroups()` from `utils.ts` instead of custom classification, ensuring consistent Newton's 3rd law handling across single and compound spacecraft.
+
+**Blueprint port configs (PITFALL):**
+- When creating spacecraft from blueprints, port configs must be passed to BOTH the module system AND `SpacecraftModel`'s `dockingPortManager`.
+- Blueprint ports already include depth offset — do not double-add it.
 
 **Hub/Node spacecraft:**
 - Configurable 2/4/6-port docking nodes (no thrusters, no solar panels)
@@ -125,6 +144,28 @@ Five modes, orchestrated by `src/controllers/autopilot/Autopilot.ts`:
 - **Exhaust Particles**: Sprite-based particle system (1800 particles/sec/thruster at full thrust). Togglable via `setThrusterParticlesEnabled()`.
 - **Display Settings UI**: `SettingsWindow.tsx` has global toggles (applies to ALL spacecraft via `world.getSpacecraftList()`).
 - **Performance**: Both systems are major bottlenecks at scale. 18 spacecraft with effects ON = ~3 FPS. With both OFF = ~60 FPS. Needs instanced rendering for particles and light merging/limiting for point lights.
+
+### Fuel System
+
+Configurable fuel types with per-type physical properties:
+- **Fuel types**: Hydrazine, MMH/NTO, Xenon, LOX/LH2
+- Each type has its own density, thrust factor, and exhaust color
+- Fuel tank toggle removes tank geometry from the spacecraft model
+- Fuel tracking per spacecraft (consumption based on thruster usage)
+
+### Solar Panels
+
+Scissor-fold deployable solar panels with physics integration:
+- **Animation**: Hinge chain geometry with scissor-fold kinematics
+- **Physics**: Colliders added on deploy, removed on retract. Angular momentum conservation during deploy/retract.
+- **Structure**: Boom + ball joint + cross-strut base
+- **Configuration**: Placement (left/right/both, top/center/bottom), panel count, boom length, deploy/stowed angles
+
+### Body Materials & Truss Shapes
+
+Configurable spacecraft appearance:
+- **Body presets**: Default Blue, Gold/Silver, Bare Metal, Dark Carbon
+- **Truss shapes**: Round or square cross-section
 
 ### State Management
 

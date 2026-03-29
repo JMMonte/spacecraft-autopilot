@@ -91,9 +91,11 @@ export class Spacecraft {
             });
         }
 
-        // If custom port configs are provided, rebuild docking ports on the model
-        if (options?.ports && !options?.blueprint) {
-            const dockingPortDepth = this.objects.dockingPortDepth;
+        // If custom port configs are provided, rebuild docking ports on the model.
+        // Blueprint ports already have the depth offset baked into localPosition,
+        // so only add the offset for legacy (non-blueprint) paths.
+        if (options?.ports) {
+            const dockingPortDepth = options.blueprint ? 0 : this.objects.dockingPortDepth;
             this.objects.setPortConfigs(options.ports.map(p => ({
                 id: p.id,
                 localPosition: {
@@ -105,7 +107,7 @@ export class Spacecraft {
             })));
         }
 
-        if (options?.includeThrusters === false && !options?.blueprint) {
+        if (options?.includeThrusters === false) {
             // Create a no-op stub that satisfies the RCSVisuals interface
             this.rcsVisuals = {
                 update(_dt: number) {},
@@ -381,6 +383,15 @@ export class Spacecraft {
         if (!port) return null;
         const q = this.getWorldOrientation();
         return port.direction.clone().applyQuaternion(q).normalize();
+    }
+
+    /**
+     * Get the LOCAL direction of a docking port axis (body frame, no world orientation).
+     */
+    public getDockingPortLocalDirection(portId: string): THREE.Vector3 | null {
+        const port = this.dockingPorts[portId as string];
+        if (!port) return null;
+        return port.direction.clone().normalize();
     }
 
     /**
@@ -887,6 +898,7 @@ export class Spacecraft {
      */
     public getDockedSpacecrafts(): Spacecraft[] {
         const partners: Spacecraft[] = [];
+        if (!this.dockingPorts) return partners;
         for (const pid of Object.keys(this.dockingPorts)) {
             const p = this.dockingPorts[pid];
             if (p?.isOccupied && p.dockedTo?.spacecraft) {

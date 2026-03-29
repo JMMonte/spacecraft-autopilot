@@ -252,13 +252,10 @@ export class DockingController {
         // Always operate relative to the target spacecraft during docking
         if (autopilot) {
             autopilot.setReferenceObject(this.targetSpacecraft);
-            // Only exclude the target from obstacle avoidance during close phases (align/dock).
-            // During approach, the target body IS an obstacle to route around.
-            if (this.phase === 'align' || this.phase === 'dock') {
-                autopilot.setObstacleExclusions(this.targetSpacecraft.getCompoundMembers());
-            } else {
-                autopilot.setObstacleExclusions([]);
-            }
+            // Always exclude the target compound during docking.
+            // The standoff point is placed far enough from the target port face
+            // to avoid collision. Non-target obstacles are still avoided.
+            autopilot.setObstacleExclusions(this.targetSpacecraft.getCompoundMembers());
         }
 
         // Gather current info for guidance and physical checks
@@ -300,11 +297,11 @@ export class DockingController {
         switch (this.phase) {
             case 'approach': {
                 if (!autopilot) break;
-                // No speed limit during approach — fly at full speed
-                autopilot.setGoToSpeedLimit(null);
 
-                // Standoff distance: enough room to stop and align, not more
-                const safeDistance = Math.max(2.0, (info.our.fullDimensions.z + info.target.fullDimensions.z) * 0.8);
+                // Standoff distance: enough room to stop and align, accounting for compound body extent
+                const tDims = info.target.fullDimensions;
+                const maxTargetExtent = Math.max(tDims.x, tDims.y, tDims.z);
+                const safeDistance = Math.max(3.0, maxTargetExtent + info.our.fullDimensions.z);
                 const targLen = this.targetSpacecraft.objects.dockingPortLength || 0.1;
                 const approachPos = this.calculateApproachPosition(
                     info.ports.targetPosition,
@@ -313,20 +310,30 @@ export class DockingController {
                     targLen
                 );
 
-                // (obstacle exclusions set at top of update() — entire target compound excluded)
+                // Speed limit scales with distance to target body — start braking early
+                const ourPos = this.spacecraft.getWorldPosition();
+                const distToTarget = ourPos.distanceTo(info.ports.targetPosition);
+                const distToApproach = ourPos.distanceTo(approachPos);
+                // Start limiting at 4x safe distance (~15m), cap at 1.5 m/s near target
+                if (distToTarget < safeDistance * 4) {
+                    const speedLimit = Math.max(0.5, Math.min(1.5, distToTarget * 0.15));
+                    autopilot.setGoToSpeedLimit(speedLimit);
+                } else {
+                    autopilot.setGoToSpeedLimit(null);
+                }
 
+                // During approach: fly to standoff, do NOT orient simultaneously
+                // (GoToPosition and OrientationMatch fight over the same thrusters)
+                // Orientation is handled in the align phase after arrival.
                 this.driveAutopilot(autopilot, {
                     goToPosition: { enabled: true, position: approachPos },
-                    orientationMatch: { enabled: !!targetQuat, orientation: targetQuat || undefined },
+                    orientationMatch: { enabled: false },
                     cancelLinearMotion: { enabled: false }
                 });
-                // Transition to align phase when close enough
-                const ourPos = this.spacecraft.getWorldPosition();
-                const dist = ourPos.distanceTo(approachPos);
-                const orientErr = this.getOrientationErrorRad(targetQuat);
-                const distThresh = Math.max(0.2, Math.min(2.0, safeDistance * 0.06));
-                const orientThresh = 5 * Math.PI / 180; // 5 degrees
-                if (dist < distThresh && orientErr < orientThresh && this.isStable(0.2)) {
+                // Transition to align phase when close to standoff and slow enough
+                const dist = distToApproach;
+                const distThresh = Math.max(0.3, Math.min(2.0, safeDistance * 0.1));
+                if (dist < distThresh && this.isStable(0.3)) {
                     this.phase = 'align';
                     this.updateTrajectory();
                 }

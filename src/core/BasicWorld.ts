@@ -7,7 +7,7 @@ import { SceneCamera } from '../scenes/sceneCamera';
 import { WorldRenderer } from './worldRenderer';
 import { Spacecraft, type SpacecraftOptions } from './spacecraft';
 import type { SpacecraftBlueprint } from '../scenes/modules/SpacecraftBlueprint';
-import { createMoverBlueprint } from '../scenes/modules/blueprints';
+import { createMoverBlueprint, createNodeBlueprint, createSolarSpacecraftBlueprint } from '../scenes/modules/blueprints';
 import { SpacecraftListNotifier } from './spacecraftListNotifier';
 import { removeSpacecraftAndController } from './spacecraftLifecycle';
 import { SpacecraftController } from '../controllers/spacecraftController';
@@ -35,12 +35,15 @@ interface WorldConfig {
     asteroidSystem?: AsteroidSystemConfig;
     initialSpacecraft?: Array<{
         position: { x: number; y: number; z: number };
-        width: number;
-        height: number;
-        depth: number;
-        initialConeVisibility: boolean;
-        name: string;
-        thrusterStrengths?: number[]; // optional 24-entry per-thruster max (N)
+        width?: number;
+        height?: number;
+        depth?: number;
+        initialConeVisibility?: boolean;
+        name?: string;
+        blueprintType?: 'mover' | 'node' | 'solar';
+        portCount?: 2 | 4 | 6;        // for node type
+        solarParams?: Record<string, unknown>; // for solar type
+        thrusterStrengths?: number[];  // optional 24-entry per-thruster max (N)
     }>;
     initialFocus?: number;
 }
@@ -323,10 +326,30 @@ export class BasicWorld implements SpacecraftRegistry {
                     spacecraftConfig.position.y,
                     spacecraftConfig.position.z
                 );
-                const bp = createMoverBlueprint(
-                    spacecraftConfig.name ?? 'Spacecraft',
-                    spacecraftConfig.width, spacecraftConfig.height, spacecraftConfig.depth,
-                );
+                // Create blueprint based on type (default: 'mover')
+                const bpType = spacecraftConfig.blueprintType ?? 'mover';
+                let bp: SpacecraftBlueprint;
+                switch (bpType) {
+                    case 'node':
+                        bp = createNodeBlueprint(
+                            spacecraftConfig.portCount ?? 4,
+                            spacecraftConfig.width ?? 1,
+                        );
+                        if (spacecraftConfig.name) bp.name = spacecraftConfig.name;
+                        break;
+                    case 'solar':
+                        bp = createSolarSpacecraftBlueprint(
+                            spacecraftConfig.name ?? 'Solar',
+                            spacecraftConfig.solarParams,
+                        );
+                        break;
+                    default:
+                        bp = createMoverBlueprint(
+                            spacecraftConfig.name ?? 'Spacecraft',
+                            spacecraftConfig.width, spacecraftConfig.height, spacecraftConfig.depth,
+                        );
+                        break;
+                }
                 const sc = this.addSpacecraftFromBlueprint(bp, initialPosition);
                 if (spacecraftConfig.initialConeVisibility) {
                     sc.rcsVisuals.showCones();
@@ -385,6 +408,8 @@ export class BasicWorld implements SpacecraftRegistry {
         const currentController = this.spacecraftControllers.find(controller => controller.getIsActive());
         if (currentController) {
             currentController.setIsActive(false);
+            // Clear stale keys so the old controller stops firing
+            currentController.clearKeysPressed?.();
         }
 
         // Activate new spacecraft controller
@@ -396,7 +421,18 @@ export class BasicWorld implements SpacecraftRegistry {
         }
 
         this.activeSpacecraft = spacecraft;
-        
+
+        // Re-emit autopilot state for the newly focused spacecraft so UI updates
+        const authority = spacecraft.spacecraftController?.getCompoundAuthority?.();
+        if (authority) {
+            // Compound: clear stale keys, emit compound autopilot state
+            authority.keysPressed = {};
+            authority.emitState();
+        } else {
+            // Solo: emit this spacecraft's autopilot state
+            spacecraft.spacecraftController?.emitAutopilotState?.();
+        }
+
         if (this.onActiveSpacecraftChange) {
             this.onActiveSpacecraftChange(spacecraft);
         }
@@ -539,10 +575,24 @@ export class BasicWorld implements SpacecraftRegistry {
         }
 
         const hasRcs = blueprint.modules.some(m => m.type === 'rcs');
+
+        // Extract port configs from blueprint so the Spacecraft core dockingPorts map
+        // matches what the DockingPortModule builds visually.
+        const dockingMod = blueprint.modules.find(m => m.type === 'dockingPorts');
+        let portConfigs: { id: string; position: THREE.Vector3; direction: THREE.Vector3 }[] | undefined;
+        if (dockingMod?.params && 'ports' in dockingMod.params && Array.isArray(dockingMod.params.ports)) {
+            portConfigs = dockingMod.params.ports.map((p: any) => ({
+                id: p.id,
+                position: new THREE.Vector3(p.localPosition.x, p.localPosition.y, p.localPosition.z),
+                direction: new THREE.Vector3(p.localDirection.x, p.localDirection.y, p.localDirection.z),
+            }));
+        }
+
         const options: SpacecraftOptions = {
             includeThrusters: hasRcs,
             name: blueprint.name,
             blueprint,
+            ...(portConfigs ? { ports: portConfigs } : {}),
         };
 
         const spacecraft = new Spacecraft(

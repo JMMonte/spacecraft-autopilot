@@ -551,6 +551,158 @@ export class DockingTestHarness {
             .join('\n');
     }
 
+    // ====================== MULTI-DOCK SEQUENCE ======================
+
+    private sequenceAborted = false;
+
+    /**
+     * Run a sequence of docking operations, each waiting for the previous to complete.
+     *
+     * Usage:
+     *   __dockingTest.dockSequence([
+     *     { source: 'Alpha', sourcePort: 'front', target: 'Hub-1', targetPort: 'front' },
+     *     { source: 'Bravo', sourcePort: 'front', target: 'Hub-1', targetPort: 'back' },
+     *   ])
+     *
+     * Returns a promise that resolves with a summary of all docking operations.
+     */
+    async dockSequence(
+        ops: Array<{
+            source: string;
+            sourcePort: string;
+            target: string;
+            targetPort: string;
+        }>,
+    ): Promise<string> {
+        this.sequenceAborted = false;
+        const results: Array<{ op: string; success: boolean; elapsed: number; error?: string }> = [];
+        const allCraft = this.world.getSpacecraftList();
+
+        console.log(`[DOCK-SEQ] Starting sequence of ${ops.length} docking operations`);
+
+        for (let i = 0; i < ops.length; i++) {
+            if (this.sequenceAborted) {
+                results.push({ op: `${ops[i].source} → ${ops[i].target}`, success: false, elapsed: 0, error: 'Aborted' });
+                break;
+            }
+
+            const op = ops[i];
+            console.log(`\n[DOCK-SEQ] ═══════════════════════════════════════════`);
+            console.log(`[DOCK-SEQ] Operation ${i + 1}/${ops.length}: ${op.source}:${op.sourcePort} → ${op.target}:${op.targetPort}`);
+            console.log(`[DOCK-SEQ] ═══════════════════════════════════════════`);
+
+            // Find spacecraft by name
+            const source = allCraft.find(s => s.name === op.source);
+            const target = allCraft.find(s => s.name === op.target);
+            if (!source) {
+                const err = `Source spacecraft "${op.source}" not found`;
+                console.error(`[DOCK-SEQ] ${err}`);
+                results.push({ op: `${op.source} → ${op.target}`, success: false, elapsed: 0, error: err });
+                continue;
+            }
+            if (!target) {
+                const err = `Target spacecraft "${op.target}" not found`;
+                console.error(`[DOCK-SEQ] ${err}`);
+                results.push({ op: `${op.source} → ${op.target}`, success: false, elapsed: 0, error: err });
+                continue;
+            }
+
+            // Switch focus to source
+            this.world.setActiveSpacecraft(source);
+            this.activeCraft = source;
+            this.targetCraft = target;
+
+            // Small delay for focus switch to settle
+            await this.delay(500);
+
+            // Start docking
+            const dc = source.dockingController;
+            if (!dc) {
+                const err = `No docking controller on "${op.source}"`;
+                console.error(`[DOCK-SEQ] ${err}`);
+                results.push({ op: `${op.source} → ${op.target}`, success: false, elapsed: 0, error: err });
+                continue;
+            }
+
+            const startT = performance.now();
+            this.startTime = startT;
+            dc.startDocking(target, op.sourcePort as any, op.targetPort as any);
+            console.log(`[DOCK-SEQ] Docking initiated, waiting for completion...`);
+
+            // Wait for docking to complete (or fail/timeout)
+            const result = await this.waitForDockingComplete(dc, 300); // 5 min timeout
+            const elapsed = (performance.now() - startT) / 1000;
+
+            if (result === 'docked') {
+                console.log(`[DOCK-SEQ] ✅ ${op.source} docked to ${op.target} in ${elapsed.toFixed(1)}s`);
+                results.push({ op: `${op.source}:${op.sourcePort} → ${op.target}:${op.targetPort}`, success: true, elapsed });
+            } else {
+                console.log(`[DOCK-SEQ] ❌ ${op.source} → ${op.target} failed: ${result} (${elapsed.toFixed(1)}s)`);
+                results.push({ op: `${op.source}:${op.sourcePort} → ${op.target}:${op.targetPort}`, success: false, elapsed, error: result });
+            }
+
+            // Small delay between operations
+            await this.delay(1000);
+        }
+
+        const summary = {
+            total: ops.length,
+            succeeded: results.filter(r => r.success).length,
+            failed: results.filter(r => !r.success).length,
+            results,
+        };
+        console.log(`\n[DOCK-SEQ] ═══════════════════════════════════════════`);
+        console.log(`[DOCK-SEQ] SEQUENCE COMPLETE: ${summary.succeeded}/${summary.total} successful`);
+        console.log(`[DOCK-SEQ] ═══════════════════════════════════════════`);
+        return JSON.stringify(summary, null, 2);
+    }
+
+    /** Abort a running sequence. */
+    abortSequence(): string {
+        this.sequenceAborted = true;
+        // Also cancel any active docking
+        if (this.activeCraft?.dockingController?.isDocking()) {
+            this.activeCraft.dockingController.cancelDocking();
+        }
+        return JSON.stringify({ ok: true, message: 'Sequence abort requested' });
+    }
+
+    private waitForDockingComplete(
+        dc: { getDockingPhase(): string; isDocking(): boolean },
+        timeoutSec: number,
+    ): Promise<string> {
+        return new Promise(resolve => {
+            const startT = performance.now();
+            const check = () => {
+                if (this.sequenceAborted) {
+                    resolve('aborted');
+                    return;
+                }
+                const elapsed = (performance.now() - startT) / 1000;
+                if (elapsed > timeoutSec) {
+                    resolve('timeout');
+                    return;
+                }
+                const phase = dc.getDockingPhase();
+                if (phase === 'docked' || phase === 'complete') {
+                    resolve('docked');
+                    return;
+                }
+                if (phase === 'none' && !dc.isDocking() && elapsed > 2) {
+                    // Docking ended without success
+                    resolve('cancelled');
+                    return;
+                }
+                requestAnimationFrame(check);
+            };
+            requestAnimationFrame(check);
+        });
+    }
+
+    private delay(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
     // ====================== HELPERS ======================
 
     // Helpers

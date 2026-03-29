@@ -11,6 +11,7 @@ import { ThrusterPWM } from './ThrusterPWM';
 import type { CompoundControlAuthority } from './CompoundControlAuthority';
 import type { VisualizationCallbacks } from './types';
 import { THRUST_FACTOR } from '../constants';
+import { emitAutopilotStateChanged } from '../domain/simulationEvents';
 
 interface KeyMap {
     [key: string]: boolean;
@@ -55,6 +56,25 @@ export class SpacecraftController {
     public setIsActive(value: boolean): void {
         this.log.debug('Setting isActive to:', value);
         this.isActive = value;
+    }
+
+    /** Clear all pressed keys (used on focus switch to prevent stuck keys). */
+    public clearKeysPressed(): void {
+        for (const key of Object.keys(this.keysPressed)) {
+            this.keysPressed[key] = false;
+        }
+    }
+
+    /** Re-emit the solo autopilot state to the UI store. */
+    public emitAutopilotState(): void {
+        if (this.autopilot) {
+            try {
+                emitAutopilotStateChanged({
+                    enabled: this.autopilot.getAutopilotEnabled(),
+                    activeAutopilots: { ...this.autopilot.getActiveAutopilots() },
+                });
+            } catch {}
+        }
     }
 
     public getCurrentTarget(): string | null {

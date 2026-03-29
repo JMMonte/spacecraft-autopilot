@@ -10,7 +10,8 @@ import {
   List,
   Camera,
   SlidersHorizontal,
-  LineChart
+  LineChart,
+  Navigation
 } from 'lucide-react';
 import { WINDOWS } from '../constants';
 import { setCameraMode, useUi } from '../state/store';
@@ -30,6 +31,7 @@ const WINDOW_ICONS = {
   pid: Settings,
   autopilot: Cpu,
   spacecraftList: List,
+  docking: Navigation,
   dockingCameras: Camera,
   settings: SlidersHorizontal,
   chart: LineChart
